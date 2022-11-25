@@ -1,0 +1,16 @@
+*~
+build/
+dist/
+__pycache__/
+results/
+*.so
+*.lo
+*.o
+*.pyc
+.idea/
+.DS_Store
+*.egg-info
+docs/_build/
+docs/_static/
+docs/_templates/
+venv/
