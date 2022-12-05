@@ -6,7 +6,7 @@ Peter Schubert, CCB, HHU Duesseldorf, November 2022
 import re
 import xml.etree.ElementTree
 
-from f2xba.utils.utils import get_child_text, get_sub_obj_ids, get_components
+from f2xba.utils.ec_utils import get_child_text, get_sub_obj_ids
 
 
 class EcRNA:
@@ -15,8 +15,9 @@ class EcRNA:
         self.id = ecocyc_id
         self.name = ''
         self.synonyms = ''
-        self.gene = ''
-        self.complexes = ''
+        self.gene = None
+        self.complexes = []
+        # self.parents = []
 
     @staticmethod
     def get_rnas(file_name):
@@ -32,7 +33,10 @@ class EcRNA:
             ec_rna = EcRNA(ecocyc_id)
             ec_rna.name = get_child_text(el, 'common-name')
             ec_rna.synonyms = re.sub(r'\|', ',', get_child_text(el, 'synonym'))
-            ec_rna.gene = get_sub_obj_ids(el, 'gene', 'Gene')
+            genes = get_sub_obj_ids(el, 'gene', 'Gene')
+            if len(genes) == 1:
+                ec_rna.gene = genes[0]
             ec_rna.complexes = get_sub_obj_ids(el, 'component-of', '*')
+            # ec_rna.parents = get_sub_obj_ids(el, 'parent', '*')
             data[ecocyc_id] = ec_rna
         return data

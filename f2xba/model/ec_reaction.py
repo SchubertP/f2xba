@@ -6,7 +6,7 @@ import re
 import numpy as np
 import xml.etree.ElementTree
 
-from f2xba.utils.utils import get_child_text, get_sub_obj_ids, get_resources
+from f2xba.utils.ec_utils import get_child_text, get_sub_obj_ids, get_resources
 
 
 class EcReaction:
@@ -18,12 +18,12 @@ class EcReaction:
         self.ec_numbers = ''
         self.direction = ''
         self.spontaneous = ''
-        self.phys_relevant = ''
-        self.regulators = ''
-        self.pathways = ''
-        self.left = ''
-        self.right = ''
-        self.enzrxns = ''
+        self.phys_relevant = False
+        self.regulators = []
+        self.pathways = []
+        self.left = []
+        self.right = []
+        self.enzrxns = []
         self.gibbs0 = np.nan
         self.red_pot = np.nan
 
@@ -62,3 +62,5 @@ class EcReaction:
 
             data[ecocyc_id] = ec_reaction
         return data
+
+

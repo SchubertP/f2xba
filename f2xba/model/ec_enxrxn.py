@@ -6,7 +6,7 @@ Peter Schubert, CCB, HHU Duesseldorf, November 2022
 import re
 import xml.etree.ElementTree
 
-from f2xba.utils.utils import get_child_text, get_sub_obj_ids
+from f2xba.utils.ec_utils import get_child_text, get_sub_obj_ids
 
 
 class EcEnzRxn:
@@ -17,12 +17,12 @@ class EcEnzRxn:
         self.synonyms = ''
         self.phys_relevant = ''
         self.direction = ''
-        self.cofactors = ''
-        self.enzyme = ''
-        self.reaction = ''
-        # self.regulators = ''
-        self.kms_umolar = ''
-        self.kcats_pers = ''
+        self.cofactors = []
+        self.enzyme = []
+        self.reaction = []
+        # self.regulators = []
+        self.kms_umolar = []
+        self.kcats_pers = []
 
     @staticmethod
     def get_enzrxns(file_name):
@@ -53,7 +53,8 @@ class EcEnzRxn:
                 assert(el_parameter.find('value').get('units') == '&#956;M')
                 substrate = get_sub_obj_ids(el_parameter, 'substrate', '*')
                 params.append(f'{value}, {substrate}')
-            ec_enzrxn.kms_umolar = '; '.join(params)
+            if len(params) > 0:
+                ec_enzrxn.kms_umolar = '; '.join(params)
 
             params = []
             for el_parameter in el.findall('kcat'):
@@ -61,7 +62,8 @@ class EcEnzRxn:
                 assert(el_parameter.find('value').get('units') == 'sec<sup>-1</sup>')
                 substrate = get_sub_obj_ids(el_parameter, 'substrate', '*')
                 params.append(f'{value}, {substrate}')
-            ec_enzrxn.kcats_pers = '; '.join(params)
+            if len(params) > 0:
+                ec_enzrxn.kcats_pers = '; '.join(params)
 
             data[ecocyc_id] = ec_enzrxn
         return data

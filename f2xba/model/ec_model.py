@@ -42,8 +42,8 @@ class EcModel:
             self.retrieve_ecocyc_data()
 
         self.genes = EcGene.get_genes(self.ecocyc_data_fname('Gene'))
-        self.locus2id = {gene.locus: ec_id for ec_id, gene in self.genes.items()
-                         if re.match(r'b\d{4}', gene.locus)}
+        self.locus2gene = {gene.locus: ec_id for ec_id, gene in self.genes.items()
+                           if re.match(r'b\d{4}', gene.locus)}
 
         self.proteins = EcProtein.get_proteins(self.ecocyc_data_fname('Protein'))
         self.rnas = EcRNA.get_rnas(self.ecocyc_data_fname('RNA'))
@@ -85,3 +85,45 @@ class EcModel:
                 with urllib.request.urlopen(req) as response, open(file_name, 'w') as file:
                     file.write(response.read().decode('utf-8'))
                 print(f'{file_name} from ecocyc retrieved')
+
+    def get_protein_components(self, protein_id):
+        """Determine components of a given protein/enzyme.
+
+        recursively parse through proteins and extract compounds
+        and loci for proteins, rnas. All with stoichiometry
+        """
+
+        components = {'proteins': {}, 'rnas': {}, 'compounds': {}}
+        gene = self.proteins[protein_id].gene
+        if gene is not None:
+            locus = self.genes[gene].locus
+            components['proteins'] = {locus: 1.0}
+        else:
+            for compound_part in self.proteins[protein_id].compound_parts:
+                compound, stoic_str = compound_part.split(':')
+                stoic = int(stoic_str)
+                if compound not in components['compounds']:
+                    components['compounds'][compound] = stoic
+                else:
+                    components['compounds'][compound] += stoic
+            for rna_part in self.proteins[protein_id].rna_parts:
+                rna, stoic_str = rna_part.split(':')
+                gene = self.rnas[rna].gene
+                locus = self.genes[gene].locus
+                stoic = int(stoic_str)
+                if locus not in components['rnas']:
+                    components['rnas'][locus] = stoic
+                else:
+                    components['rnas'][locus] += stoic
+            for protein_part in self.proteins[protein_id].protein_parts:
+                protein, stoic_str = protein_part.split(':')
+                stoic = int(stoic_str)
+                sub_components = self.get_protein_components(protein)
+                # update components:
+                for part_type in sub_components:
+                    for component in sub_components[part_type]:
+                        if component not in components[part_type]:
+                            components[part_type][component] = stoic * sub_components[part_type][component]
+                        else:
+                            components[part_type][component] += stoic * sub_components[part_type][component]
+        return components

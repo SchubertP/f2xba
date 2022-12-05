@@ -5,7 +5,7 @@ Peter Schubert, CCB, HHU Duesseldorf, November 2022
 import numpy as np
 import xml.etree.ElementTree
 
-from f2xba.utils.utils import get_child_text, get_sub_obj_ids
+from f2xba.utils.ec_utils import get_child_text, get_sub_obj_ids
 
 
 class EcCompounds:
@@ -15,9 +15,9 @@ class EcCompounds:
         self.name = ''
         self.synonyms = ''
         self.charge = 0
-        self.molecular_weigth = np.nan
-        self.smiles = ''
-        self.parents = ''
+        self.molecular_weight = np.nan
+        self.smiles = None
+        self.parents = None
 
     @staticmethod
     def get_compounds(file_name):
@@ -39,7 +39,7 @@ class EcCompounds:
                 ec_compound.formal_charge = int(el_molecule.get('formalCharge'))
                 el_mw = el_molecule.find("float[@title='molecularWeight']")
                 if el_mw is not None:
-                    ec_compound.molecular_weigth = float(el_mw.text)
+                    ec_compound.molecular_weight = float(el_mw.text)
                 el_smiles = el_molecule.find("string[@title='smiles']")
                 if el_smiles is not None:
                     ec_compound.smiles = el_smiles.text.strip()

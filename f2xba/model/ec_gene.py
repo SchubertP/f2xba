@@ -6,7 +6,7 @@ Peter Schubert, CCB, HHU Duesseldorf, November 2022
 import re
 import xml.etree.ElementTree
 
-from f2xba.utils.utils import get_child_text, get_gene_products, get_sub_obj_ids
+from f2xba.utils.ec_utils import get_child_text, get_gene_products, get_sub_obj_ids
 
 
 class EcGene:
@@ -16,9 +16,9 @@ class EcGene:
         self.name = ''
         self.synonyms = ''
         self.locus = ''
-        self.proteins = ''
-        self.rnas = ''
-        self.tus = ''
+        self.proteins = []
+        self.rnas = []
+        self.tus = []
 
     @staticmethod
     def get_genes(file_name):

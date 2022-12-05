@@ -1,7 +1,8 @@
-"""Implementation of utility functions.
+"""Implementation of utility for ecocyc data parsing functions.
 
 Peter Schubert, HHU Duesseldorf, May 2022
 """
+import re
 import numpy as np
 
 
@@ -14,7 +15,7 @@ def get_child_text(el_parent, child_tag):
     text = ''
     if el_parent.find(child_tag) is not None:
         text = '| '.join([el_obj.text.strip() for el_obj in el_parent.findall(child_tag)])
-    return text
+    return strip_html_tags(text)
 
 
 def to_float(string):
@@ -31,6 +32,10 @@ def to_int(string):
         return 0
 
 
+def strip_html_tags(string):
+    return re.sub(r'<[^>]*>', '', string)
+
+
 # get subtags of a specific component
 def get_subtags(el_parent, child_tag):
     tags = []
@@ -39,7 +44,7 @@ def get_subtags(el_parent, child_tag):
         for el_obj in el_child.findall('*'):
             sub_tags.append(el_obj.tag)
         tags.append('|'.join(sub_tags))
-    return ', '.join(tags)
+    return tags
 
 
 def get_sub_obj_ids(el_parent, child_tag, obj_tag):
@@ -52,7 +57,7 @@ def get_sub_obj_ids(el_parent, child_tag, obj_tag):
         else:
             for el_obj in el_child.findall(obj_tag):
                 obj_ids.append(el_obj.get('frameid'))
-    return ', '.join(obj_ids)
+    return obj_ids
 
 
 def get_components(el_parent, component_type):
@@ -75,7 +80,7 @@ def get_components(el_parent, component_type):
                 stoic = el_obj.text.strip()
         if ec_id != '':
             components.append(f'{ec_id}:{stoic}')
-    return '; '.join(components)
+    return components
 
 
 # get resources
@@ -99,7 +104,7 @@ def get_resources(el_parent, child_tag):
                 resources.append(f'{ec_id}:{stoic}')
             else:
                 resources.append(f'{ec_id}:{stoic}:{compartment}')
-    return '; '.join(resources)
+    return resources
 
 
 def get_gene_products(el_parent, child_tag, product_type):
@@ -114,7 +119,7 @@ def get_gene_products(el_parent, child_tag, product_type):
             if el_obj.tag == product_type:
                 product = el_obj.get('frameid')
                 products.append(product)
-    return ', '.join(products)
+    return products
 
 
 def get_items(items_str, delim=';'):
