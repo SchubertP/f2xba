@@ -12,3 +12,4 @@ class MappingSpecies:
         self.name = s_species['name']
         self.compartment = s_species['compartment']
         self.ec_refs = get_ec_refs(s_species['miriamAnnotation'])
+
