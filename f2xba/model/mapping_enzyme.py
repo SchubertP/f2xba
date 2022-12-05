@@ -9,9 +9,12 @@ class MappingEnzyme:
     def __init__(self, enz_id, ec_model):
         self.id = enz_id
         self.genes = enz_id.split('-')
-        self.components, self.enzrxns = self.enzyme_components(ec_model)
+        self.components, self.complexes = self.enzyme_components(ec_model)
         self.cofactors = set()
         self.ec_cofactors = set()
+        self.enzrxns = []
+        for protein_id in self.complexes:
+            self.enzrxns.extend(ec_model.proteins[protein_id].enzrxns)
         for enzrxns_id in self.enzrxns:
             self.ec_cofactors |= set(ec_model.enzrxns[enzrxns_id].cofactors)
 
@@ -29,13 +32,13 @@ class MappingEnzyme:
         locus = None
         consumed_genes = set()
         tot_components = {'proteins': {}, 'rnas': {}, 'compounds': {}}
-        enzrxns = []
+        complexes = []
         for locus in self.genes:
             if (locus in ec_model.locus2gene) and (locus not in tot_components['proteins']):
                 ec_gene_id = ec_model.locus2gene[locus]
                 ec_protein_ids = ec_model.genes[ec_gene_id].proteins
                 ec_protein_id = self.get_enzyme_complex(ec_protein_ids, ec_model)
-                enzrxns.extend(ec_model.proteins[ec_protein_id].enzrxns)
+                complexes.append(ec_protein_id)
                 components = self.get_protein_components(ec_protein_id, ec_model)
                 tot_components = self.merge_components(tot_components, components)
             consumed_genes |= {gene for gene in tot_components['proteins']}
@@ -43,7 +46,7 @@ class MappingEnzyme:
                 break
         if len(set(self.genes).difference(consumed_genes)) > 0:
             print(f'------------ gene {locus} not found in ec_model')
-        return tot_components, enzrxns
+        return tot_components, complexes
 
     def get_enzyme_complex(self, ec_protein_ids, ec_model):
         ec_protein_id = None
