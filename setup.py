@@ -42,3 +42,4 @@ setup(
               'bioinformatics'],
     **setup_kwargs
 )
+

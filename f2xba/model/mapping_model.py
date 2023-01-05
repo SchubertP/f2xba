@@ -117,7 +117,7 @@ class MappingModel:
 
         if len(dropped) > 0:
             print(f'{len(dropped)} cofactors dropped, due unknown mapping with model species.')
-            print('fix this by adding mappings to dict in function call')
+            print('fix this by adding respective mappings in .map_cofactors() method')
             for ec_ref in dropped:
                 print(f'   - {ec_ref} ({self.ec_model.compounds[ec_ref].name})'
                       f' - options: {self.cref2sids.get(ec_ref)}')
