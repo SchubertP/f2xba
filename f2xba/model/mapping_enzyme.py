@@ -2,13 +2,14 @@
 
 Peter Schubert, CCB, HHU Duesseldorf, December 2022
 """
+import re
 
 
 class MappingEnzyme:
 
     def __init__(self, enz_id, ec_model):
         self.id = enz_id
-        self.genes = enz_id.split('-')
+        self.genes = re.sub(r'^enz_', '', enz_id).split('-')
         self.components, self.complexes = self.enzyme_components(ec_model)
         self.cofactors = set()
         self.ec_cofactors = set()

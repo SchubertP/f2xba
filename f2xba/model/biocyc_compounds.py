@@ -1,17 +1,17 @@
-"""Implementation of EcCompounds class.
+"""Implementation of BiocycCompounds class.
 
 Peter Schubert, CCB, HHU Duesseldorf, November 2022
 """
 import numpy as np
 import xml.etree.ElementTree
 
-from f2xba.utils.ec_utils import get_child_text, get_sub_obj_ids
+from f2xba.utils.biocyc_utils import get_child_text, get_sub_obj_ids
 
 
-class EcCompounds:
+class BiocycCompounds:
 
-    def __init__(self, ecocyc_id):
-        self.id = ecocyc_id
+    def __init__(self, biocyc_id):
+        self.id = biocyc_id
         self.name = ''
         self.synonyms = ''
         self.charge = 0
@@ -21,7 +21,7 @@ class EcCompounds:
 
     @staticmethod
     def get_compounds(file_name):
-        """Retrieve Compound data from ecocyc export.
+        """Retrieve Compound data from biocyc export.
 
         """
         tree = xml.etree.ElementTree.parse(file_name)
@@ -29,21 +29,21 @@ class EcCompounds:
 
         data = {}
         for el in root.findall('Compound'):
-            ecocyc_id = el.get('ID').split(':')[1]
-            ec_compound = EcCompounds(ecocyc_id)
-            ec_compound.name = get_child_text(el, 'common-name')
-            ec_compound.synonyms = get_child_text(el, 'synonym')
+            biocyc_id = el.get('ID').split(':')[1]
+            bc_compound = BiocycCompounds(biocyc_id)
+            bc_compound.name = get_child_text(el, 'common-name')
+            bc_compound.synonyms = get_child_text(el, 'synonym')
 
             el_molecule = el.find('.//molecule')
             if el_molecule is not None:
-                ec_compound.formal_charge = int(el_molecule.get('formalCharge'))
+                bc_compound.formal_charge = int(el_molecule.get('formalCharge'))
                 el_mw = el_molecule.find("float[@title='molecularWeight']")
                 if el_mw is not None:
-                    ec_compound.molecular_weight = float(el_mw.text)
+                    bc_compound.molecular_weight = float(el_mw.text)
                 el_smiles = el_molecule.find("string[@title='smiles']")
                 if el_smiles is not None:
-                    ec_compound.smiles = el_smiles.text.strip()
-            ec_compound.parents = get_sub_obj_ids(el, 'parent', '*')
+                    bc_compound.smiles = el_smiles.text.strip()
+            bc_compound.parents = get_sub_obj_ids(el, 'parent', '*')
 
-            data[ecocyc_id] = ec_compound
+            data[biocyc_id] = bc_compound
         return data

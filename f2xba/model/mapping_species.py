@@ -3,7 +3,8 @@
 Peter Schubert, CCB, HHU Duesseldorf, December 2022
 """
 
-from f2xba.utils.mapping_utils import get_ec_refs
+from f2xba.utils.mapping_utils import get_biocyc_refs
+
 
 class MappingSpecies:
 
@@ -11,5 +12,4 @@ class MappingSpecies:
         self.id = s_species.name
         self.name = s_species['name']
         self.compartment = s_species['compartment']
-        self.ec_refs = get_ec_refs(s_species['miriamAnnotation'])
-
+        self.biocyc_refs = get_biocyc_refs(s_species['miriamAnnotation'])

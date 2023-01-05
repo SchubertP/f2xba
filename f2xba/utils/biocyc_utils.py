@@ -1,4 +1,4 @@
-"""Implementation of utility for ecocyc data parsing functions.
+"""Implementation of utility for bicocyc data parsing functions.
 
 Peter Schubert, HHU Duesseldorf, May 2022
 """

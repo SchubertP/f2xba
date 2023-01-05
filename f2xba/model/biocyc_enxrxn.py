@@ -1,4 +1,4 @@
-"""Implementation of EcEnzRxn class.
+"""Implementation of BiocycEnzRxn class.
 
 Peter Schubert, CCB, HHU Duesseldorf, November 2022
 """
@@ -6,13 +6,13 @@ Peter Schubert, CCB, HHU Duesseldorf, November 2022
 import re
 import xml.etree.ElementTree
 
-from f2xba.utils.ec_utils import get_child_text, get_sub_obj_ids
+from f2xba.utils.biocyc_utils import get_child_text, get_sub_obj_ids
 
 
-class EcEnzRxn:
+class BiocycEnzRxn:
 
-    def __init__(self, ecocyc_id):
-        self.id = ecocyc_id
+    def __init__(self, biocyc_id):
+        self.id = biocyc_id
         self.name = ''
         self.synonyms = ''
         self.phys_relevant = ''
@@ -26,7 +26,7 @@ class EcEnzRxn:
 
     @staticmethod
     def get_enzrxns(file_name):
-        """Retrieve Enzymatic-Reactions from ecocyc export.
+        """Retrieve Enzymatic-Reactions from biocyc export.
 
         """
         tree = xml.etree.ElementTree.parse(file_name)
@@ -34,18 +34,18 @@ class EcEnzRxn:
 
         data = {}
         for el in root.findall('Enzymatic-Reaction'):
-            ecocyc_id = el.get('ID').split(':')[1]
-            ec_enzrxn = EcEnzRxn(ecocyc_id)
-            ec_enzrxn.name = get_child_text(el, 'common-name')
-            ec_enzrxn.synonyms = re.sub(r'\|', ',', get_child_text(el, 'synonym'))
+            biocyc_id = el.get('ID').split(':')[1]
+            bc_enzrxn = BiocycEnzRxn(biocyc_id)
+            bc_enzrxn.name = get_child_text(el, 'common-name')
+            bc_enzrxn.synonyms = re.sub(r'\|', ',', get_child_text(el, 'synonym'))
             relevant = get_child_text(el, 'physiologically-relevant')
-            ec_enzrxn.phys_relevant = True if relevant.lower() == 'true' else False
-            ec_enzrxn.direction = get_child_text(el, 'reaction-direction')
-            ec_enzrxn.cofactors = get_sub_obj_ids(el, 'cofactor', 'Compound')
-            ec_enzrxn.enzyme = get_sub_obj_ids(el, 'enzyme', 'Protein')
-            ec_enzrxn.reaction = get_sub_obj_ids(el, 'reaction', 'Reaction')
-            # ec_enzrxn.regulators = get_sub_obj_ids(el, 'regulated-by', 'Regulation')
-            # ec_enzrxn.required_cplxs = get_sub_obj_ids(el, 'required-protein-complex', 'Protein')
+            bc_enzrxn.phys_relevant = True if relevant.lower() == 'true' else False
+            bc_enzrxn.direction = get_child_text(el, 'reaction-direction')
+            bc_enzrxn.cofactors = get_sub_obj_ids(el, 'cofactor', 'Compound')
+            bc_enzrxn.enzyme = get_sub_obj_ids(el, 'enzyme', 'Protein')
+            bc_enzrxn.reaction = get_sub_obj_ids(el, 'reaction', 'Reaction')
+            # bc_enzrxn.regulators = get_sub_obj_ids(el, 'regulated-by', 'Regulation')
+            # bc_enzrxn.required_cplxs = get_sub_obj_ids(el, 'required-protein-complex', 'Protein')
 
             params = []
             for el_parameter in el.findall('km'):
@@ -54,7 +54,7 @@ class EcEnzRxn:
                 substrate = get_sub_obj_ids(el_parameter, 'substrate', '*')
                 params.append(f'{value}, {substrate}')
             if len(params) > 0:
-                ec_enzrxn.kms_umolar = '; '.join(params)
+                bc_enzrxn.kms_umolar = '; '.join(params)
 
             params = []
             for el_parameter in el.findall('kcat'):
@@ -63,7 +63,7 @@ class EcEnzRxn:
                 substrate = get_sub_obj_ids(el_parameter, 'substrate', '*')
                 params.append(f'{value}, {substrate}')
             if len(params) > 0:
-                ec_enzrxn.kcats_pers = '; '.join(params)
+                bc_enzrxn.kcats_pers = '; '.join(params)
 
-            data[ecocyc_id] = ec_enzrxn
+            data[biocyc_id] = bc_enzrxn
         return data

@@ -3,7 +3,7 @@ f2xba package
 =============
 
 Package supporting XBA model creation from FBA model.
-Using data from Ecocyc and Uniprot
+Using data from Biocyc and Uniprot
 
 Peter Schubert, CCB, HHU-Duesseldorf, November 2022
 """

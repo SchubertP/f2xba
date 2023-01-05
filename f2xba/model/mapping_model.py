@@ -15,9 +15,9 @@ import sbmlxdf
 
 class MappingModel:
 
-    def __init__(self, sbml_file, ec_model):
+    def __init__(self, sbml_file, biocyc_model):
 
-        self.ec_model = ec_model
+        self.biocyc_model = biocyc_model
 
         if os.path.exists(sbml_file) is False:
             print(f'{sbml_file} does not exist')
@@ -39,7 +39,7 @@ class MappingModel:
                         for sid, s_species in model_dict['species'].iterrows()}
         self.cref2sids = self.get_cref2sids()
         # drop all non-unique mappings:
-        self.cref2sid = {ec_ref: sids[0] for ec_ref, sids in self.cref2sids.items() if len(sids) == 1}
+        self.cref2sid = {bc_ref: sids[0] for bc_ref, sids in self.cref2sids.items() if len(sids) == 1}
         self.enzymes = {}
 
     def gpa_update(self, fix_gpa):
@@ -65,16 +65,16 @@ class MappingModel:
             mr.gpa_drop_coenzymes(coenzymes)
 
     def set_mapping_reaction_ref(self, update_rref=None):
-        """set single ecocyc reaction references used for mapping.
+        """set single biocyc reaction references used for mapping.
 
-        Select a valid/exising ecocyc reaction reference from
+        Select a valid/exising biocyc reaction reference from
         references of the metabolic model. In case of multiple references,
         use first valid reference.
 
         Reaction references can also be supplied in update_rref
 
-        :param update_rref: reaction ids with ecocyc reaction reference to use
-        :type update_rref: dict (key: reaction id, value: ecocyc reaction reference)
+        :param update_rref: reaction ids with biocyc reaction reference to use
+        :type update_rref: dict (key: reaction id, value: biocyc reaction reference)
         """
         if update_rref is None:
             update_rref = {}
@@ -82,9 +82,9 @@ class MappingModel:
             if rid in update_rref:
                 mr.set_mapping_ref(update_rref[rid])
             else:
-                for ec_ref in mr.ec_refs:
-                    if ec_ref in self.ec_model.reactions:
-                        mr.set_mapping_ref(ec_ref)
+                for bc_ref in mr.biocyc_refs:
+                    if bc_ref in self.biocyc_model.reactions:
+                        mr.set_mapping_ref(bc_ref)
                         break
 
     def set_enzymes(self):
@@ -95,19 +95,36 @@ class MappingModel:
             enzymes = mr.set_enzymes(self.gp2label)
             for enz_id in enzymes:
                 if enz_id not in self.enzymes:
-                    self.enzymes[enz_id] = MappingEnzyme(enz_id, self.ec_model)
+                    self.enzymes[enz_id] = MappingEnzyme(enz_id, self.biocyc_model)
 
     def get_cref2sids(self):
+        """determine a biocyc compound id to model sid mapping from model annotation.
+
+        :return: mapping table biocyc compound id to model sid
+        :rtype: dict (key: biocyc compound id; val: list of model sids)
+        """
         cref2sids = {}
         for sid, ms in self.species.items():
-            for ec_ref in ms.ec_refs:
-                if ec_ref in self.ec_model.compounds:
-                    if ec_ref not in cref2sids:
-                        cref2sids[ec_ref] = []
-                    cref2sids[ec_ref].append(sid)
+            for bc_ref in ms.biocyc_refs:
+                if bc_ref in self.biocyc_model.compounds:
+                    if bc_ref not in cref2sids:
+                        cref2sids[bc_ref] = []
+                    cref2sids[bc_ref].append(sid)
         return cref2sids
 
     def map_cofactors(self, fix_cofactors=None):
+        """map biocyc cofactor ids to model sids
+
+        ensure that cofactors used in enzymes can be mapped to
+        model species ids (excact or precursor)
+        unmapped cofactors will not be used.
+
+        We can use available mapping from model bicoyc reference to unique model sid.
+        A mapping table of bicocy cofactor id to model sid can be provided.
+
+        :param fix_cofactors: mapping from biocyc id to model ids
+        :type fix_cofactors: dict (key: biocyc compound id; val: model sid)
+        """
         if type(fix_cofactors) is dict:
             self.cref2sid |= fix_cofactors
 
@@ -118,6 +135,6 @@ class MappingModel:
         if len(dropped) > 0:
             print(f'{len(dropped)} cofactors dropped, due unknown mapping with model species.')
             print('fix this by adding respective mappings in .map_cofactors() method')
-            for ec_ref in dropped:
-                print(f'   - {ec_ref} ({self.ec_model.compounds[ec_ref].name})'
-                      f' - options: {self.cref2sids.get(ec_ref)}')
+            for biocyc_ref in dropped:
+                print(f'   - {biocyc_ref} ({self.biocyc_model.compounds[biocyc_ref].name})'
+                      f' - options: {self.cref2sids.get(biocyc_ref)}')

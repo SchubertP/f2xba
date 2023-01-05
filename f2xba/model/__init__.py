@@ -1,7 +1,7 @@
 """Subpackage with Ecocyc model classes """
 
-from .ec_model import EcModel
-from .ec_protein import EcProtein
+from .biocyc_model import BiocycModel
+from .biocyc_protein import BiocycProtein
 from .mapping_model import MappingModel
 
-__all__ = ['EcModel', 'EcProtein', 'MappingModel']
+__all__ = ['BiocycModel', 'BiocycProtein', 'MappingModel']

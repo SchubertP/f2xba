@@ -5,7 +5,7 @@ Peter Schubert, CCB, HHU Duesseldorf, December 2022
 
 import re
 
-from f2xba.utils.mapping_utils import get_ec_refs
+from f2xba.utils.mapping_utils import get_biocyc_refs
 
 
 class MappingReaction:
@@ -21,7 +21,7 @@ class MappingReaction:
         self.reversible = s_reaction['reversible']
         self.reaction_string = s_reaction['reactionString']
         self.gpa = self.get_gpa(s_reaction['fbcGeneProdAssoc'])
-        self.ec_refs = get_ec_refs(s_reaction['miriamAnnotation'])
+        self.biocyc_refs = get_biocyc_refs(s_reaction['miriamAnnotation'])
         self.mapping_ref = None
         self.enzymes = []
 
@@ -53,7 +53,7 @@ class MappingReaction:
     def set_enzymes(self, gp2label):
         """Determine enzyme/isoenzyme composition based on gene product association.
 
-        Due to removal of coenzymes from gpa, the number of isoenzymes migth be smaller.
+        Due to removal of coenzymes from gpa, the number of isoenzymes might be smaller.
 
         :param gp2label: mapping of gene products to gene labels
         :type gp2label: dict (key: gene product id, value: gene id (label)
@@ -72,14 +72,13 @@ class MappingReaction:
             for isoenzyme in isoenzymes:
                 gps = [gp2label[item.strip()] for item in isoenzyme.split('_and_')]
                 gps.sort()
-                enzymes_set.add('-'.join(gps))
+                enzymes_set.add('enz_' + '-'.join(gps))
         enzymes = list(enzymes_set)
         enzymes.sort()
         self.enzymes = enzymes
         return enzymes
 
-    def set_mapping_ref(self, ec_ref):
-        """Set a valid ecocyc reaction reference.
+    def set_mapping_ref(self, biocyc_ref):
+        """Set a valid biocyc reaction reference.
         """
-        self.mapping_ref = ec_ref
-
+        self.mapping_ref = biocyc_ref
