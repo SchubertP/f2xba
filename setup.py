@@ -36,10 +36,10 @@ setup(
     packages=find_packages(exclude='docs'),
     install_requires=['pandas>=1.4.0',
                       'numpy>=0.21.0',
+                      'requests>=2.26.0',
                       'sbmlxdf>=0.2.7'],
     python_requires=">=3.8",
     keywords=['modeling', 'SBML', 'FBA', 'RBA', 'GBA',
               'bioinformatics'],
     **setup_kwargs
 )
-

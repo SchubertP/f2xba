@@ -2,10 +2,9 @@
 f2xba package
 =============
 
-Package supporting XBA model creation from FBA model.
-Using data from Biocyc and Uniprot
+Package supporting creation XBA  models.
 
-Peter Schubert, CCB, HHU-Duesseldorf, November 2022
+Peter Schubert, CCB, HHU-Duesseldorf, June 2023
 """
 
 from .model import *

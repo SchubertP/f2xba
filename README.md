@@ -1,6 +1,14 @@
 # f2xba
 
 
+Extract nucleotide information from NCBI using E-utils EFetch.
+NCBI's Disclaimer and Copyright notice 
+(https://www.ncbi.nlm.nih.gov/About/disclaimer.html).
+
+Biocyc 
+
+Uniprot
+
 
 ## Getting started
 

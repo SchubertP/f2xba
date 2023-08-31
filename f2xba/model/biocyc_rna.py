@@ -17,6 +17,7 @@ class BiocycRNA:
         self.synonyms = ''
         self.gene = None
         self.complexes = []
+        self.gene_composition = {}
         # self.parents = []
 
     @staticmethod

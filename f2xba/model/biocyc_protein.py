@@ -18,9 +18,11 @@ class BiocycProtein:
         self.gene = None
         self.enzrxns = []
         self.complexes = []
-        self.protein_parts = []
-        self.rna_parts = []
-        self.compound_parts = []
+        self.protein_parts = {}
+        self.rna_parts = {}
+        self.compound_parts = {}
+        self.gene_composition = {}
+        self.cofactor_composition = {}
         # self.parents = []
 
     @staticmethod

@@ -9,19 +9,23 @@ import time
 from .mapping_reaction import MappingReaction
 from .mapping_species import MappingSpecies
 from .mapping_enzyme import MappingEnzyme
+from .mapping_protein import MappingProtein
+from f2xba.utils.mapping_utils import get_miriam_refs
 
 import sbmlxdf
 
 
 class MappingModel:
 
-    def __init__(self, sbml_file, biocyc_model):
+    def __init__(self, sbml_file, biocyc_model, protein_data):
 
         self.biocyc_model = biocyc_model
+        self.protein_data = protein_data
 
         if os.path.exists(sbml_file) is False:
             print(f'{sbml_file} does not exist')
             raise FileNotFoundError
+
         print(f'loading: {sbml_file} (last modified: {time.ctime(os.path.getmtime(sbml_file))})')
         sbml_model = sbmlxdf.Model(sbml_file)
         if sbml_model.isModel is False:
@@ -31,16 +35,23 @@ class MappingModel:
         model_dict = sbml_model.to_df()
         self.id = model_dict['modelAttrs'].id
         self.name = model_dict['modelAttrs'].get('name', self.id)
-        self.sbml_gene_products = model_dict['fbcGeneProducts']
-        self.gp2label = self.sbml_gene_products['label'].to_dict()
-        self.reactions = {rid: MappingReaction(s_reaction)
-                          for rid, s_reaction in model_dict['reactions'].iterrows()}
+        self.gp2label = dict(model_dict['fbcGeneProducts']['label'])
+        self.label2uniprot = {}
+        for gpid, row in model_dict['fbcGeneProducts'].iterrows():
+            uniprot_ids = get_miriam_refs(row['miriamAnnotation'], 'uniprot', 'bqbiol:is')
+            if len(uniprot_ids) > 0:
+                self.label2uniprot[row['label']] = uniprot_ids[0]
         self.species = {sid: MappingSpecies(s_species)
                         for sid, s_species in model_dict['species'].iterrows()}
-        self.cref2sids = self.get_cref2sids()
-        # drop all non-unique mappings:
-        self.cref2sid = {bc_ref: sids[0] for bc_ref, sids in self.cref2sids.items() if len(sids) == 1}
+        self.reactions = {rid: MappingReaction(s_reaction)
+                          for rid, s_reaction in model_dict['reactions'].iterrows()}
+        for rid, r in self.reactions.items():
+            r.set_compartments(self.species)
         self.enzymes = {}
+        self.proteins = {}
+#        self.proteins = {s_gp.label: MappingProtein(s_gp, protein_data)
+#                         for gpid, s_gp in model_dict['fbcGeneProducts'].iterrows()}
+        # self.label2uniprot = {pid: p.uniprot_id for pid, p in self.proteins.items()}
 
     def gpa_update(self, fix_gpa):
         """Update Gene Product associations for selected reactions.
@@ -53,16 +64,18 @@ class MappingModel:
         for rid, gpa in fix_gpa.items():
             self.reactions[rid].update_gpa(gpa)
 
-    def gpa_drop_coenzymes(self, coenzymes):
-        """Remove coenzymes from Gene Product Rules.
+    def gpa_remove_gps(self, del_gps):
+        """Remove gene products from Gene Product Rules.
 
-        e.g. {'G_b2582', 'G_b3781', ...}
+        Used to remove dummy protein gene product and
+        gene products related to coezymes that already
+        appear in reaction reactants/products
 
-        :param coenzymes: coenzyme gene products
-        :type coenzymes: set or list of str
+        :param del_gps: coenzyme gene products
+        :type del_gps: set or list of str
         """
         for rid, mr in self.reactions.items():
-            mr.gpa_drop_coenzymes(coenzymes)
+            mr.gpa_remove_gps(del_gps)
 
     def set_mapping_reaction_ref(self, update_rref=None):
         """set single biocyc reaction references used for mapping.
@@ -88,29 +101,99 @@ class MappingModel:
                         break
 
     def set_enzymes(self):
-        """From gene product association extract enzymes.
+        """Identify enzyme complexes used in the model based on Biocyc.
 
+        Based on proteins used in reaction gpa, create enzymes
         """
         for rid, mr in self.reactions.items():
             enzymes = mr.set_enzymes(self.gp2label)
-            for enz_id in enzymes:
-                if enz_id not in self.enzymes:
-                    self.enzymes[enz_id] = MappingEnzyme(enz_id, self.biocyc_model)
+            for eid in enzymes:
+                if eid not in self.enzymes:
+                    self.enzymes[eid] = MappingEnzyme(eid, self.biocyc_model)
+                self.enzymes[eid].add_reaction(rid)
 
-    def get_cref2sids(self):
-        """determine a biocyc compound id to model sid mapping from model annotation.
+    def set_proteins(self, add_loci=None):
+        """Determine the proteins (gene products) used in enzymes and process machines.
 
-        :return: mapping table biocyc compound id to model sid
-        :rtype: dict (key: biocyc compound id; val: list of model sids)
+        Protein are identified by their gene locus id.
+        For mapping with uniprot ids, preferrably use
+
+        Based on proteins used in reaction gpa, create enzymes
+        :param add_loci: list of additional loci (or None)
+        :type add_loci: list of str
         """
-        cref2sids = {}
+
+        # for each protein, identify the compartments where it might be located
+        #  based on the metabolites involved in a connected reaction
+        protein2compartments = {}
+        for enzyme in self.enzymes.values():
+            for protein in enzyme.components['proteins']:
+                if protein not in protein2compartments:
+                    protein2compartments[protein] = set()
+                for rid in enzyme.reactions:
+                    for cid in self.reactions[rid].compartments:
+                        protein2compartments[protein].add(cid)
+        if type(add_loci) is list:
+            for locus in add_loci:
+                protein2compartments[locus] = set()
+
+        # if type(process_machines) is dict:
+        #   for process_machine in process_machines.values():
+        #        for protein in process_machine['proteins']:
+        #            if protein not in protein2compartments:
+        #                protein2compartments[protein] = set()
+        #            for cid in process_machine['compartment']:
+        #                protein2compartments[protein].add(cid)
+
+        for locus in protein2compartments:
+            # preferrably use uniprot references from SBML model (avoid missing loci in uniprot)
+            uniprot_id = self.label2uniprot.get(locus, self.protein_data.locus2uniprot.get(locus))
+            protein_data = self.protein_data.proteins.get(uniprot_id)
+            species_locations = sorted(protein2compartments.get(locus))
+            self.proteins[locus] = MappingProtein(locus, uniprot_id, species_locations, protein_data)
+
+    def get_protein_compartments(self):
+        """Get the compartments where proteins are located with their count.
+
+        :return: protein compartments used
+        :rtype: dict (key: compartment id, value: number of proteins
+        """
+        compartments = {}
+        for p in self.proteins.values():
+            compartment = p.compartment
+            if compartment not in compartments:
+                compartments[compartment] = 0
+            compartments[compartment] += 1
+
+        return dict(sorted(compartments.items(), key=lambda item: item[1], reverse=True))
+
+    def map_protein_compartments(self, mapping):
+        """Map compartment values, e.g. to combine compartments.
+
+        :param mapping:
+        :type mapping: dict (key: compartment based on uniprot/species, value: new value)
+        """
+        for p in self.proteins.values():
+            p.map_compartment(mapping)
+
+    def get_bcref2sids(self):
+        """Map Biocyc compound id to model sids.
+
+        SBML model sids contain compartment postfix in the id.
+        One Biocyc compound id therefore maps to several model sids,
+        e.g. one sid per compartment for same compund
+
+        :return: mapping table Biocyc compound id to model sid
+        :rtype: dict (key: Biocyc compound id; val: list of model sids)
+        """
+        bcref2sids = {}
         for sid, ms in self.species.items():
             for bc_ref in ms.biocyc_refs:
                 if bc_ref in self.biocyc_model.compounds:
-                    if bc_ref not in cref2sids:
-                        cref2sids[bc_ref] = []
-                    cref2sids[bc_ref].append(sid)
-        return cref2sids
+                    if bc_ref not in bcref2sids:
+                        bcref2sids[bc_ref] = []
+                    bcref2sids[bc_ref].append(sid)
+        return bcref2sids
 
     def map_cofactors(self, fix_cofactors=None):
         """map biocyc cofactor ids to model sids
@@ -125,16 +208,58 @@ class MappingModel:
         :param fix_cofactors: mapping from biocyc id to model ids
         :type fix_cofactors: dict (key: biocyc compound id; val: model sid)
         """
-        if type(fix_cofactors) is dict:
-            self.cref2sid |= fix_cofactors
 
+        # Biocyc compound id to model species id mapping (for cofactors, use unique mappings only)
+        bcref2sids = self.get_bcref2sids()
+        bcref2sid = {bc_ref: sids[0] for bc_ref, sids in bcref2sids.items() if len(sids) == 1}
+
+        # add Bicocyc id to model sid mappings supplied as method parameter
+        if type(fix_cofactors) is dict:
+            bcref2sid |= fix_cofactors
+
+        # set mappings on the enzymes and collect non-mapped cofactors
         dropped = set()
         for menz in self.enzymes.values():
-            dropped |= menz.set_cofactors(self.cref2sid)
+            dropped |= menz.set_cofactors(bcref2sid)
 
         if len(dropped) > 0:
-            print(f'{len(dropped)} cofactors dropped, due unknown mapping with model species.')
-            print('fix this by adding respective mappings in .map_cofactors() method')
+            print(f'{len(dropped)} cofactor(s) dropped, due unknown mapping with model species.')
+            print('fix this by adding mappings in .map_cofactors() method')
             for biocyc_ref in dropped:
-                print(f'   - {biocyc_ref} ({self.biocyc_model.compounds[biocyc_ref].name})'
-                      f' - options: {self.cref2sids.get(biocyc_ref)}')
+                print(f'   "{biocyc_ref}" ({self.biocyc_model.compounds[biocyc_ref].name});'
+                      f' existing mappings: {bcref2sids.get(biocyc_ref)}')
+
+    def query_cofactor_usage(self, cofactor):
+        """Query usage of a biocyc cofactor in enzymes.
+
+        Usefull if enzyme cofactors cannot be readily mapped
+        to model species.
+
+        :param cofactor: cofactor id used in biocyc enzymes
+        :type cofactor: str
+        :return: enzyme and related reactions where cofactor is required
+        :rtype: dict (key: enzyme (str), value: list of reactions (str))
+        """
+        cofactor_usage = {}
+        for enz in self.enzymes.values():
+            if cofactor in enz.bc_cofactors:
+                cofactor_usage[enz.id] = list(enz.reactions)
+        return cofactor_usage
+
+    def query_gene_product_usage(self, gene_product):
+        """Query usage of a gene product in reactions.
+
+        Usefull if gene product for a reaction is not readily mapped
+        to biocyc gene.
+
+        :param gene_product: gene product for reaction gpa rule
+        :type gene_product: str
+        :return: reaction and related enzymes where gene product is required
+        :rtype: dict (key: reaction (str), value: list of enzyes (str))
+        """
+        gp_usage = {}
+        for r in self.reactions.values():
+            if type(r.gpa) is str:
+                if gene_product in r.gpa:
+                    gp_usage[r.id] = r.enzymes
+        return gp_usage

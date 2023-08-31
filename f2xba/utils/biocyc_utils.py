@@ -67,9 +67,10 @@ def get_components(el_parent, component_type):
     :type el_parent: xml.etree.ElementTree.Element
     :param component_type: type of component to get information from
     :type  component_type: str
-    :return:
+    :return: component ids with stoichiometry
+    :rtype: dict (key: element id, value: stoichiometry as float)
     """
-    components = []
+    components = {}
     for el_child in el_parent.findall('component'):
         ec_id = ''
         stoic = '1'
@@ -79,7 +80,7 @@ def get_components(el_parent, component_type):
             if el_obj.tag == 'coefficient':
                 stoic = el_obj.text.strip()
         if ec_id != '':
-            components.append(f'{ec_id}:{stoic}')
+            components[ec_id] = float(stoic)
     return components
 
 

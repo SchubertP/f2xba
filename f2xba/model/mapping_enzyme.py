@@ -7,17 +7,33 @@ import re
 
 class MappingEnzyme:
 
-    def __init__(self, enz_id, ec_model):
+    def __init__(self, enz_id, bc_model):
+        """Init.
+
+        Enzyme name (enz_id) is prefixed with 'enz_', followed by the gene loci
+         of the proteins composing the enzyme separated by '-',
+         e.g. 'enz_b2221-b2222'
+        based on reaction gene product association.
+
+        Enzyme are linked to corresponding Biocyc protein complexes.
+        Enzyme components with stoic are based on Biocyc.
+        Cofactors are identified based on Biocyc enzyme reaction
+
+        :param enz_id: enzyme name (contains gene loci of related gene products)
+        :param enz_id: str
+        :param bc_model: organism related information from biocyc database
+        :type bc_model: BiocycModel
+        """
         self.id = enz_id
-        self.genes = re.sub(r'^enz_', '', enz_id).split('-')
-        self.components, self.complexes = self.enzyme_components(ec_model)
+        self.reactions = set()
+        self.complexes, self.components = self.get_enzymes_and_components(bc_model)
         self.cofactors = set()
-        self.ec_cofactors = set()
+        self.bc_cofactors = set()
         self.enzrxns = []
-        for protein_id in self.complexes:
-            self.enzrxns.extend(ec_model.proteins[protein_id].enzrxns)
+        for enzyme_id in self.complexes:
+            self.enzrxns.extend(bc_model.proteins[enzyme_id].enzrxns)
         for enzrxns_id in self.enzrxns:
-            self.ec_cofactors |= set(ec_model.enzrxns[enzrxns_id].cofactors)
+            self.bc_cofactors |= set(bc_model.enzrxns[enzrxns_id].cofactors)
 
     @staticmethod
     def merge_components(components_1, components_2):
@@ -29,86 +45,133 @@ class MappingEnzyme:
                     components_1[part_type][component] += components_2[part_type][component]
         return components_1
 
-    def enzyme_components(self, ec_model):
-        locus = None
-        consumed_genes = set()
-        tot_components = {'proteins': {}, 'rnas': {}, 'compounds': {}}
-        complexes = []
-        for locus in self.genes:
-            if (locus in ec_model.locus2gene) and (locus not in tot_components['proteins']):
-                ec_gene_id = ec_model.locus2gene[locus]
-                ec_protein_ids = ec_model.genes[ec_gene_id].proteins
-                ec_protein_id = self.get_enzyme_complex(ec_protein_ids, ec_model)
-                complexes.append(ec_protein_id)
-                components = self.get_protein_components(ec_protein_id, ec_model)
-                tot_components = self.merge_components(tot_components, components)
-            consumed_genes |= {gene for gene in tot_components['proteins']}
-            if len(set(self.genes).difference(consumed_genes)) == 0:
-                break
-        if len(set(self.genes).difference(consumed_genes)) > 0:
-            print(f'------------ gene {locus} not found in ec_model')
-        return tot_components, complexes
+    def get_enzymes_and_components(self, bc_model):
+        """Determine enzyme composition based on gene(s) in reaction gpa.
 
-    def get_enzyme_complex(self, ec_protein_ids, ec_model):
-        ec_protein_id = None
-        for ec_protein_id in ec_protein_ids:
-            enzrxns = ec_model.proteins[ec_protein_id].enzrxns
-            complexes = ec_model.proteins[ec_protein_id].complexes
+        Reactions are catalyzed by enzymes. Using Biocyc information, such
+        enzymes consist of one or several protein, rna and/or compound components.
+
+        Going through the list of genes in model reaction gpa, corresponding
+        Biocyc enzymes are determined, from which we get determine the enzyme
+        composition.
+
+        :param bc_model: organism related information from biocyc database
+        :type bc_model: BiocycModel
+        :return: enzymes and composition
+        :rtype: tuple of list of str, and dict of dict
+        """
+
+        loci = re.sub(r'^enz_', '', self.id).split('-')
+        enzymes = []
+        tot_components = {'proteins': {}, 'rnas': {}, 'compounds': {}}
+        for locus in loci:
+            if (locus in bc_model.locus2gene) and (locus not in tot_components['proteins']):
+                bc_gene_id = bc_model.locus2gene[locus]
+                bc_protein_ids = bc_model.genes[bc_gene_id].proteins
+                bc_enzyme_id = self.get_enzyme_complex(bc_protein_ids, bc_model)
+                enzymes.append(bc_enzyme_id)
+                components = self.get_enzyme_components(bc_enzyme_id, bc_model)
+                tot_components = self.merge_components(tot_components, components)
+
+        unused_genes = set(loci).difference(set(tot_components['proteins']))
+        if len(unused_genes) > 0:
+            print(f'------------ gene(s) {unused_genes} not found in ec_model')
+        return enzymes, tot_components
+
+    def get_enzyme_complex(self, bc_protein_ids, bc_model):
+        """Iteratively identify enzyme complex constructed from gene_products.
+
+        While an individual protein might not be able to catalyze a
+        reaction, enzymatic complexes might be formed from proteins.
+
+        Starting from a single gene product, an 'active' enzyme is
+        identified, i.e. an enzyme involved in an enzymatic reaction.
+
+        :param bc_protein_ids: Biocyc protein_ids
+        :type bc_protein_ids: list of str
+        :param bc_model: organism related information from biocyc database
+        :type bc_model: BiocycModel
+        :return: Biocyc enzyme id for an 'active' enzyme complex
+        :rtype: str or None (if no 'active' enzyme found)
+        """
+        bc_protein_id = None
+        for bc_protein_id in bc_protein_ids:
+            enzrxns = bc_model.proteins[bc_protein_id].enzrxns
+            complexes = bc_model.proteins[bc_protein_id].complexes
             if len(enzrxns) > 0:
-                return ec_protein_id
+                return bc_protein_id
             elif len(complexes) == 0:
                 continue
             else:
-                return self.get_enzyme_complex(complexes, ec_model)
-        return ec_protein_id
+                return self.get_enzyme_complex(complexes, bc_model)
+        return bc_protein_id
 
-    def get_protein_components(self, protein_id, ec_model):
+    def get_enzyme_components(self, enzyme_id, bc_model):
+        """Iteratively identify composition of an enzyme wrt proteins, rnas, compounds.
+
+        Protein complexes might be composed of sub-complexes.
+        Stoichiometry composition of gene products (proteins), rnas
+        and compounds is considered.
+
+        :param enzyme_id: Biocyc enzyme id for an 'active' enzyme complex
+        :type enzyme_id: str
+        :param bc_model: organism related information from biocyc database
+        :type bc_model: BiocycModel
+        :return: composition wrt to proteins, rnas and compounds
+        :rtype: dict of dict with biocyc id and stoichiometry
+        """
         components = {'proteins': {}, 'rnas': {}, 'compounds': {}}
-        gene = ec_model.proteins[protein_id].gene
+        gene = bc_model.proteins[enzyme_id].gene
         if gene is not None:
-            locus = ec_model.genes[gene].locus
+            locus = bc_model.genes[gene].locus
             components['proteins'] = {locus: 1.0}
         else:
-            for compound_part in ec_model.proteins[protein_id].compound_parts:
-                compound, stoic_str = compound_part.split(':')
-                stoic = int(stoic_str)
+            for compound, stoic in bc_model.proteins[enzyme_id].compound_parts.items():
                 if compound not in components['compounds']:
-                    components['compounds'][compound] = stoic
-                else:
-                    components['compounds'][compound] += stoic
-            for rna_part in ec_model.proteins[protein_id].rna_parts:
-                rna, stoic_str = rna_part.split(':')
-                gene = ec_model.rnas[rna].gene
-                locus = ec_model.genes[gene].locus
-                stoic = int(stoic_str)
+                    components['compounds'][compound] = 0.0
+                components['compounds'][compound] += stoic
+            for rna, stoic in bc_model.proteins[enzyme_id].rna_parts.items():
+                gene = bc_model.rnas[rna].gene
+                locus = bc_model.genes[gene].locus
                 if locus not in components['rnas']:
-                    components['rnas'][locus] = stoic
-                else:
-                    components['rnas'][locus] += stoic
-            for protein_part in ec_model.proteins[protein_id].protein_parts:
-                protein, stoic_str = protein_part.split(':')
-                stoic = int(stoic_str)
-                sub_components = self.get_protein_components(protein, ec_model)
+                    components['rnas'][locus] = 0.0
+                components['rnas'][locus] += stoic
+            # iteratively resolve protein complex composition
+            for protein, stoic in bc_model.proteins[enzyme_id].protein_parts.items():
+                sub_components = self.get_enzyme_components(protein, bc_model)
                 # update components:
                 for part_type in sub_components:
                     for component in sub_components[part_type]:
                         if component not in components[part_type]:
-                            components[part_type][component] = stoic * sub_components[part_type][component]
-                        else:
-                            components[part_type][component] += stoic * sub_components[part_type][component]
+                            components[part_type][component] = 0.0
+                        components[part_type][component] += stoic * sub_components[part_type][component]
         return components
 
-    def set_cofactors(self, cref2sid):
-        """Set the cofactors to model species
+    def add_reaction(self, rid):
+        """Add reaction ID to the enzyme.
 
-        :param cref2sid: mapping of ecocyc compound reference to model species
-        :return: ecocyc species references of any dropped cofactors
+        :param rid: reaction id of metabolic reaction
+        :type rid: str
+        :return:
+        """
+        self.reactions.add(rid)
+
+    def set_cofactors(self, bcref2sid):
+        """Set the enzyme cofactors to model species.
+
+        Only set those cofactors (based on Biocyc) that can successfully be
+        mapped to a model species. Cofactors that cannot be mapped are
+        returned.
+
+        :param bcref2sid: mapping of ecocyc compound reference to model species
+        :type bcref2sid: dict (key: Biocyc compund referend, value: model sid)
+        :return: Biocyc compound references of any unmapped (dropped) cofactors
         :rtype: set of strings
         """
         dropped = set()
-        for ec_cofactor in self.ec_cofactors:
-            if ec_cofactor in cref2sid:
-                self.cofactors.add(cref2sid[ec_cofactor])
+        for bc_cofactor in self.bc_cofactors:
+            if bc_cofactor in bcref2sid:
+                self.cofactors.add(bcref2sid[bc_cofactor])
             else:
-                dropped.add(ec_cofactor)
+                dropped.add(bc_cofactor)
         return dropped
