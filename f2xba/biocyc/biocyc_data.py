@@ -1,4 +1,4 @@
-"""Implementation of EcModel class.
+"""Implementation of BiocycData class.
 
 Peter Schubert, CCB, HHU Duesseldorf, November 2022
 """
@@ -16,15 +16,28 @@ from .biocyc_reaction import BiocycReaction
 from .biocyc_compounds import BiocycCompounds
 
 
-class BiocycModel:
+class BiocycData:
 
     def __init__(self, biocyc_dir, org_prefix='ecoli', api_url='https://websvc.biocyc.org/xmlquery'):
+        """Instantiate BiocycModel Instance
+
+        For a given organism, query Biocyc on-line database for specific components in
+         suitable detail level. Subsequently extract relevant information.
+        Use already downloaded Biocyc exports in case they exist in biocyc_dir.
+
+
+        :param biocyc_dir: directory name, where downloads of Biocyc are stored
+        :type biocyc_dir: str
+        :param org_prefix:
+        :param api_url:
+        """
 
         self.prefix_lc = org_prefix.lower()
         self.prefix_uc = org_prefix.upper() + ':'
         self.url = api_url
         self.biocyc_dir = biocyc_dir
 
+        # Exports with required level of detail.
         self.biocyc_data = {'Gene': ['genes', 'full'],
                             'Protein': ['proteins', 'low'],
                             'RNA': ['RNAs', 'low'],
@@ -65,6 +78,56 @@ class BiocycModel:
                 tot_composition[item] = 0
             tot_composition[item] += stoic * p_stoic
         return tot_composition
+
+    def add_simple_proteins(self, add_proteins):
+        """Add simple proteins (i.e. direct gene products).
+
+        Proteins have a unique Protein id, e.g. 'GATC-MONOMER'
+          and parameters, supplied in a dict
+        Protein instance is created, configured and added to dict of
+          existing proteins in Biocyc model.
+        Gene needs to exist.
+        Gene is identified by gene locus, e.g. 'b2092'
+        Gene record is updated with new protein id
+
+        :param add_proteins: proteins with configuration data
+        :type add_proteins: dict of dict
+        :return: number of added proteins
+        :rtype: int
+        """
+        n_updates = 0
+        for pid, data in add_proteins.items():
+            if 'locus' in data:
+                gid = self.locus2gene[data['locus']]
+                p = BiocycProtein(pid)
+                p.gene = gid
+                p.gene_composition = {data['locus']: 1.0}
+                self.proteins[pid] = p
+                self.modify_proteins({pid: data})
+                if pid not in self.genes[gid].proteins:
+                    self.genes[gid].proteins.append(pid)
+                n_updates += 1
+        return n_updates
+
+    def modify_proteins(self, modify_proteins):
+        """Modify configuration of proteins.
+
+        Proteins have a unique Protein id, e.g. 'CPLX0-231'
+
+        :param modify_proteins: proteins with configuration data
+        :type modify_proteins: dict of dict
+        :return: number of added proteins
+        :rtype: int
+        """
+        n_updates = 0
+        for pid, data in modify_proteins.items():
+            if pid in self.proteins:
+                p = self.proteins[pid]
+                for key, val in data.items():
+                    if hasattr(p, key):
+                        setattr(p, key, val)
+                n_updates += 1
+        return n_updates
 
     def get_gene_composition(self, protein_id):
         """Iteratively retrieve for a complex the protein/rna gene loci with stoichiometry

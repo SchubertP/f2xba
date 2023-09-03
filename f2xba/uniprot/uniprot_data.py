@@ -97,6 +97,7 @@ class UniprotData:
 
         Data is stored in 'self.uniprot_dir' in .tsv format.
         Based on  https://www.uniprot.org/help/api_queries,
+        Query fields as per https://www.uniprot.org/help/return_fields
         using pagination and compression.
 
         """
@@ -130,3 +131,19 @@ class UniprotData:
                 progress += len(records) - 1
                 # print(f'{progress} / {total}')
             print(f'Uniprot protein data downloaded for organism {self.organism_id} to: {self.fname}')
+
+    def modify_loci(self, update_uniprot_loci):
+        """Modify locus information for selected uniprot ids.
+
+        Uniprot loci might be missing in uniprot export,
+            e.g. 'P0A6D5' entry has missing locus (as per July 2023)
+
+        :param update_uniprot_loci: uniprot ids with assigned locus
+        :type update_uniprot_loci: dict (key: uniprot id [str], val: locus id [str])
+        """
+        for uprotid, locus in update_uniprot_loci.items():
+            if uprotid not in self.proteins:
+                print(f'{uprotid} not found in Uniprot data export')
+            else:
+                self.proteins[uprotid].loci = [locus]
+                self.locus2uniprot[locus] = uprotid

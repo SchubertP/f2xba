@@ -88,9 +88,10 @@ def get_protein_name(protein_names_str):
     """
     name = ''
     if type(protein_names_str) == str:
-        match = re.match(r'^([^(]*) ', protein_names_str)
-        if match is not None:
-            name = match.group(1).strip()
+        if ' (' not in protein_names_str:
+            name = protein_names_str
+        else:
+            name = re.match(r'(.*?) \(', protein_names_str).group(1)
     return name
 
 
@@ -115,4 +116,3 @@ class UniprotProtein:
     def get_aa_composition(self):
         amino_acids = sorted(set(self.sequence))
         return {aa: self.sequence.count(aa) for aa in amino_acids}
-
