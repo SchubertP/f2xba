@@ -10,7 +10,7 @@ import re
 def get_loci(loci_str):
     """Extract locus information from Uniprot ordered locus string.
 
-    :param loci_str: Uniprot Gene Names (ordered locus) string
+    :param loci_str: value of Uniprot 'Gene Names (ordered locus)'
     :type loci_str: str
     :return: list of loci
     :rtype: list of str
@@ -27,7 +27,7 @@ def get_location(location_str):
     Use first part following 'SUBCELLULR LOCATION: ', accepting only
     letter and spaces in the compartment name
 
-    :param location_str: Uniprot subcellular location string
+    :param location_str: value of Uniprot 'Subcellular location [CC]'
     :type location_str: str
     :return: subcellular location
     :rtype: str
@@ -46,7 +46,7 @@ def get_go_locations(go_cellular_string):
     Extract all location, but remove annotation term in square brackets
     Strip leading/trailing spaces
 
-    :param go_cellular_string: Uniprot 'Gene Ontology (cellular component)' from export
+    :param go_cellular_string: value of Uniprot 'Gene Ontology (cellular component)'
     :type go_cellular_string: str
     :return: cellular location, sorted
     :rtype: str
@@ -81,7 +81,7 @@ def get_protein_name(protein_names_str):
     Keep first part of the protein names string upto any opening bracket.
     Strip leading/trailing spaces
 
-    :param protein_names_str: Uniprot protein names string from export
+    :param protein_names_str: value Uniprot 'Protein names'
     :type protein_names_str: str
     :return: protein name
     :rtype: str
@@ -93,6 +93,54 @@ def get_protein_name(protein_names_str):
         else:
             name = re.match(r'(.*?) \(', protein_names_str).group(1)
     return name
+
+
+literal2float = {'one': 1.0, 'two': 2.0, 'three': 3.0, 'four': 4.0, 'five': 5.0, 'six': 6.0}
+
+
+def get_cofactors(cofactor_str):
+    """Extract cofactors with stoichiometry from Uniprot cofactors parameter.
+
+    Example for P09831
+        - "COFACTOR: Name=[3Fe-4S] cluster; Xref=ChEBI:CHEBI:21137; Evidence={ECO:0000250};
+           Note=Binds 1 [3Fe-4S] cluster. {ECO:0000250}; COFACTOR: Name=FAD; Xref=ChEBI:CHEBI:57692;
+           Evidence={ECO:0000269|PubMed:4565085}; COFACTOR: Name=FMN; Xref=ChEBI:CHEBI:58210;
+           Evidence={ECO:0000269|PubMed:4565085};"
+
+    :param cofactor_str: value of Uniprot 'Cofactor'
+    :type cofactor_str: str
+    :return: cofactors with stoichiometry and cofactor to CHEBI mapping
+    :rtype: dict, dict
+    """
+    cofactors = {}
+    cofactor2chebi = {}
+    if type(cofactor_str) == str:
+        cofactor = ''
+        for item in [item.strip() for item in cofactor_str.split(';')]:
+            if re.match('COFACTOR: Name=', item):
+                cofactor = item.split('=')[1]
+                cofactors[cofactor] = 1.0
+            if re.match('Xref=ChEBI:CHEBI:', item):
+                cofactor2chebi[cofactor] = 'CHEBI:' + item.split(':')[2]
+            if re.match('Note=Binds ', item):
+                stoic_str = item.split(' ')[1]
+                if stoic_str.isnumeric():
+                    cofactors[cofactor] = float(stoic_str)
+                else:
+                    cofactors[cofactor] = literal2float.get(stoic_str, 1.0)
+    return cofactors, cofactor2chebi
+
+
+def get_aa_composition(aa_seq_str):
+    """Get composition in terms of amino acids
+
+    :param aa_seq_str: amino acid sequence
+    :type aa_seq_str: str
+    :return: amino acid compostion
+    :rtype: dict (key: aa short code, val: count)
+    """
+    amino_acids = sorted(aa_seq_str)
+    return {aa: aa_seq_str.count(aa) for aa in amino_acids}
 
 
 class UniprotProtein:
@@ -109,10 +157,7 @@ class UniprotProtein:
         self.go_locations = get_go_locations(s_data['Gene Ontology (cellular component)'])
         self.length = s_data['Length']
         self.mass = s_data['Mass']
-        self.sequence = s_data['Sequence']
-        self.aa_composition = self.get_aa_composition()
+        # self.sequence = s_data['Sequence']
+        self.aa_composition = get_aa_composition(s_data['Sequence'])
         self.signal_peptide = s_data['Signal peptide']
-
-    def get_aa_composition(self):
-        amino_acids = sorted(set(self.sequence))
-        return {aa: self.sequence.count(aa) for aa in amino_acids}
+        self.cofactors, self.cofactor2chebi = get_cofactors(s_data['Cofactor'])
