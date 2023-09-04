@@ -17,15 +17,14 @@ import sbmlxdf
 
 class MappingModel:
 
-    def __init__(self, sbml_file, biocyc_model, protein_data):
+    def __init__(self, sbml_file, biocyc_data, uniprot_data):
 
-        self.biocyc_model = biocyc_model
-        self.protein_data = protein_data
+        self.biocyc_data = biocyc_data
+        self.uniprot_data = uniprot_data
 
         if os.path.exists(sbml_file) is False:
             print(f'{sbml_file} does not exist')
             raise FileNotFoundError
-
         print(f'loading: {sbml_file} (last modified: {time.ctime(os.path.getmtime(sbml_file))})')
         sbml_model = sbmlxdf.Model(sbml_file)
         if sbml_model.isModel is False:
@@ -96,7 +95,7 @@ class MappingModel:
                 mr.set_mapping_ref(update_rref[rid])
             else:
                 for bc_ref in mr.biocyc_refs:
-                    if bc_ref in self.biocyc_model.reactions:
+                    if bc_ref in self.biocyc_data.reactions:
                         mr.set_mapping_ref(bc_ref)
                         break
 
@@ -109,7 +108,7 @@ class MappingModel:
             enzymes = mr.set_enzymes(self.gp2label)
             for eid in enzymes:
                 if eid not in self.enzymes:
-                    self.enzymes[eid] = MappingEnzyme(eid, self.biocyc_model)
+                    self.enzymes[eid] = MappingEnzyme(eid, self.biocyc_data)
                 self.enzymes[eid].add_reaction(rid)
 
     def set_proteins(self, add_loci=None):
@@ -147,8 +146,8 @@ class MappingModel:
 
         for locus in protein2compartments:
             # preferrably use uniprot references from SBML model (avoid missing loci in uniprot)
-            uniprot_id = self.label2uniprot.get(locus, self.protein_data.locus2uniprot.get(locus))
-            protein_data = self.protein_data.proteins.get(uniprot_id)
+            uniprot_id = self.label2uniprot.get(locus, self.uniprot_data.locus2uniprot.get(locus))
+            protein_data = self.uniprot_data.proteins.get(uniprot_id)
             species_locations = sorted(protein2compartments.get(locus))
             self.proteins[locus] = MappingProtein(locus, uniprot_id, species_locations, protein_data)
 
@@ -189,7 +188,7 @@ class MappingModel:
         bcref2sids = {}
         for sid, ms in self.species.items():
             for bc_ref in ms.biocyc_refs:
-                if bc_ref in self.biocyc_model.compounds:
+                if bc_ref in self.biocyc_data.compounds:
                     if bc_ref not in bcref2sids:
                         bcref2sids[bc_ref] = []
                     bcref2sids[bc_ref].append(sid)
@@ -226,7 +225,7 @@ class MappingModel:
             print(f'{len(dropped)} cofactor(s) dropped, due unknown mapping with model species.')
             print('fix this by adding mappings in .map_cofactors() method')
             for biocyc_ref in dropped:
-                print(f'   "{biocyc_ref}" ({self.biocyc_model.compounds[biocyc_ref].name});'
+                print(f'   "{biocyc_ref}" ({self.biocyc_data.compounds[biocyc_ref].name});'
                       f' existing mappings: {bcref2sids.get(biocyc_ref)}')
 
     def query_cofactor_usage(self, cofactor):

@@ -8,7 +8,7 @@ import xml.etree.ElementTree
 from f2xba.utils.biocyc_utils import get_child_text, get_sub_obj_ids
 
 
-class BiocycCompounds:
+class BiocycCompoundsOld:
 
     def __init__(self, biocyc_id):
         self.id = biocyc_id
@@ -30,7 +30,7 @@ class BiocycCompounds:
         data = {}
         for el in root.findall('Compound'):
             biocyc_id = el.get('ID').split(':')[1]
-            bc_compound = BiocycCompounds(biocyc_id)
+            bc_compound = BiocycCompoundsOld(biocyc_id)
             bc_compound.name = get_child_text(el, 'common-name')
             bc_compound.synonyms = get_child_text(el, 'synonym')
 

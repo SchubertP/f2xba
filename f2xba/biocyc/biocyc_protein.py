@@ -22,7 +22,7 @@ class BiocycProtein:
         self.rna_parts = {}
         self.compound_parts = {}
         self.gene_composition = {}
-        self.cofactor_composition = {}
+        # self.cofactor_composition = {}
         # self.parents = []
 
     @staticmethod

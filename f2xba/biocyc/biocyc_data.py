@@ -13,7 +13,7 @@ from .biocyc_protein import BiocycProtein
 from .biocyc_rna import BiocycRNA
 from .biocyc_enxrxn import BiocycEnzRxn
 from .biocyc_reaction import BiocycReaction
-from .biocyc_compounds import BiocycCompounds
+# from .biocyc_compounds import BiocycCompounds
 
 
 class BiocycData:
@@ -22,7 +22,7 @@ class BiocycData:
         """Instantiate BiocycModel Instance
 
         For a given organism, query Biocyc on-line database for specific components in
-         suitable detail level. Subsequently extract relevant information.
+         suitable detail level. Subsequently, extract relevant information.
         Use already downloaded Biocyc exports in case they exist in biocyc_dir.
 
 
@@ -42,7 +42,7 @@ class BiocycData:
                             'Protein': ['proteins', 'low'],
                             'RNA': ['RNAs', 'low'],
                             # 'ProteinCplxs': ['protein-complexes', 'high'],
-                            'Compounds': ['compounds', 'low'],
+                            # 'Compounds': ['compounds', 'low'],
                             'Reaction':   ['reactions', 'full'],
                             'EnzRxn': ['Enzymatic-Reactions', 'full'],
                             }
@@ -61,7 +61,7 @@ class BiocycData:
         self.rnas = BiocycRNA.get_rnas(self.biocyc_data_fname('RNA'))
         self.enzrxns = BiocycEnzRxn.get_enzrxns(self.biocyc_data_fname('EnzRxn'))
         self.reactions = BiocycReaction.get_reactions(self.biocyc_data_fname('Reaction'))
-        self.compounds = BiocycCompounds.get_compounds(self.biocyc_data_fname('Compounds'))
+        # self.compounds = BiocycCompounds.get_compounds(self.biocyc_data_fname('Compounds'))
 
         # set gene locus on direct gene product and rnas
         for protein in self.proteins.values():
@@ -141,10 +141,11 @@ class BiocycData:
         p = self.proteins[protein_id]
 
         if len(p.gene_composition) > 0:
-            # gene composition is set for direct gene product of a gene
+            # in case a protein is a direct gene product, its composition contains the gene reference.
+            # create new dict with gene composition to avoide side effects
             gene_composition = {gene: stoic for gene, stoic in p.gene_composition.items()}
         else:
-            # retrieve composition information for a protein complex
+            # retrieve composition information for a protein complex (iteratively)
             for p_part_id, p_stoic in p.protein_parts.items():
                 composition = self.get_gene_composition(p_part_id)
                 gene_composition = self.add_composition(gene_composition, composition, p_stoic)
@@ -154,8 +155,11 @@ class BiocycData:
                 gene_composition = self.add_composition(gene_composition, composition, p_stoic)
         return gene_composition
 
-    def get_cofactor_composition(self, protein_id):
+    def get_cofactor_composition_old(self, protein_id):
         """Iteratively retrieve cofactor composition with stoichiometry
+
+        Note: Cofactor composition in Ecocyc protein export is not complete.
+              use Uniprot Cofactors instead
 
         :param protein_id: ecocyc protein id
         :type protein_id: str
@@ -165,18 +169,21 @@ class BiocycData:
         p = self.proteins[protein_id]
         cofactor_composition = p.compound_parts
         for p_part_id, p_stoic in p.protein_parts.items():
-            composition = self.get_cofactor_composition(p_part_id)
+            composition = self.get_cofactor_composition_old(p_part_id)
             if len(composition) > 0:
                 cofactor_composition = self.add_composition(cofactor_composition, composition, p_stoic)
         return cofactor_composition
 
     def set_enzyme_composition(self):
         """Retrieve enzyme gene and cofactor composition on protein data
+
+        Cofactor composition in Ecocyc protein export is not complete.
+        Instead, we use the cofactor composition information stored in Uniprot
         """
         for protein_id, p in self.proteins.items():
             if len(p.protein_parts) > 0:
                 p.gene_composition = self.get_gene_composition(protein_id)
-                p.cofactor_composition = self.get_cofactor_composition(protein_id)
+                # p.cofactor_composition = self.get_cofactor_composition(protein_id)
 
     def biocyc_data_fname(self, component):
         class_name, detail = self.biocyc_data[component]
@@ -220,19 +227,19 @@ class BiocycData:
         and loci for proteins, rnas. All with stoichiometry
         """
 
-        components = {'proteins': {}, 'rnas': {}, 'compounds': {}}
+        components = {'proteins': {}, 'rnas': {}}   # 'compounds': {}}
         gene = self.proteins[protein_id].gene
         if gene is not None:
             locus = self.genes[gene].locus
             components['proteins'] = {locus: 1.0}
         else:
-            for compound_part in self.proteins[protein_id].compound_parts:
-                compound, stoic_str = compound_part.split(':')
-                stoic = int(stoic_str)
-                if compound not in components['compounds']:
-                    components['compounds'][compound] = stoic
-                else:
-                    components['compounds'][compound] += stoic
+            # for compound_part in self.proteins[protein_id].compound_parts:
+            #    compound, stoic_str = compound_part.split(':')
+            #    stoic = int(stoic_str)
+            #    if compound not in components['compounds']:
+            #        components['compounds'][compound] = stoic
+            #    else:
+            #        components['compounds'][compound] += stoic
             for rna_part in self.proteins[protein_id].rna_parts:
                 rna, stoic_str = rna_part.split(':')
                 gene = self.rnas[rna].gene

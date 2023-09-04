@@ -14,3 +14,5 @@ class MappingSpecies:
         self.compartment = s_species['compartment']
         biocyc_refs = get_miriam_refs(s_species['miriamAnnotation'], 'biocyc', 'bqbiol:is')
         self.biocyc_refs = [ref.split(':')[1] for ref in biocyc_refs]
+        chebi_refs = get_miriam_refs(s_species['miriamAnnotation'], 'chebi', 'bqbiol:is')
+        self.chebi_refs = [ref.split(':')[1] for ref in chebi_refs]
