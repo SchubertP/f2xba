@@ -9,11 +9,10 @@ import re
 import numpy as np
 
 import sbmlxdf
-
 from .sbml_sbase import SbmlSBase
 
 
-class Reaction(SbmlSBase):
+class SbmlReaction(SbmlSBase):
 
     def __init__(self, s_reaction, species_dict):
         """Instantiate Reaction instance
@@ -27,20 +26,45 @@ class Reaction(SbmlSBase):
         self.reversible = s_reaction['reversible']
         self.reactants = self.get_srefs(s_reaction['reactants'])
         self.products = self.get_srefs(s_reaction['products'])
-        self.fbc_lb_pid = s_reaction['fbcLowerFluxBound']
-        self.fbc_ub_pid = s_reaction['fbcUpperFluxBound']
+        self.fbcLowerFluxBound = s_reaction['fbcLowerFluxBound']
+        self.fbcUpperFluxBound = s_reaction['fbcUpperFluxBound']
 
         if type(s_reaction['fbcGeneProdAssoc']) == str:
-            self.gpa = re.sub(r'^assoc=', '', s_reaction['fbcGeneProdAssoc'])
+            self.fbcGeneProdAssoc = re.sub(r'^assoc=', '', s_reaction['fbcGeneProdAssoc'])
 
-        self.n_substrates = [len(self.reactants), len(self.products)]
-        self.compartments = [self.get_compartments(self.reactants, species_dict),
-                             self.get_compartments(self.products, species_dict)]
+        self.rp_counts = [len(self.reactants), len(self.products)]
+        self.rp_compartments = [self.get_compartments(self.reactants, species_dict),
+                                self.get_compartments(self.products, species_dict)]
+        self.compartment = '-'.join(sorted(self.rp_compartments[0].union(self.rp_compartments[1])))
         self.kind = self.get_reaction_kind()
         self.enzymes = []
         self.kcatf = None
         self.kcatr = None
         self.orig_rid = self.id
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        if attribute in {'reactant', 'product'}:
+            sid, _val = value.split('=')
+            val = float(_val)
+            if attribute == 'reactant':
+                if val == 0.0:
+                    del self.reactants[sid]
+                else:
+                    self.reactants[sid] = val
+            else:
+                if val == 0.0:
+                    del self.products[sid]
+                else:
+                    self.products[sid] = val
+        else:
+            setattr(self, attribute, value)
 
     @staticmethod
     def get_srefs(srefs_str):
@@ -89,23 +113,23 @@ class Reaction(SbmlSBase):
         """
         kind = 'metabolic'
 
-        if (self.n_substrates[0] == 0) or (self.n_substrates[1] == 0):
+        if (self.rp_counts[0] == 0) or (self.rp_counts[1] == 0):
             kind = 'exchange'
-        elif len(self.compartments[0] | self.compartments[1]) > 1:
+        elif len(self.rp_compartments[0].union(self.rp_compartments[1])) > 1:
             kind = 'transporter'
         return kind
 
     def to_dict(self):
         data = super().to_dict()
         data['reversible'] = self.reversible
-        data['fbcLowerFluxBound'] = self.fbc_lb_pid
-        data['fbcUpperFluxBound'] = self.fbc_ub_pid
+        data['fbcLowerFluxBound'] = self.fbcLowerFluxBound
+        data['fbcUpperFluxBound'] = self.fbcUpperFluxBound
         data['reactants'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
                                        for sid, stoic in self.reactants.items()])
         data['products'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
                                       for sid, stoic in self.products.items()])
-        if hasattr(self, 'gpa'):
-            data['fbcGeneProdAssoc'] = f'assoc={self.gpa}'
+        if hasattr(self, 'fbcGeneProdAssoc'):
+            data['fbcGeneProdAssoc'] = f'assoc={self.fbcGeneProdAssoc}'
         return data
 
     def gpa_remove_gps(self, del_gps):
@@ -118,10 +142,10 @@ class Reaction(SbmlSBase):
         :param del_gps: coenzyme gene products
         :type del_gps: set or list of str
         """
-        if hasattr(self, 'gpa'):
-            gpa = self.gpa
+        if hasattr(self, 'fbcGeneProdAssoc'):
+            gpa = self.fbcGeneProdAssoc
             for gp in del_gps:
-                if gp in self.gpa:
+                if gp in self.fbcGeneProdAssoc:
                     gpa = re.sub(gp + ' and ', '', gpa)
                     gpa = re.sub(' and ' + gp, '', gpa)
                     gpa = re.sub(gp + ' or ', '', gpa)
@@ -129,9 +153,9 @@ class Reaction(SbmlSBase):
                     gpa = re.sub(gp, '', gpa)
             # if all gene_products have been removed, set gpa to None
             if len(set(re.findall(r"\w+", gpa)).difference({'or', 'and'})) > 0:
-                self.gpa = gpa
+                self.fbcGeneProdAssoc = gpa
             else:
-                del self.gpa
+                del self.fbcGeneProdAssoc
 
     def set_enzymes(self, eids):
         """Add enzymes to the reaction, also kcat arrays.
@@ -213,8 +237,8 @@ class Reaction(SbmlSBase):
                         n_updates += 1
         return n_updates
 
-    def modify_stoic_old(self, srefs):
-        """For update the reaction components.
+    def modify_stoic(self, srefs):
+        """Update reactants/products stoichiometry.
 
         stoic < 0: reactant
         stoic > 0: product
@@ -224,16 +248,16 @@ class Reaction(SbmlSBase):
         :type srefs: dict (key: sid, val: stoic, float or None)
         """
         for sid, stoic in srefs.items():
-            if sid in self.reactants:
-                del self.reactants[sid]
-            if sid in self.products:
-                del self.products[sid]
-            if stoic is None:
-                continue
-            if stoic < 0.0:
-                self.reactants[sid] = -stoic
-            if stoic > 0.0:
-                self.products[sid] = stoic
+            if stoic <= 0.0:
+                if sid in self.products:
+                    del self.products[sid]
+                if stoic < 0.0:
+                    self.reactants[sid] = -stoic
+            if stoic >= 0.0:
+                if sid in self.reactants:
+                    del self.reactants[sid]
+                if stoic > 0.0:
+                    self.products[sid] = stoic
 
     def modify_bounds(self, bound_pids):
         """Update flux bounds with new parameter id.
@@ -242,9 +266,9 @@ class Reaction(SbmlSBase):
         :type bound_pids: dict (key: 'ub' and/or 'lb, val: parameter id
         """
         if 'lb' in bound_pids:
-            self.fbc_lb_pid = bound_pids['lb']
+            self.fbcLowerFluxBound = bound_pids['lb']
         if 'ub' in bound_pids:
-            self.fbc_ub_pid = bound_pids['ub']
+            self.fbcUpperFluxBound = bound_pids['ub']
 
     def set_gpa(self, gpa):
         """Change the gene product association.
@@ -254,25 +278,25 @@ class Reaction(SbmlSBase):
         :param gpa: gene product association
         :type gpa: str
         """
-        self.gpa = gpa
+        self.fbcGeneProdAssoc = gpa
         if gpa == '':
-            del self.gpa
+            del self.fbcGeneProdAssoc
 
-    def is_blocked(self, parameters):
+    def is_blocked_old(self, parameters):
         """Check if reaction is blocked due to zero value flux bounds.
 
         :param parameters: flux bound paramters
         :type parameters: SbmlParameters
         :return:
         """
-        lb_value = parameters[self.fbc_lb_pid].value
-        ub_value = parameters[self.fbc_ub_pid].value
+        lb_value = parameters[self.fbcLowerFluxBound].value
+        ub_value = parameters[self.fbcUpperFluxBound].value
         if lb_value == 0.0 and ub_value == 0.0:
             return True
         else:
             return False
 
-    def correct_reversibility(self, parameters, exclude_ex_reactions=False):
+    def correct_reversibility_old(self, parameters, exclude_ex_reactions=False):
         """Correct reversibility based on flux bou ds.
 
         reversible is set to True if flux range is either positive or negative.
@@ -283,8 +307,8 @@ class Reaction(SbmlSBase):
         :param exclude_ex_reactions: flag if exchange reactions should be excluded
         :type exclude_ex_reactions: bool, (default: False)
         """
-        lb_value = parameters[self.fbc_lb_pid].value
-        ub_value = parameters[self.fbc_ub_pid].value
+        lb_value = parameters[self.fbcLowerFluxBound].value
+        ub_value = parameters[self.fbcUpperFluxBound].value
         if self.reversible is True and (lb_value >= 0.0 or ub_value <= 0.0):
             if exclude_ex_reactions is False:
                 self.reversible = False

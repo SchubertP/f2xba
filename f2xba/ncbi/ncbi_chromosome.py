@@ -60,6 +60,8 @@ class NcbiChromosome:
         self.trnas = self.get_gene_data('tRNA', nu_sequence)
         self.mrnas = self.get_gene_data('CDS', nu_sequence)
 
+        self.mrna_avg_composition = self.get_avg_composition(self.mrnas)
+
     def download_data(self, rettype):
         """Download data for retrival type from NCBI nucleotide database to file.
 
@@ -143,3 +145,21 @@ class NcbiChromosome:
             gps[gene_features.locus] = gene_features
 
         return gps
+
+    @staticmethod
+    def get_avg_composition(genes):
+        """For list of genes determine average nucleotide composition.
+
+        :param genes:
+        :type genes: dict (key: gene locus id, val: NcbiFeatureRecord)
+        :return: relative compsition of each nucleotide
+        :rtype: dict (key: nucleotide id, val: relative composition/float)
+        """
+        nt_comp = {}
+        for locus, data in genes.items():
+            for nt, count in data.composition.items():
+                if nt not in nt_comp:
+                    nt_comp[nt] = 0
+                nt_comp[nt] += count
+        total = sum(nt_comp.values())
+        return {nt: count/total for nt, count in nt_comp.items()}

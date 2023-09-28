@@ -10,7 +10,7 @@ Peter Schubert, HHU Duesseldorf, June 2023
 
 class Protein:
 
-    def __init__(self, uniprot, locus):
+    def __init__(self, uniprot, locus, compartment=''):
         self.id = uniprot.id
         self.name = uniprot.protein_name
         self.gene_name = uniprot.gene_name
@@ -19,11 +19,30 @@ class Protein:
         self.ec_numbers = sorted(uniprot.ec_numbers)
         self.location = uniprot.location
         self.locus = locus
-        self.cid = None
+        self.compartment = compartment
         self.linked_sids = set()
+        self.up_cofactors = uniprot.cofactors
+        self.cofactors = {}
+        self.up_cofactor2chebi = uniprot.cofactor2chebi
+        self.aa_composition = uniprot.aa_composition
+        self.has_signal_peptide = True if type(uniprot.signal_peptide) is str else False
 
-    def set_cid(self, cid):
-        self.cid = cid
+    def set_compartment(self, compartment):
+        self.compartment = compartment
+
+    @property
+    def cid(self):
+        return self.compartment.split('-')[0]
 
     def link_sid(self, sid):
         self.linked_sids.add(sid)
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        setattr(self, attribute, value)

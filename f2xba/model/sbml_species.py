@@ -6,6 +6,7 @@ Peter Schubert, HHU Duesseldorf, February 2023
 """
 
 from .sbml_sbase import SbmlSBase
+from f2xba.utils.mapping_utils import get_miriam_refs
 
 
 class SbmlSpecies(SbmlSBase):
@@ -14,23 +15,40 @@ class SbmlSpecies(SbmlSBase):
         super().__init__(s_species)
         self.compartment = s_species['compartment']
         self.constant = s_species['constant']
-        self.boundary = s_species['boundaryCondition']
-        self.subtance_units = s_species['hasOnlySubstanceUnits']
+        self.boundaryCondition = s_species['boundaryCondition']
+        self.hasOnlySubstanceUnits = s_species['hasOnlySubstanceUnits']
 
         if 'fbcCharge' in s_species:
-            self.charge = s_species['fbcCharge']
+            self.fbcCharge = s_species['fbcCharge']
         if 'fbcChemicalFormula' in s_species:
-            self.formula = s_species['fbcChemicalFormula']
+            self.fbcChemicalFormula = s_species['fbcChemicalFormula']
+
+        # additional attributes
+        if 'miriamAnnotation' in s_species:
+            chebi_refs = get_miriam_refs(s_species['miriamAnnotation'], 'chebi', 'bqbiol:is')
+            self.chebi_refs = [ref.split(':')[1] for ref in chebi_refs]
+        else:
+            self.chebi_refs = []
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        setattr(self, attribute, value)
 
     def to_dict(self):
         data = super().to_dict()
         data['compartment'] = self.compartment
         data['constant'] = self.constant
-        data['boundaryCondition'] = self.boundary
-        data['hasOnlySubstanceUnits'] = self.subtance_units
+        data['boundaryCondition'] = self.boundaryCondition
+        data['hasOnlySubstanceUnits'] = self.hasOnlySubstanceUnits
 
-        if hasattr(self, 'charge'):
-            data['fbcCharge'] = self.charge
-        if hasattr(self, 'formula'):
-            data['fbcChemicalFormula'] = self.formula
+        if hasattr(self, 'fbcCharge'):
+            data['fbcCharge'] = self.fbcCharge
+        if hasattr(self, 'fbcChemicalFormula'):
+            data['fbcChemicalFormula'] = self.fbcChemicalFormula
         return data

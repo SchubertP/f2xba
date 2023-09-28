@@ -84,13 +84,13 @@ class UniprotData:
 
         df_uniprot = pd.read_csv(self.fname, sep='\t', index_col=0)
         self.proteins = {}
-        for uprotid, row in df_uniprot.iterrows():
-            self.proteins[uprotid] = UniprotProtein(row)
+        for uid, row in df_uniprot.iterrows():
+            self.proteins[uid] = UniprotProtein(row)
 
-        self.locus2uniprot = {}
-        for uniprot_id, p in self.proteins.items():
+        self.locus2uid = {}
+        for uid, p in self.proteins.items():
             for locus in p.loci:
-                self.locus2uniprot[locus] = uniprot_id
+                self.locus2uid[locus] = uid
 
     def download_data(self):
         """Download required protein data from Uniprot database
@@ -132,18 +132,18 @@ class UniprotData:
                 # print(f'{progress} / {total}')
             print(f'Uniprot protein data downloaded for organism {self.organism_id} to: {self.fname}')
 
-    def modify_loci(self, update_uniprot_loci):
+    def modify_loci(self, modify_loci):
         """Modify locus information for selected uniprot ids.
 
         Uniprot loci might be missing in uniprot export,
             e.g. 'P0A6D5' entry has missing locus (as per July 2023)
 
-        :param update_uniprot_loci: uniprot ids with assigned locus
-        :type update_uniprot_loci: dict (key: uniprot id [str], val: locus id [str])
+        :param modify_loci: uniprot ids with assigned locus
+        :type modify_loci: dict (key: uniprot id [str], val: locus id [str])
         """
-        for uprotid, locus in update_uniprot_loci.items():
-            if uprotid not in self.proteins:
-                print(f'{uprotid} not found in Uniprot data export')
+        for uid, locus in modify_loci.items():
+            if uid not in self.proteins:
+                print(f'{uid} not found in Uniprot data export')
             else:
-                self.proteins[uprotid].loci = [locus]
-                self.locus2uniprot[locus] = uprotid
+                self.proteins[uid].loci = [locus]
+                self.locus2uid[locus] = uid

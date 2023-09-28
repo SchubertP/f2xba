@@ -21,27 +21,59 @@ models like GECKO, ccFBA, MOMENT
 
 Peter Schubert, HHU Duesseldorf, June 2023
 """
+import re
+
+from ..utils.mapping_utils import get_srefs
 
 
 class Enzyme:
 
-    def __init__(self, enz_id, name, composition, mw):
-        """instantiate enzyme object
+    def __init__(self, enz_id, name, model, composition, compartment):
+        """Instantiate enzyme object
 
-        :param enz_id:
+        Enzyme compartment is set based on a reaction, catalyzed by the enzyme.
+        Note: multiple compartments could be possible, only one is selected
+
+        :param enz_id: enzyme id, e.g. 'enz_b1094_b2836'
         :type enz_id: str
         :param name: enzyme name
         :type name: str
+        :param model: reference to underlying model
+        :type model: Class XbaModel
         :param composition: protein composition of enzyme
-        :type composition: dict (key: uniprot id, val: stoichiometry
-        :param mw: molecular weight of total enzyme in Da (g/mol)
-        :tupe mw: float
+        :type composition: dict (key: locus/str, val: stoichiometry/float)
+        :param compartment: compartment of enzyme
+        :type compartment: str
         """
         self.id = enz_id
         self.name = name
+        self.model = model
         self.composition = composition
+        # self.cofactors = cofactors
+        # self.mw = mw
+        self.compartment = compartment
         self.rids = []
-        self.mw = mw
+
+    @property
+    def mw(self):
+        mw = 0.0
+        for locus, stoic in self.composition.items():
+            uid = self.model.locus2uid[locus]
+            p = self.model.proteins[uid]
+            mw += stoic * p.mw
+        return mw
+
+    @property
+    def cofactors(self):
+        cofactors = {}
+        for locus, stoic in self.composition.items():
+            uid = self.model.locus2uid[locus]
+            p = self.model.proteins[uid]
+            for cf_sid, cf_stoic in p.cofactors.items():
+                if cf_sid not in cofactors:
+                    cofactors[cf_sid] = 0.0
+                cofactors[cf_sid] += stoic * cf_stoic
+        return cofactors
 
     def add_reaction(self, rid):
         """add reaction id to enzyme.
@@ -50,3 +82,15 @@ class Enzyme:
         :type rid: str
         """
         self.rids.append(rid)
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        if attribute == 'composition' and type(value) is str:
+            value = get_srefs(re.sub('gene', 'species', value))
+        setattr(self, attribute, value)

@@ -5,14 +5,15 @@ Peter Schubert, CCB, HHU Duesseldorf, November 2022
 
 import os
 import re
+import pandas as pd
 import urllib.parse
 import urllib.request
 
 from .biocyc_gene import BiocycGene
 from .biocyc_protein import BiocycProtein
 from .biocyc_rna import BiocycRNA
-from .biocyc_enxrxn import BiocycEnzRxn
-from .biocyc_reaction import BiocycReaction
+# from .biocyc_enxrxn import BiocycEnzRxn
+# from .biocyc_reaction import BiocycReaction
 # from .biocyc_compounds import BiocycCompounds
 
 
@@ -59,8 +60,10 @@ class BiocycData:
                            if re.match(r'b\d{4}', gene.locus)}
         self.proteins = BiocycProtein.get_proteins(self.biocyc_data_fname('Protein'))
         self.rnas = BiocycRNA.get_rnas(self.biocyc_data_fname('RNA'))
-        self.enzrxns = BiocycEnzRxn.get_enzrxns(self.biocyc_data_fname('EnzRxn'))
-        self.reactions = BiocycReaction.get_reactions(self.biocyc_data_fname('Reaction'))
+
+        # We are not using enzyme reaction mapping from ecocyc, neither cofactors/compounds
+        # self.enzrxns = BiocycEnzRxn.get_enzrxns(self.biocyc_data_fname('EnzRxn'))
+        # self.reactions = BiocycReaction.get_reactions(self.biocyc_data_fname('Reaction'))
         # self.compounds = BiocycCompounds.get_compounds(self.biocyc_data_fname('Compounds'))
 
         # set gene locus on direct gene product and rnas
@@ -261,3 +264,26 @@ class BiocycData:
                         else:
                             components[part_type][component] += stoic * sub_components[part_type][component]
         return components
+
+    def export_enzyme_composition(self, fname):
+        """Export enzyme composition to Excel document.
+
+        after initializeing BiocyData(biocyc_dir) and
+        configuration set_enzyme_composition
+
+        :param fname: file name of export file
+        :type fname: str
+        """
+        enz_comp = {}
+        for enz_id, enz in self.proteins.items():
+            if len(enz.gene_composition) > 0 and len(enz.enzrxns) > 0:
+                gene_comp = '; '.join([f'gene={gene}, stoic={stoic}'
+                                       for gene, stoic in enz.gene_composition.items()])
+                enz_comp[enz_id] = [enz.name, enz.synonyms, gene_comp]
+
+        df_enz_comp = pd.DataFrame(enz_comp.values(), index=list(enz_comp), columns=['name', 'synonyms', 'genes'])
+        df_enz_comp.index.name = 'biocyc_id'
+
+        with pd.ExcelWriter(fname) as writer:
+            df_enz_comp.to_excel(writer, sheet_name='e_coli')
+            print(f'{len(df_enz_comp)} enzyme compositions written to {fname}')

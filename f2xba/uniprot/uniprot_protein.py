@@ -121,7 +121,7 @@ def get_cofactors(cofactor_str):
                 cofactor = item.split('=')[1]
                 cofactors[cofactor] = 1.0
             if re.match('Xref=ChEBI:CHEBI:', item):
-                cofactor2chebi[cofactor] = 'CHEBI:' + item.split(':')[2]
+                cofactor2chebi[cofactor] = item.split(':')[2]
             if re.match('Note=Binds ', item):
                 stoic_str = item.split(' ')[1]
                 if stoic_str.isnumeric():
