@@ -86,11 +86,15 @@ class UniprotData:
         self.proteins = {}
         for uid, row in df_uniprot.iterrows():
             self.proteins[uid] = UniprotProtein(row)
+        self.locus2uid = {}
+        self.update_locus2uid()
 
+    def update_locus2uid(self):
         self.locus2uid = {}
         for uid, p in self.proteins.items():
             for locus in p.loci:
                 self.locus2uid[locus] = uid
+        return self.locus2uid
 
     def download_data(self):
         """Download required protein data from Uniprot database
@@ -132,18 +136,19 @@ class UniprotData:
                 # print(f'{progress} / {total}')
             print(f'Uniprot protein data downloaded for organism {self.organism_id} to: {self.fname}')
 
-    def modify_loci(self, modify_loci):
+    def modify_attributes_old(self, df_modify_attrs):
         """Modify locus information for selected uniprot ids.
 
         Uniprot loci might be missing in uniprot export,
             e.g. 'P0A6D5' entry has missing locus (as per July 2023)
 
-        :param modify_loci: uniprot ids with assigned locus
-        :type modify_loci: dict (key: uniprot id [str], val: locus id [str])
+        :param df_modify_attrs: uniprot ids with assigned locus
+        :type df_modify_attrs: pandas DataFrame (index: uniprot id [str], val: locus id [str])
         """
-        for uid, locus in modify_loci.items():
+        for uid, row in df_modify_attrs.iterrows():
             if uid not in self.proteins:
                 print(f'{uid} not found in Uniprot data export')
             else:
-                self.proteins[uid].loci = [locus]
-                self.locus2uid[locus] = uid
+                self.proteins[uid].modify_attribute(row['attribute'], row['value'])
+
+        self.update_locus2uid()

@@ -161,3 +161,16 @@ class UniprotProtein:
         self.aa_composition = get_aa_composition(s_data['Sequence'])
         self.signal_peptide = s_data['Signal peptide']
         self.cofactors, self.cofactor2chebi = get_cofactors(s_data['Cofactor'])
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        if attribute == 'locus':
+            self.loci = [value]
+        else:
+            setattr(self, attribute, value)

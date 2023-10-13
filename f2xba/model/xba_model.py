@@ -125,14 +125,14 @@ class XbaModel:
         Excel spreadsheet document with several specific sheets containing
         configuration tables, some of them are optional
         sheet names considered:
-            - 'general', 'modify_uniprot_attrs', 'modify_model_attrs',
+            - 'general', 'modify_attributes',
               'remove_gps', 'add_species', 'add_reactions', 'chebi2sid'
 
         :param fname: name of configuration parameters
         :return:
         """
-        sheets = ['general', 'modify_uniprot_attrs', 'modify_model_attrs',
-                  'remove_gps', 'add_species', 'add_reactions', 'chebi2sid']
+        sheets = ['general', 'modify_attributes', 'remove_gps',
+                  'add_species', 'add_reactions', 'chebi2sid']
         xba_params = {}
         with pd.ExcelFile(fname) as xlsx:
             for sheet in sheets:
@@ -145,9 +145,9 @@ class XbaModel:
         #############################
         # modify/correct components #
         #############################
-        if 'modify_model_attrs' in xba_params:
-            self.modify_component_attributes(xba_params['modify_model_attrs'], 'species')
-            self.modify_component_attributes(xba_params['modify_model_attrs'], 'reaction')
+        if 'modify_attributes' in xba_params:
+            self.modify_attributes(xba_params['modify_attributes'], 'species')
+            self.modify_attributes(xba_params['modify_attributes'], 'reaction')
         if 'remove_gps' in xba_params:
             remove_gps = list(xba_params['remove_gps'].index)
             self.gpa_remove_gps(remove_gps)
@@ -156,9 +156,9 @@ class XbaModel:
         if 'add_reactions' in xba_params:
             self.add_reactions(xba_params['add_reactions'])
 
-        #############################
-        # add NCBI and uniprot data #
-        #############################
+        #################
+        # add NCBI data #
+        #################
         if 'chromosome2accids' in general_params and 'ncbi_dir' in general_params:
             chromosome2accids = {}
             for kv in general_params['chromosome2accids'].split(','):
@@ -166,12 +166,14 @@ class XbaModel:
                 chromosome2accids[k.strip()] = v.strip()
             self.add_ncbi_data(chromosome2accids, general_params['ncbi_dir'])
 
+        ####################################
+        # create proteins based on Uniprot #
+        ####################################
         if 'organism_id' in general_params and 'organism_dir' in general_params:
-            self.add_uniprot_data(general_params['organism_id'], general_params['organism_dir'])
+            self.uniprot_data = UniprotData(general_params['organism_id'], general_params['organism_dir'])
+            if 'modify_attributes' in xba_params:
+                self.modify_attributes(xba_params['modify_attributes'], 'uniprot')
 
-        ###################
-        # create proteins #
-        ###################
         count = self.create_proteins()
         print(f'{count:4d} proteins created with UniProt information')
 
@@ -194,8 +196,8 @@ class XbaModel:
             print(f'{count:4d} enzyme compositions updated from {fname}')
 
         # modify enzyme composition, e.g. ABC transporters
-        if 'modify_model_attrs' in xba_params:
-            self.modify_component_attributes(xba_params['modify_model_attrs'], 'enzyme')
+        if 'modify_attributes' in xba_params:
+            self.modify_attributes(xba_params['modify_attributes'], 'enzyme')
 
         # print summary information on catalyzed reactions
         n_catalyzed = sum([1 for r in self.reactions.values() if len(r.enzymes) > 0])
@@ -229,11 +231,6 @@ class XbaModel:
         """
         component_mapping = {'species': self.species, 'reactions': self.reactions,
                              'proteins': self.proteins, 'enzymes': self.enzymes}
-
-        if component_type not in component_mapping:
-            print('component_type must be one of:', component_mapping.keys())
-            return {}
-
         comp2xid = {}
         for xid, data in component_mapping[component_type].items():
             compartment = data.compartment
@@ -406,21 +403,6 @@ class XbaModel:
             print(f'{chromosome}: {sum(data.composition.values())} nucleotides, {len(data.mrnas)} mRNAs,',
                   f'{len(data.rrnas)} rRNAs, {len(data.trnas)} tRNAs', )
 
-    def add_uniprot_data(self, organism_id, organism_dir):
-        """Add Uniprot date for given organism
-
-        Downloads uniprot information for specific organism, if download
-        not found in uniprot_dir.
-
-        Processed uniprot export to extract protein information
-
-        :param organism_id: organism id, e.g. 83333 for Ecoli
-        :type organism_id: int or str
-        :param organism_dir: directory where uniprot exports are stored
-        :type organism_dir: str
-        """
-        self.uniprot_data = UniprotData(organism_id, organism_dir)
-
     #############################
     # MODIFY GENOME SCALE MODEL #
     #############################
@@ -441,10 +423,12 @@ class XbaModel:
         for sid, row in df_species.iterrows():
             n_count += 1
             s_data = row
-            if 'metaid' not in s_data:
-                s_data['metaid'] = f'meta_{sid}'
-            if type(s_data['miriamAnnotation']) is not str:
-                s_data['miriamAnnotation'] = ''
+            if 'miriamAnnotation' in s_data:
+                if type(s_data['miriamAnnotation']) is not str:
+                    s_data['miriamAnnotation'] = ''
+                # miriam annotation requires a 'metaid'
+                if 'metaid' not in s_data:
+                    s_data['metaid'] = f'meta_{sid}'
             self.species[sid] = SbmlSpecies(s_data)
         print(f'{n_count:4d} reactions added to the model ({len(self.species)} total species)')
 
@@ -470,8 +454,12 @@ class XbaModel:
         for rid, row in df_reactions.iterrows():
             n_count += 1
             r_data = row
-            if 'metaid' not in r_data:
-                r_data['metaid'] = f'meta_{rid}'
+            if 'miriamAnnotation' in r_data:
+                if type(r_data['miriamAnnotation']) is not str:
+                    r_data['miriamAnnotation'] = ''
+                # miriam annotation requires a 'metaid'
+                if 'metaid' not in r_data:
+                    r_data['metaid'] = f'meta_{rid}'
             if 'reactionString' in r_data:
                 for key, val in parse_reaction_string(r_data['reactionString']).items():
                     r_data[key] = val
@@ -499,7 +487,7 @@ class XbaModel:
                 data['metaid'] = f'meta_{cid}'
             self.compartments[cid] = SbmlCompartment(pd.Series(data, name=cid))
 
-    def modify_uniprot_loci(self, modify_loci):
+    def modify_uniprot_loci_old(self, modify_loci):
         """Modify locus information for selected uniprot ids.
 
         Uniprot loci might be missing in uniprot export,
@@ -510,14 +498,14 @@ class XbaModel:
         """
         self.uniprot_data.modify_loci(modify_loci)
 
-    def modify_component_attributes(self, df_modify, component_type):
-        """Modify component attributes for specified component ids.
+    def modify_attributes(self, df_modify, component_type):
+        """Modify model attributes for specified component ids.
 
         DataFrame structure:
             index: component id to modify
             columns:
                 'component': one of the supported model components
-                    'reaction', 'species', 'protein', 'enzyme'
+                    'reaction', 'species', 'protein', 'enzyme', 'uniprot'
                 'attribute': the attribute name to modify
                 'value': value to configure for the attribute
         for species refs it is also possible to modify a single sref,
@@ -535,8 +523,12 @@ class XbaModel:
         n_count = 0
         for _id, row in df_modify[df_modify['component'] == component_type].iterrows():
             n_count += 1
-            component_mapping[component_type][_id].modify_attribute(row['attribute'], row['value'])
-        print(f'{n_count:4d} attributes on {component_type} instances updated')
+            if component_type == 'uniprot':
+                self.uniprot_data.proteins[_id].modify_attribute(row['attribute'], row['value'])
+            else:
+                component_mapping[component_type][_id].modify_attribute(row['attribute'], row['value'])
+        if n_count > 0:
+            print(f'{n_count:4d} attributes on {component_type} instances updated')
 
     def merge_compartments(self, old2newcid):
         """Merge compartments on components.
@@ -651,9 +643,10 @@ class XbaModel:
         E.g. required for ribosomal proteins
 
         df_add_gps pandas DataFrame has the following structure:
-            index: locus, e.g. 'b0015'
-            columns: 'gpid': gene product id, e.g. 'G_b0015'
-                     'compartment': location of gene product, e.g. 'c'
+            columns:
+                'locus': gene locus, e.g. 'b0015'
+                'gpid': gene product id, e.g. 'G_b0015'
+                'compartment': location of gene product, e.g. 'c'
 
         Uniprot ID is retrieved with Uniprot data
 
@@ -787,9 +780,6 @@ class XbaModel:
                 for gp_set in gp_sets:
                     loci = sorted([self.gps[item.strip()].label for item in gp_set.split('_and_')])
                     enz_composition = {locus: 1.0 for locus in loci}
-                    # TODO remove below code
-                    # enz_cofactors = self.get_enz_cofactors(enz_composition)
-                    # enz_mw = self.get_enz_mw(enz_composition)
                     eid = 'enz_' + '_'.join(loci)
                     eids.append(eid)
                     if eid not in self.enzymes:
@@ -839,13 +829,6 @@ class XbaModel:
                         if set(genes_stoic).intersection(gpa_genes) == set(genes_stoic):
                             enz.composition.update(genes_stoic)
                             n_count += 1
-
-        # TODO remove below code
-        # update cofactor composition and molecular weight
-        # for eid in updated_eids:
-        #    enz = self.enzymes[eid]
-            # enz.cofactors = self.get_enz_cofactors(enz.composition)
-            # enz.mw = self.get_enz_mw(enz.composition)
         return n_count
 
     def get_catalyzed_reaction_kinds(self):
@@ -1352,38 +1335,31 @@ class XbaModel:
         :type total_protein: float
         """
         # add total protein pool species in default compartment
-        cid2usage = self.get_used_cids()
-        usage2cid = {count: cid for cid, count in cid2usage.items()}
-        pool_cid = usage2cid[max(usage2cid)]
+        pool_cid = sorted([(count, cid) for cid, count in self.get_used_cids().items()])[-1][1]
         pool_sid = f'M_prot_pool_{pool_cid}'
         pool_name = 'total protein pool'
         pool_dict = {'id': pool_sid, 'name': pool_name, 'compartment': pool_cid,
                      'hasOnlySubstanceUnits': False, 'boundaryCondition': False, 'constant': False}
         self.species[pool_sid] = SbmlSpecies(pd.Series(pool_dict, name=pool_sid))
 
-        # add total protein pool exchange reaction
-        draw_dict = {'id': None, 'name': None, 'reactants': None, 'products': None,
-                     'fbcGeneProdAssoc': None, 'reversible': False,
-                     'fbcLowerFluxBound': self.get_fbc_bnd_pid(0.0, 'conc', 'conc_0_bound'),
-                     'fbcUpperFluxBound': self.get_fbc_bnd_pid(1000.0, 'conc', 'conc_default_ub')}
-        draw_rid = f'R_conc_active_protein'
-        draw_dict['id'] = draw_rid
-        draw_dict['name'] = f'conc_active_protein'
-        draw_r = self.reactions[draw_rid] = SbmlReaction(pd.Series(draw_dict, name=draw_rid), self.species)
-        draw_r.products = {pool_sid: 1.0}
-        draw_r.fbcUpperFluxBound = self.get_fbc_bnd_pid(total_protein, 'conc', 'conc_active_protein')
-        self.reactions[draw_rid] = draw_r
+        # add protein drain reactions
+        common_dict = {'reversible': False, 'fbcLowerFluxBound': self.get_fbc_bnd_pid(0.0, 'conc', 'conc_0_bound')}
 
-        # add protein drain reactions (based on a template) - supporting MOMENT
+        # add total protein pool exchange reaction
+        draw_rid = f'R_conc_active_protein'
+        specific_dict = {'id': draw_rid, 'name': f'total concentration active protein', 'fbcGeneProdAssoc': None,
+                         'reactants': None, 'products': f'species={pool_sid}, stoic=1.0',
+                         'fbcUpperFluxBound': self.get_fbc_bnd_pid(total_protein, 'conc', 'conc_active_protein')}
+        self.reactions[draw_rid] = SbmlReaction(pd.Series(common_dict | specific_dict, name=draw_rid), self.species)
+
+        # add protein drain reactions - supporting MOMENT with specific protein split in protein species per reaction
         for uid, p in self.proteins.items():
             draw_rid = f'R_conc_prot_{uid}'
-            draw_dict['id'] = draw_rid
-            draw_dict['name'] = f'conc_prot_{uid}'
-            draw_r = self.reactions[draw_rid] = SbmlReaction(pd.Series(draw_dict, name=draw_rid), self.species)
-            draw_r.set_gpa(self.uid2gp[uid])
-            draw_r.reactants = {pool_sid: p.mw / 1000.0}
-            draw_r.products = {p_sid: 1.0 for p_sid in p.linked_sids}
-            self.reactions[draw_rid] = draw_r
+            specific_dict = {'id': draw_rid, 'name': f'conc_prot_{uid}', 'fbcGeneProdAssoc': self.uid2gp[uid],
+                             'reactants': f'species={pool_sid}, stoic={p.mw / 1000.0}',
+                             'products': '; '.join([f'species={sid}, stoic=1.0' for sid in p.linked_sids]),
+                             'fbcUpperFluxBound': self.get_fbc_bnd_pid(1000.0, 'conc', 'conc_default_ub')}
+            self.reactions[draw_rid] = SbmlReaction(pd.Series(common_dict | specific_dict, name=draw_rid), self.species)
 
     def reaction_enzyme_coupling(self):
         """Couple reactions with enzyme/protein requirement via kcats.
@@ -1721,3 +1697,18 @@ class XbaModel:
                   'fbcUpperFluxBound': self.get_fbc_bnd_pid(ngam_flux, 'flux', 'fbc_NGAM_flux')}
         self.reactions[ngam_rid] = SbmlReaction(pd.Series(r_dict, name=ngam_rid), self.species)
         self.reactions[ngam_rid].modify_stoic(ngam_stoic)
+
+    def add_uniprot_data_old(self, organism_id, organism_dir):
+        """Add Uniprot date for given organism
+
+        Downloads uniprot information for specific organism, if download
+        not found in uniprot_dir.
+
+        Processed uniprot export to extract protein information
+
+        :param organism_id: organism id, e.g. 83333 for Ecoli
+        :type organism_id: int or str
+        :param organism_dir: directory where uniprot exports are stored
+        :type organism_dir: str
+        """
+        self.uniprot_data = UniprotData(organism_id, organism_dir)
