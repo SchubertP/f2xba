@@ -28,8 +28,7 @@ class SbmlReaction(SbmlSBase):
         self.products = self.get_srefs(s_reaction['products'])
         self.fbcLowerFluxBound = s_reaction['fbcLowerFluxBound']
         self.fbcUpperFluxBound = s_reaction['fbcUpperFluxBound']
-
-        if type(s_reaction['fbcGeneProdAssoc']) == str:
+        if ('fbcGeneProdAssoc' in s_reaction) and (type(s_reaction['fbcGeneProdAssoc']) == str):
             self.fbcGeneProdAssoc = re.sub(r'^assoc=', '', s_reaction['fbcGeneProdAssoc'])
 
         self.rp_counts = [len(self.reactants), len(self.products)]

@@ -7,7 +7,8 @@ Package supporting creation XBA  models.
 Peter Schubert, CCB, HHU-Duesseldorf, June 2023
 """
 
-from .model import *
+from .xba_model import *
+from .ec_model import EcModel
 from .rba_model import RbaModel
 
 from . import utils
@@ -16,7 +17,8 @@ from .uniprot import UniprotData
 from .ncbi import NcbiData
 
 __all__ = []
-__all__ += model.__all__
+__all__ += xba_model.__all__
+__all__ += ec_model.__all__
 __all__ += biocyc.__all__
 __all__ += uniprot.__all__
 __all__ += ncbi.__all__
