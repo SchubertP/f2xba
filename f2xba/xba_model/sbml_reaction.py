@@ -269,6 +269,45 @@ class SbmlReaction(SbmlSBase):
         if 'ub' in bound_pids:
             self.fbcUpperFluxBound = bound_pids['ub']
 
+    def reduce_reactants(self):
+        """Reduce reactant/products appearing on both side of the reaction string
+        """
+        reduce_sids = set(self.reactants).intersection(self.products)
+        for sid in reduce_sids:
+            if self.reactants[sid] == self.products[sid]:
+                del self.reactants[sid]
+                del self.products[sid]
+            elif self.reactants[sid] > self.products[sid]:
+                self.reactants[sid] -= self.products[sid]
+                del self.products[sid]
+            else:
+                self.products[sid] -= self.reactants[sid]
+                del self.reactants[sid]
+
+    def add_delta_product(self, sid, delta_stoic):
+        """Modify reaction stoichiometry by adding metabolites to the product side.
+
+        Alternatively reducing metabolites from the reactant side.
+        delta_stoic can be positive or negative.
+
+        :param sid: species id
+        :type sid: str
+        :param delta_stoic: stoichiomeric amount to increase product
+        :type delta_stoic: float
+        """
+        if delta_stoic > 0.0:
+            if sid in self.products:
+                self.products[sid] += delta_stoic
+            else:
+                self.products[sid] = delta_stoic
+                self.reduce_reactants()
+        else:
+            if sid in self.reactants:
+                self.reactants[sid] += (-delta_stoic)
+            else:
+                self.reactants[sid] = (-delta_stoic)
+                self.reduce_reactants()
+
     def set_gpa(self, gpa):
         """Change the gene product association.
 

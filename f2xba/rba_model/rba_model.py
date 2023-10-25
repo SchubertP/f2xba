@@ -191,7 +191,18 @@ class RbaModel:
     def configure(self, rba_params_fname):
         """Create RBA model from xba model using RBA parameters from Excel doc.
 
-        :param rba_params_fname:
+        The Excel parameter document should contain the sheets:
+        - 'general'
+        - 'trna2locus'
+        - 'compartments'
+        - 'targets',
+        - 'functions'
+        - 'processing_maps'
+        - 'processes'
+        - 'machineries'
+
+        :param rba_params_fname: file name of Excel document with RBA specific parameters
+        :type rba_params_fname: str
         """
         if os.path.exists(rba_params_fname) is False:
             print('RBA model NOT created. RBA parameter file not found: ' + rba_params_fname)

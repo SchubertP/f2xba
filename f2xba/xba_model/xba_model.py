@@ -76,7 +76,7 @@ class XbaModel:
         val2pid = {data.value: pid for pid, data in self.parameters.items() if data.units == self.flux_uid}
         self.fbc_bnd_pids = {self.flux_uid: val2pid}
         # determine flux range used in genome scale model
-        self.fbc_flux_range = [0.0, 0.0]
+        self.fbc_flux_range = list([0.0, 0.0])
         for r in self.reactions.values():
             self.fbc_flux_range[0] = min(self.fbc_flux_range[0], self.parameters[r.fbcLowerFluxBound].value)
             self.fbc_flux_range[1] = max(self.fbc_flux_range[1], self.parameters[r.fbcUpperFluxBound].value)

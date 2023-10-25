@@ -12,7 +12,7 @@ import pandas as pd
 class EcModel:
     """Class EcModel
 
-    Based on XbaModel (genome-scale metabolic model), create
+    Build upon XbaModel (genome-scale metabolic model), create
     an enzyme constraint model (GECKO, ccFBA, MOMENT, MOMENTmr),
     by modifying the XbaModel.
 
