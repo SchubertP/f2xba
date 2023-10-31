@@ -539,7 +539,8 @@ class XbaModel:
         :return:
         """
         component_mapping = {'species': self.species, 'reaction': self.reactions,
-                             'protein': self.proteins, 'enzyme': self.enzymes}
+                             'protein': self.proteins, 'enzyme': self.enzymes,
+                             'parameter': self.parameters}
         n_count = 0
         for _id, row in df_modify[df_modify['component'] == component_type].iterrows():
             n_count += 1

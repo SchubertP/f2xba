@@ -21,4 +21,18 @@ class TdReactionData:
         :type rid: str
         """
         self.id = rid
+        self.dgr = None
+        self.dgr_error = None
 
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        if hasattr(self, attribute):
+            setattr(self, attribute, value)
+        else:
+            print(f'unknown TD metabolite attribute {attribute}')

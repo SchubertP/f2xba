@@ -22,3 +22,16 @@ class SbmlParameter(SbmlSBase):
         data['constant'] = self.constant
         data['units'] = self.units
         return data
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        if hasattr(self, attribute):
+            setattr(self, attribute, value)
+        else:
+            print(f'unknown parameter attribute {attribute}')
