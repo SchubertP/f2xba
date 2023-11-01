@@ -12,6 +12,32 @@ from f2xba.utils.mapping_utils import get_miriam_refs
 class SbmlSpecies(SbmlSBase):
 
     def __init__(self, s_species):
+        """Instantiate SbmlSpecies instance with data from s_species.
+
+        s_species is pandas Series with Series.name attribute set species id and
+        several mandatory and optional attributes based on SBML specifications.
+
+        - mandatory attributes:
+            - Series.name: str - species id
+            - 'compartment': str
+            - 'constant': bool
+            - 'boundaryCondition': bool
+            - 'hasOnlySubstanceUnits': bool
+
+        - optional attributes:
+            - 'name': str - handled in parent class
+            - 'sboterm': str - handled in parent class
+            - 'metaid': str - handled in parent class
+            - 'miriamAnnotation': str - handled in parent class
+            - 'notes': str - handled in parent class
+            - 'fbcCharge': float
+            - 'fbcChemicalFormula': str
+
+        From 'miriamAnnotation' references with Chebi and Seed ids are extracted.
+
+        :param s_species: species data from SBML import
+        :type s_species: pandas Series
+        """
         super().__init__(s_species)
         self.compartment = s_species['compartment']
         self.constant = s_species['constant']

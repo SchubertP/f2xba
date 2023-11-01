@@ -22,6 +22,7 @@ from .td_cue_data import TdCueData
 from .td_reaction_data import TdReactionData
 from .td_species_data import TdSpeciesData
 from ..utils.tfa_utils import extract_atoms, get_transported
+from ..xba_model.fbc_objective import FbcObjective
 
 
 TEMPERATURE = 298.15   # 25 deg C
@@ -71,8 +72,7 @@ class TfaModel:
         for constr in tfa_model.constraints:
             for cprefix, bounds in modify_constr_bounds.items():
                 if re.match(cprefix, constr.name):
-                    constr.lb = bounds[0]
-                    constr.ub = bounds[1]
+                    constr.lb, constr.ub = bounds
                     break
 
         tfa_solution = tfa_model.optimize()
@@ -119,8 +119,146 @@ class TfaModel:
         self.rt = self.temperature * 1.9858775 / 1000.0  # kcal/mol TODO: fix for kJ/mol
         self.faraday = 23.061  # kcal/eV TODO: fix for kJ/eV
 
+    def configure(self, tfa_params_fname):
+        """Convert the xba model to TFA model using parameters in fname.
+
+        to be executed after xba model has been configured
+        This method adds EC-model specific parametrizations to the xba model
+
+        The Excel parameters document should contain the sheets:
+        - 'general'
+        - 'td_compartments'
+        - 'modify_seed_ids'
+
+        :param tfa_params_fname: file name for configuration parameters
+        :type tfa_params_fname: str
+        :return: success/failure of model configuration
+        :rtype: bool
+        """
+        # load TFA parameter data
+        if os.path.exists(tfa_params_fname) is False:
+            print(f'{tfa_params_fname} does not exist')
+            raise FileNotFoundError
+        tfa_params_sheets = ['general', 'td_compartments', 'modify_xba_attrs',
+                             'modify_seed_ids', 'modify_td_metabolites']
+        tfa_params = {}
+        with pd.ExcelFile(tfa_params_fname) as xlsx:
+            for sheet in xlsx.sheet_names:
+                if sheet in tfa_params_sheets:
+                    tfa_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+
+        # modify some attributes of underlying XbaModel (could be moved to XbaModel.configure()
+        if 'modify_xba_attrs' in tfa_params:
+            for component, group in tfa_params['modify_xba_attrs'].groupby('component'):
+                self.model.modify_attributes(group, component)
+
+        self.td_params = self._get_general_params(tfa_params['general']['value'].to_dict())
+
+        # load and configure thermodynamics data
+        self._create_td_data(tfa_params)
+        self._create_td_reactions()
+        self._update_species_formula()
+        self._create_td_species()
+        self._set_td_species_dgf_tr()
+        self._set_td_reaction_dgr()
+
+        # adding TFA related constraints and variables
+        self._add_tfa_constraints()
+        self._add_tfa_variables()
+
+        # modify some model attributs and create L3V2 SBML model
+        self.model.model_attrs['id'] += f'_TFA'
+        self.model.model_attrs['name'] = f'TFA model of ' + self.model.model_attrs['name']
+        self.model.sbml_container['level'] = 3
+        self.model.sbml_container['version'] = 2
+
+        self.model.print_size()
+        return True
+
+    def export_slack_model(self, fname):
+        """Create a slack model and export as sbml.
+
+        This slack model needst to be loaded in CobraPy and optimized.
+
+        :: code:: python
+
+            import cobra
+
+            slack_model = cobra.io.read_sbml_model(fname)
+
+            # modification of variables and constraints required for TFA model
+            modify_var_types = {'V_FU_': 'binary', 'V_BU_': 'binary'}
+            for var in slack_model.variables:
+                for vprefix, vtype in modify_var_types.items():
+                    if re.match(vprefix, var.name) and 'reverse' not in var.name:
+                        var.type = vtype
+            modify_constr_bounds = {'C_FU_': [None, 1000.0 - 1e-8],
+                                    'C_BU_': [None, 1000.0 - 1e-8],
+                                    'C_SU_': [None, 1.0],
+                                    'C_UF_': [None, 0.0],
+                                    'C_UR_': [None, 0.0]}
+            for constr in slack_model.constraints:
+                for cprefix, bounds in modify_constr_bounds.items():
+                    if re.match(cprefix, constr.name):
+                        constr.lb, constr.ub = bounds
+
+            biomass_rxn = 'BIOMASS_Ec_iJO1366_core_53p95M'
+            slack_model.reactions.get_by_id(biomass_rxn).lower_bound = 0.5
+
+            slack_solution = slack_model.optimize()
+
+            slack_model.reactions.get_by_id(biomass_rxn).lower_bound = 0.0
+
+
+        Results for the optimization can subsequently be integrated
+        into the TFA model using integrate_min_slack(slack_solution.fluxes).
+
+        :param fname:
+        :return:
+        """
+        self._add_slack_variables()
+        self._add_slack_objective()
+        self.export(fname)
+
+    def integrate_min_slack(self, fba_fluxes):
+        """Integrate optimization results from slack minimization of slack model.
+
+        Called, with the flux values of a CobraPy optimiztion of the slack model
+
+        Negative and positive slacks will be used to update bounds of related
+        ∆Gr˚ variables.
+
+        Summary of updates is returned
+
+        :param fba_fluxes: CobraPy fluxes from solution object
+        :type fba_fluxes: pandas Series or dict (key: rid / str, val: flux / float)
+        :return: summary of ∆Gr˚ bound updates performed
+        :rtype: dict
+        """
+        dgro_relaxations = self._relax_dgo_variables(fba_fluxes)
+        self._remove_slack_configuration()
+        return dgro_relaxations
+
+    def validate(self):
+        """Validate compliance to SBML standards.
+
+        :return: flag of compliance
+        :rtype: bool
+        """
+        return self.model.validate()
+
+    def export(self, fname):
+        """Export TFA model to either SBML or Excel.
+
+        :param fname: filename with extension .xml or .xlsx
+        :type fname: str
+        :return: success flag
+        :rtype: bool
+        """
+        return self.model.export(fname)
+
     @staticmethod
-    def get_general_params(general_params):
+    def _get_general_params(general_params):
         """get TD general parameters base on configuration data and defaults.
 
         :param general_params:
@@ -135,7 +273,7 @@ class TfaModel:
             general_params['max_ph'] = MAX_PH
         return general_params
 
-    def select_td_metabolites(self, all_td_data, modify_seed_ids):
+    def _select_td_metabolites(self, all_td_data, modify_seed_ids):
         """Create td_metabolites for species in the model.
 
         We make used of seed refs in species model annotation and species name.
@@ -189,7 +327,7 @@ class TfaModel:
                     seed_ids.add(selected_seed_id)
         return seed_ids
 
-    def create_td_data(self, tfa_params):
+    def _create_td_data(self, tfa_params):
         """Load and configure thermodyanmics data
 
         creates td_metabolites, td_cues, td_compartments
@@ -223,7 +361,7 @@ class TfaModel:
         # create td_metabolites - selecting requried metabolites only
         all_td_data = all_thermo_data['metabolites']
         modify_seed_ids = tfa_params['modify_seed_ids']['seed_id'].to_dict()
-        seed_ids = self.select_td_metabolites(all_td_data, modify_seed_ids)
+        seed_ids = self._select_td_metabolites(all_td_data, modify_seed_ids)
         self.td_metabolites = {seed_id: TdMetaboliteData(seed_id, all_td_data[seed_id]) for seed_id in seed_ids}
 
         # modify/correct attributes in td_metabolite_data (based on pyTFA thermo-db)
@@ -249,7 +387,7 @@ class TfaModel:
                 for cue_id in to_del:
                     del td_data.struct_cues[cue_id]
 
-    def rebalance_reaction(self, rid, charge_balance):
+    def _rebalance_reaction(self, rid, charge_balance):
         """Rebalance a reaction when charge and proton unbalance is consistant.
 
         Proton species in the model are determined based on seed_id.
@@ -296,7 +434,7 @@ class TfaModel:
             cid = r.compartment.split('-')[0]
             r.add_delta_product(proton_sids[cid], -charge_balance)
 
-    def create_td_reactions(self):
+    def _create_td_reactions(self):
         """Creates TD reactions that are charge and elementally balanced.
 
         creates td_reactions.
@@ -348,12 +486,12 @@ class TfaModel:
                 if charge_balance == 0.0 and len(atom_unbalance) == 0:
                     self.td_reactions[rid] = TdReactionData(rid)
                 elif len(atom_unbalance) == 1 and 'H' in atom_unbalance and atom_unbalance['H'] == charge_balance:
-                    self.rebalance_reaction(rid, charge_balance)
+                    self._rebalance_reaction(rid, charge_balance)
                     self.td_reactions[rid] = TdReactionData(rid)
                     h_balanced += 1
         print(f'{len(self.td_reactions):4d} balanced reactions of which {h_balanced} have been rebalanced with protons')
 
-    def update_species_formula(self):
+    def _update_species_formula(self):
         """Update charge and chemical formula of model species.
 
         TD metabolites can have different formula and charge compared to corresponing
@@ -378,7 +516,7 @@ class TfaModel:
         df_modify_attrs.set_index('id', inplace=True)
         self.model.modify_attributes(df_modify_attrs, 'species')
 
-    def create_td_species(self):
+    def _create_td_species(self):
         """Creates TD species when linked to TD metabolite
 
         creates self.td_species
@@ -389,7 +527,7 @@ class TfaModel:
                 ionic_str = self.td_compartments[s.compartment].ionic_strength
                 self.td_species[sid] = TdSpeciesData(sid, {'seed_id': s.seed_id, 'ph': ph, 'ionic_str': ionic_str})
 
-    def set_td_species_dgf_tr(self):
+    def _set_td_species_dgf_tr(self):
         """configure transformed Gibbs energy of formation
 
         creates self.td_species
@@ -407,7 +545,7 @@ class TfaModel:
             dgf_tr = td_mdata.get_delta_gf_transformed(td_sdata.ph, td_sdata.ionic_str, td_params)
             td_sdata.modify_attribute('dgf_tr', dgf_tr)
 
-    def calc_metabolic_dgr(self, rid):
+    def _calc_metabolic_dgr(self, rid):
         """Calculate for a reaction the weighted sum of ∆Gf transformed.
 
         :param rid: reaction id
@@ -432,7 +570,7 @@ class TfaModel:
 
         return total_dgf_tr
 
-    def calc_transporter_dgr(self, rid):
+    def _calc_transporter_dgr(self, rid):
         """Calculate ∆Gr for transport reactions
 
         :param rid: reaction id
@@ -499,7 +637,7 @@ class TfaModel:
                       'RT_sum_H_LC_tpt': rt_sum_h_lc_tpt}
         return dg_trans_rhs, components
 
-    def calc_reaction_dfr_err(self, rid):
+    def _calc_reaction_dfr_err(self, rid):
         """Calculate ∆Gr error related to ∆Gf of metabolites using group contribution method.
 
         :param rid: reaction id
@@ -539,21 +677,20 @@ class TfaModel:
 
         return sum_dgf_error
 
-    def set_td_reaction_dgr(self):
+    def _set_td_reaction_dgr(self):
 
         for rid, td_rdata in self.td_reactions.items():
             r = self.model.reactions[rid]
             if r.kind == 'metabolic':
-                td_rdata.modify_attribute('dgr', self.calc_metabolic_dgr(rid))
-                td_rdata.modify_attribute('dgr_error', self.calc_reaction_dfr_err(rid))
-
+                td_rdata.modify_attribute('dgr', self._calc_metabolic_dgr(rid))
+                td_rdata.modify_attribute('dgr_error', self._calc_reaction_dfr_err(rid))
             elif r.kind == 'transporter':
-                td_rdata.modify_attribute('dgr', self.calc_transporter_dgr(rid)[0])
-                td_rdata.modify_attribute('dgr_error', self.calc_reaction_dfr_err(rid))
+                td_rdata.modify_attribute('dgr', self._calc_transporter_dgr(rid)[0])
+                td_rdata.modify_attribute('dgr_error', self._calc_reaction_dfr_err(rid))
             else:
                 print(f'{rid}, {r.kind} not supported for ∆Gr calculation')
 
-    def add_tfa_constraints(self):
+    def _add_tfa_constraints(self):
         """Add TFA constraints for reactions with valid ∆Gr.
 
         Constraints are added as pseudo species with prefix 'C_'
@@ -579,7 +716,7 @@ class TfaModel:
         self.model.add_species(df_add_species)
         print(f'{len(self.model.species):4d} species')
 
-    def add_dg_variables(self):
+    def _add_dg_variables(self):
         """Add ∆Gr and ∆Gro variables
 
         :return:
@@ -587,6 +724,9 @@ class TfaModel:
         var2name = {'DG': '∆Gibbs free energy of reaction',
                     'DGo': 'standard ∆Gibbs free energy of reaction'}
         td_max_abs_dg_val = BIG_THERMO
+
+        # TODO: dg variables with dimension kJ/mole (after conversion kcat -> kJ)
+        # TODO: individual upper/lower bound per DGo variable, so they can be managed separately?
 
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
@@ -606,7 +746,7 @@ class TfaModel:
         print(f'{len(df_add_rids):4d} ∆Gr/∆Gr˚ variables to add')
         self.model.add_reactions(df_add_rids)
 
-    def add_use_variables(self):
+    def _add_use_variables(self):
         """add forward and backward use variables.
 
         :return:
@@ -614,6 +754,7 @@ class TfaModel:
         var2name = {'FU': 'forward use variable',
                     'BU': 'backward use variable'}
 
+        # TODO: use variables with dimensioneless flux bounds
         td_max_abs_dg_val = BIG_THERMO
         fbc_max_abs_flux_val = 0.0
         for r in self.model.reactions.values():
@@ -634,7 +775,7 @@ class TfaModel:
         print(f'{len(df_add_rids):4d} forward/backward use variables to add')
         self.model.add_reactions(df_add_rids)
 
-    def add_lc_variables(self):
+    def _add_lc_variables(self):
         """Add log concentration variables.
         """
         var2name = {'LC': 'ln() concentration'}
@@ -685,13 +826,13 @@ class TfaModel:
         print(f'{len(df_add_rids):4d} log concentration variables to add')
         self.model.add_reactions(df_add_rids)
 
-    def add_tfa_variables(self):
+    def _add_tfa_variables(self):
         """Add TFA related variables to the model as pseudo reactions
 
         """
-        self.add_dg_variables()
-        self.add_use_variables()
-        self.add_lc_variables()
+        self._add_dg_variables()
+        self._add_use_variables()
+        self._add_lc_variables()
 
         # split in forward and reverse direction and connect to direction use constraints
         count = 0
@@ -713,76 +854,116 @@ class TfaModel:
 
         print(f'{len(self.model.parameters):4d} parameters')
 
-    def configure(self, tfa_params_fname):
-        """Convert the xba model to TFA model using parameters in fname.
+    # SLACK MODEL CONFIGURATION / TFA MODEL RELAXATION
+    def _add_slack_variables(self):
+        """Add slack variables for ∆Gr˚ relaxation.
 
-        to be executed after xba model has been configured
-        This method adds EC-model specific parametrizations to the xba model
+        Negative and positive Slack variables are introduced according
+        to pyTFA relaxation_Dgo() method.
+        Negative slack variables consume ∆Gr constraint (C_G_<rid>),
+        positive slack variables produce ∆Gr constraint.
+        Both slack variables are configured as non-negative (lower bound = 0)
 
-        The Excel parameters document should contain the sheets:
-        - 'general'
-        - 'td_compartments'
-        - 'modify_seed_ids'
+        Following FBA optimization of the slack model (minimize sum of slack variables),
+        the values of the slack variables can be used to adjust related ∆Gro variable bounds.
 
-        :param tfa_params_fname: file name for configuration parameters
-        :type tfa_params_fname: str
-        :return: success/failure of model configuration
-        :rtype: bool
+        Slack objective and slack variables need to be removed for final TFA model
         """
-        # load TFA parameter data
-        if os.path.exists(tfa_params_fname) is False:
-            print(f'{tfa_params_fname} does not exist')
-            raise FileNotFoundError
-        tfa_params_sheets = ['general', 'td_compartments', 'modify_xba_attrs',
-                             'modify_seed_ids', 'modify_td_metabolites']
-        tfa_params = {}
-        with pd.ExcelFile(tfa_params_fname) as xlsx:
-            for sheet in xlsx.sheet_names:
-                if sheet in tfa_params_sheets:
-                    tfa_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+        var2name = {'NS': 'negative slack variable on ∆Gro',
+                    'PS': 'positive slack variable on ∆Gro'}
+        td_max_abs_dg_val = BIG_THERMO
 
-        # modify some attributes of underlying XbaModel (could be moved to XbaModel.configure()
-        if 'modify_xba_attrs' in tfa_params:
-            for component, group in tfa_params['modify_xba_attrs'].groupby('component'):
-                self.model.modify_attributes(group, component)
+        pseudo_rids = {}
+        for rid, td_rdata in self.td_reactions.items():
+            if td_rdata.dgr is not None:
+                ridx = re.sub('^R_', '', rid)
+                pseudo_rids[f'V_NS_{ridx}'] = [f'{var2name["NS"]} for {ridx}', f'C_G_{ridx} =>',
+                                               0.0, td_max_abs_dg_val, 'continuous']
+                pseudo_rids[f'V_PS_{ridx}'] = [f'{var2name["PS"]} for {ridx}', f'=> C_G_{ridx}',
+                                               0.0, td_max_abs_dg_val, 'continuous']
 
-        self.td_params = self.get_general_params(tfa_params['general']['value'].to_dict())
+        cols = ['name', 'reactionString', 'fbcLb', 'fbcUb', 'notes']
+        df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
+        print(f'{len(df_add_rids):4d} slack variables for ∆Go to add')
+        self.model.add_reactions(df_add_rids)
 
-        # load and configure thermodynamics data
-        self.create_td_data(tfa_params)
-        self.create_td_reactions()
-        self.update_species_formula()
-        self.create_td_species()
-        self.set_td_species_dgf_tr()
-        self.set_td_reaction_dgr()
+    def _add_slack_objective(self):
+        """Add the slack objective (minimize sum over slack variables).
 
-        # adding TFA related constraints and variables
-        self.add_tfa_constraints()
-        self.add_tfa_variables()
-
-        # modify some model attributs and create L3V2 SBML model
-        self.model.model_attrs['id'] += f'_TFA'
-        self.model.model_attrs['name'] = f'TFA model of ' + self.model.model_attrs['name']
-        self.model.sbml_container['level'] = 3
-        self.model.sbml_container['version'] = 2
-
-        self.model.print_size()
-        return True
-
-    def validate(self):
-        """Validate compliance to SBML standards
-
-        :return: flag of compliance
-        :rtype: bool
+        Active optimization objective of model is inactivated
+        The new slack objective is created and added to the model.
         """
-        return self.model.validate()
+        # inactivate active optimization objective
+        for obj_id, obj in self.model.objectives.items():
+            if obj.active is True:
+                self.td_params['objective_id'] = obj_id
+                obj.modify_attribute('active', False)
 
-    def export(self, fname):
-        """Export ec model to either SBML or Excel
+        # create new active slack_objective (minimize sum of slack variables)
+        slack_obj_id = 'slack_objective'
+        slack_obj_coefs = [rid for rid in self.model.reactions if re.match('V_[PN]S_', rid)]
+        srefs_str = '; '.join([f'reac={var_name}, coef=1.0' for var_name in slack_obj_coefs])
+        slack_obj_dict = {'type': 'minimize', 'active': True, 'fluxObjectives': srefs_str}
+        self.model.objectives[slack_obj_id] = FbcObjective(pd.Series(slack_obj_dict, name=slack_obj_id))
 
-        :param fname: filename with extension .xml or .xlsx
-        :type fname: str
-        :return: success flag
-        :rtype: bool
+    def _relax_dgo_variables(self, fluxes):
+        """Relax ∆Gr˚ variable bounds based on slack minimization of slack model.
+
+        Nonzero negative / positive slack variables are identified and
+        bounds of related ∆Gr˚ variables are updated.
+        E.g. upper bound update for non-zero positive slack variable is:
+            - old upper bound value + slack + epsilon (1e-6)
+        Note: we are updating the values of already configured parameter ids.
+
+        A summary of updated values is returned
+
+        :param fluxes: CobraPy fluxes from solution object
+        :type fluxes: pandas Series or dict (key: rid / str, val: flux / float)
+        :return: summary of ∆Gr˚ bound updates performed
+        :rtype: dict
         """
-        return self.model.export(fname)
+        eps = 1e-6
+        dgo_slack = {}
+        for vname, flux in fluxes.items():
+            if flux > 0.0 and (re.match('V_NS_', vname) or re.match('V_PS_', vname)):
+                dgo_slack[vname] = flux
+
+        dgro_relaxations = {}
+        modify_attrs = {}
+        for vname, slack in dgo_slack.items():
+            ridx = re.sub('V_[PN]S_', '', vname)
+            dgo_var = self.model.reactions[f'V_DGo_{ridx}']
+            dgo_lb_pid = dgo_var.fbcLowerFluxBound
+            dgo_ub_pid = dgo_var.fbcUpperFluxBound
+            dgo_lb_val = self.model.parameters[dgo_lb_pid].value
+            dgo_ub_val = self.model.parameters[dgo_ub_pid].value
+
+            if re.match('V_NS_', vname):
+                dgo_new_lb_val = dgo_lb_val - slack - eps
+                modify_attrs[dgo_lb_pid] = ['parameter', 'value', dgo_new_lb_val, 'relaxation']
+                dgro_relaxations[ridx] = f'lower ∆Gr˚ bound from {dgo_lb_val:.4f} to {dgo_new_lb_val:.4f} ' \
+                                         f'[{dgo_new_lb_val:.4f}, {dgo_ub_val:.4f}]'
+            else:
+                dgo_new_ub_val = dgo_ub_val + slack + eps
+                modify_attrs[dgo_ub_pid] = ['parameter', 'value', dgo_new_ub_val, 'relaxation']
+                dgro_relaxations[ridx] = f'upper ∆Gr˚ bound from {dgo_ub_val:.4f} to {dgo_new_ub_val:.4f} ' \
+                                         f'[{dgo_lb_val:.4f}, {dgo_new_ub_val:.4f}]'
+
+        df_modify_attrs = pd.DataFrame(modify_attrs, index=['component', 'attribute', 'value', 'notes']).T
+        print(f'{len(df_modify_attrs):4d} ∆Gr˚ variables need relaxation.')
+        self.model.modify_attributes(df_modify_attrs, 'parameter')
+        return dgro_relaxations
+
+    def _remove_slack_configuration(self):
+        """Remove the slack configuration (variables and objective)
+
+        Remove slack objective and negative/positive slack variables.
+        Reactivate the old optimization objective
+        """
+        del self.model.objectives['slack_objective']
+        to_del = [vname for vname in self.model.reactions if re.match('V_[PN]S_', vname)]
+        for vname in to_del:
+            del self.model.reactions[vname]
+
+        old_obj_id = self.td_params['objective_id']
+        self.model.objectives[old_obj_id].modify_attribute('active', True)

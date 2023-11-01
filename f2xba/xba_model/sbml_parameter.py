@@ -11,6 +11,30 @@ from .sbml_sbase import SbmlSBase
 class SbmlParameter(SbmlSBase):
 
     def __init__(self, s_parameter):
+        """Instantiate SbmlParameter instance with data from s_parameter
+
+        s_parameter is pandas Series with Series.name attribute set parameter id and
+        several mandatory and optional attributes based on SBML specifications.
+
+        - mandatory attributes:
+            - Series.name: str - parameter id
+            - 'value': float
+            - 'constant': bool
+            - 'units': str - unit definition id
+            - 'fbcLowerFluxBound': str - parameter id
+            - 'fbcUpperFluxBound': str - parameter id
+
+        - optional attributes:
+            - 'name': str - handled in parent class
+            - 'sboterm': str - handled in parent class
+            - 'metaid': str - handled in parent class
+            - 'miriamAnnotation': str - handled in parent class
+            - 'notes': str - handled in parent class
+            - 'fbcGeneProdAssoc': str
+
+        :param s_parameter: parameter data from SBML import
+        :type s_parameter: pandas Series
+        """
         super().__init__(s_parameter)
         self.value = s_parameter['value']
         self.constant = s_parameter['constant']

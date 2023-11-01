@@ -551,31 +551,6 @@ class XbaModel:
         if n_count > 0:
             print(f'{n_count:4d} attributes on {component_type} instances updated')
 
-    def merge_compartments(self, old2newcid):
-        """Merge compartments on components.
-
-        Usefull in RBA modelling to reduce number of compartments
-
-        old2newcid contains mapping from old to new compartments.
-        E.g. {'c-e-p': 'c-p', 'c-e': 'c-p'}
-        Note: check compartments using XbaModel.get_compartments(component_type)
-
-        :param old2newcid: mapping of original to destination compartment id
-        :type old2newcid: dict (key: str, val, str)
-        :return: number of updated compartments
-        :rtype: int
-        """
-        component_mapping = {'species': self.species, 'reactions': self.reactions,
-                             'proteins': self.proteins, 'enzymes': self.enzymes}
-
-        n_updated = 0
-        for component in component_mapping.values():
-            for xid, data in component.items():
-                if data.compartment in old2newcid:
-                    data.compartment = old2newcid[data.compartment]
-                    n_updated += 1
-        return n_updated
-
     def gpa_remove_gps(self, del_gps):
         """Remove gene products from Gene Product Rules.
 
@@ -1057,7 +1032,7 @@ class XbaModel:
         self.parameters[pid] = SbmlParameter(pd.Series(p_dict, name=pid))
 
     def get_fbc_bnd_pid(self, val, uid, prop_fbc_pid):
-        """get parameter id for a given fbc bound value und unit type.
+        """Get parameter id for a given fbc bound value und unit type.
 
         Construct a new fbc bnd parameter, if the value is
         not found among existing parameters

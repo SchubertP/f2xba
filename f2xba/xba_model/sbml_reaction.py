@@ -15,7 +15,29 @@ from .sbml_sbase import SbmlSBase
 class SbmlReaction(SbmlSBase):
 
     def __init__(self, s_reaction, species_dict):
-        """Instantiate Reaction instance
+        """Instantiate SbmlReaction instance with data from s_reaction
+
+        s_reaction is pandas Series with Series.name attribute set reaction id and
+        several mandatory and optional attributes based on SBML specifications.
+
+        - mandatory attributes:
+            - Series.name: str - reaction id
+            - 'reversible': bool
+            - 'reactants': str
+            - 'products': str
+            - 'fbcLowerFluxBound': str - parameter id
+            - 'fbcUpperFluxBound': str - parameter id
+
+        - optional attributes:
+            - 'name': str - handled in parent class
+            - 'sboterm': str - handled in parent class
+            - 'metaid': str - handled in parent class
+            - 'miriamAnnotation': str - handled in parent class
+            - 'notes': str - handled in parent class
+            - 'fbcGeneProdAssoc': str
+
+        A reaction compartment is set based on compartments of reaction reactants/products.
+        In case of transporters, the compartment ids are concatenated using '-'
 
         :param s_reaction: reaction data from SBML import
         :type s_reaction: pandas Series

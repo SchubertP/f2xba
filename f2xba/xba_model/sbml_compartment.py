@@ -11,6 +11,28 @@ from .sbml_sbase import SbmlSBase
 class SbmlCompartment(SbmlSBase):
 
     def __init__(self, s_compartment):
+        """Instantiate SbmlCompartment instance with data from s_compartment.
+
+        s_compartment is pandas Series with Series.name attribute set compartment id and
+        several mandatory and optional attributes based on SBML specifications.
+
+        - mandatory attributes:
+            - Series.name: str - compartment id
+            - 'constant': bool
+
+        - optional attributes:
+            - 'name': str - handled in parent class
+            - 'sboterm': str - handled in parent class
+            - 'metaid': str - handled in parent class
+            - 'miriamAnnotation': str - handled in parent class
+            - 'notes': str - handled in parent class
+            - 'size': float
+            - 'spatialDimension': float
+            - 'units': str - unit definition id
+
+        :param s_compartment: species data from SBML import
+        :type s_compartment: pandas Series
+        """
         super().__init__(s_compartment)
         self.constant = s_compartment['constant']
 
