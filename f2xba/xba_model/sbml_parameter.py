@@ -39,6 +39,7 @@ class SbmlParameter(SbmlSBase):
         self.value = s_parameter['value']
         self.constant = s_parameter['constant']
         self.units = s_parameter['units']
+        self.reuse = True
 
     def to_dict(self):
         data = super().to_dict()

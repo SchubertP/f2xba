@@ -30,7 +30,7 @@ class TdSpeciesData:
         self.seed_id = s_data['seed_id']
         self.ph = s_data['ph']
         self.ionic_str = s_data['ionic_str']
-        self.dgf_tr = s_data.get('dgf_tr')
+        self.dfg0_tr = s_data.get('dfg0_tr')
 
     def modify_attribute(self, attribute, value):
         """modify attribute value.

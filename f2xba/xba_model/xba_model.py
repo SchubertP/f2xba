@@ -73,8 +73,9 @@ class XbaModel:
         # collect all flux bound parameters used in the genome scale model for reuse
         # val2pid = {f'{data.value:{FBC_BOUND_TOL}}': pid for pid, data in self.parameters.items()
         #              if data.units == self.flux_uid}
-        val2pid = {data.value: pid for pid, data in self.parameters.items() if data.units == self.flux_uid}
-        self.fbc_bnd_pids = {self.flux_uid: val2pid}
+        val2pid = {data.value: pid for pid, data in self.parameters.items()
+                   if data.units == self.flux_uid and data.reuse is True}
+        self.fbc_shared_pids = {self.flux_uid: val2pid}
         # determine flux range used in genome scale model
         self.fbc_flux_range = list([0.0, 0.0])
         for r in self.reactions.values():
@@ -179,7 +180,7 @@ class XbaModel:
             for kv in general_params['chromosome2accids'].split(','):
                 k, v = kv.split('=')
                 chromosome2accids[k.strip()] = v.strip()
-            self.add_ncbi_data(chromosome2accids, general_params['ncbi_dir'])
+            self._add_ncbi_data(chromosome2accids, general_params['ncbi_dir'])
 
         ####################################
         # create proteins based on Uniprot #
@@ -404,7 +405,7 @@ class XbaModel:
             print(f'model exported to Excel Spreadsheet: {fname}')
         return True
 
-    def add_ncbi_data(self, chromosome2accid, ncbi_dir):
+    def _add_ncbi_data(self, chromosome2accid, ncbi_dir):
         """Add relevant NCBI data to the model
 
         Downloads ncbi nucleotide information for given accession ids.
@@ -1031,29 +1032,30 @@ class XbaModel:
             p_dict['sboterm'] = sboterm
         self.parameters[pid] = SbmlParameter(pd.Series(p_dict, name=pid))
 
-    def get_fbc_bnd_pid(self, val, uid, prop_fbc_pid):
+    def get_fbc_bnd_pid(self, val, uid, proposed_pid, reuse=True):
         """Get parameter id for a given fbc bound value und unit type.
 
         Construct a new fbc bnd parameter, if the value is
-        not found among existing parameters
+        not found among existing parameters.
 
-        expected, that unit id exists in self.fbc_bnd_pids
+        If 'reuse' is set to False, a new parameter is created that will not be shared.
 
         also extends uids:
         :param val:
         :type val: float
         :param uid: unit id
         :type uid: str
-        :param prop_fbc_pid: proposed parameter id that would be created
-        :type prop_fbc_pid: str
+        :param proposed_pid: proposed parameter id that would be created
+        :type proposed_pid: str
+        :param reuse: Flag if existing parameter id with same value can be reused
+        :type reuse: bool (optional, default: True)
         :return: parameter id for setting flux bound
         :rtype: str
         """
-        # valstr = f'{val:{FBC_BOUND_TOL}}'
         valstr = val
 
         # if parameter id does not exist, first create it
-        if uid not in self.fbc_bnd_pids:
+        if uid not in self.fbc_shared_pids:
             if uid == 'mmol_per_gDW':
                 u_dict = {'id': uid, 'name': 'Millimoles per gram (dry weight)', 'metaid': f'meta_{uid}',
                           'units': ('kind=mole, exp=1.0, scale=-3, mult=1.0; '
@@ -1069,15 +1071,24 @@ class XbaModel:
                 print('unsupported flux bound unit type, create unit in unit definition')
                 return None
             self.unit_defs[uid] = SbmlUnitDef(pd.Series(u_dict, name=uid))
-            self.fbc_bnd_pids[uid] = {}
+            self.fbc_shared_pids[uid] = {}
 
-        # if fbc bound value already exists, reuse it, alteratively create a new parameter
-        if valstr not in self.fbc_bnd_pids[uid]:
-            p_dict = {'id': prop_fbc_pid, 'name': prop_fbc_pid, 'value': val, 'constant': True,
+        if reuse is False:
+            p_dict = {'id': proposed_pid, 'name': proposed_pid, 'value': val, 'constant': True,
                       'sboterm': 'SBO:0000626', 'units': uid}
-            self.parameters[prop_fbc_pid] = SbmlParameter(pd.Series(p_dict, name=prop_fbc_pid))
-            self.fbc_bnd_pids[uid][valstr] = prop_fbc_pid
-        return self.fbc_bnd_pids[uid][valstr]
+            self.parameters[proposed_pid] = SbmlParameter(pd.Series(p_dict, name=proposed_pid))
+            self.parameters[proposed_pid].modify_attribute('reuse', False)
+            return proposed_pid
+
+        elif valstr in self.fbc_shared_pids[uid]:
+            return self.fbc_shared_pids[uid][valstr]
+
+        else:
+            p_dict = {'id': proposed_pid, 'name': proposed_pid, 'value': val, 'constant': True,
+                      'sboterm': 'SBO:0000626', 'units': uid}
+            self.parameters[proposed_pid] = SbmlParameter(pd.Series(p_dict, name=proposed_pid))
+            self.fbc_shared_pids[uid][valstr] = proposed_pid
+            return proposed_pid
 
     def split_reversible_reaction(self, reaction):
         """Split reversible reaction into irreversible fwd and rev reactions.

@@ -404,13 +404,23 @@ class SbmlReaction(SbmlSBase):
         if hasattr(self, 'metaid'):
             self.metaid = f'meta_{rid}'
 
-#   def __copy__(self):
-#       data = self.to_dict()
-#       if hasattr(self, 'gpa') is False:
-#           data['fbcGeneProdAssoc'] = -1
-#
-#        reaction = SbmlReaction(pd.Series(data, name=self.id))
-#        for attribute in ['gene_sets', 'ecn_sets', 'union_ecns', 'kcat']:
-#            if hasattr(self, attribute):
-#                setattr(reaction, attribute, getattr(self, attribute))
-#        return reaction
+    def get_reaction_string(self):
+        """Generate a reaction string from reactants/products/reversible.
+
+        :return: reaction string
+        :rtype: str
+        """
+        lparts = []
+        for sid, stoic in self.reactants.items():
+            stoic_str = str(stoic) + ' ' if stoic != 1.0 else ''
+            lparts.append(f'{stoic_str}{sid}')
+        left_side = ' + '.join(lparts)
+        rparts = []
+        for sid, stoic in self.products.items():
+            stoic_str = str(stoic) + ' ' if stoic != 1.0 else ''
+            rparts.append(f'{stoic_str}{sid}')
+        right_side = ' + '.join(rparts)
+
+        direction = ' -> ' if self.reversible is True else ' => '
+
+        return left_side + direction + right_side

@@ -91,21 +91,21 @@ class EcModel:
         if ecm_type in ['GECKO', 'MOMENTmr']:
             self.model.add_isoenzyme_reactions(create_arm=True)
             self.model.make_irreversible()
-            self.add_gecko_protein_species()
+            self._add_gecko_protein_species()
         elif ecm_type == 'MOMENT':
             self.model.add_isoenzyme_reactions(create_arm=True)
-            self.add_moment_protein_species()
+            self._add_moment_protein_species()
             self.model.make_irreversible()
         elif ecm_type == 'ccFBA':
-            self.select_ccfba_isoenzyme()
+            self._select_ccfba_isoenzyme()
             self.model.make_irreversible()
             self.model.remove_unused_gps()
-            self.add_gecko_protein_species()
+            self._add_gecko_protein_species()
         else:
             print(f'model not constructed, invalid ecm_type {ecm_type}')
             return False
 
-        self.add_total_protein_constraint(protein_pool)
+        self._add_total_protein_constraint(protein_pool)
         self.model.reaction_enzyme_coupling()
 
         # remove model components that are not used in the model
@@ -125,7 +125,7 @@ class EcModel:
         self.model.print_size()
         return True
 
-    def add_gecko_protein_species(self):
+    def _add_gecko_protein_species(self):
         """add protein species to the GECKO/ccFBA/MOMENTmr model.
 
         Note: Protein compartments in XBA model are derived from
@@ -144,13 +144,14 @@ class EcModel:
             prot_metaid = f'meta_prot_{uid}'
             prot_annot = f'bqbiol:is, uniprot/{uid}'
             protein_sids[prot_sid] = [p.name, p.cid, False, False, False, prot_metaid, prot_annot]
+
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition',
                 'constant', 'metaid', 'miriamAnnotation']
         df_add_species = pd.DataFrame(protein_sids.values(), index=list(protein_sids), columns=cols)
         print(f'{len(df_add_species):4d} protein constraints to add')
         self.model.add_species(df_add_species)
 
-    def add_moment_protein_species(self):
+    def _add_moment_protein_species(self):
         """Add protein species to MOMENT model.
 
         Execute before makeing model irreversilbe.
@@ -175,13 +176,14 @@ class EcModel:
                     prot_metaid = f'meta_prot_{uid}_{rid}'
                     prot_annot = f'bqbiol:is, uniprot/{uid}'
                     protein_sids[prot_sid] = [p.name, p.cid, False, False, False, prot_metaid, prot_annot]
+
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition',
                 'constant', 'metaid', 'miriamAnnotation']
         df_add_species = pd.DataFrame(protein_sids.values(), index=list(protein_sids), columns=cols)
         print(f'{len(df_add_species):4d} moment protein constraints to add')
         self.model.add_species(df_add_species)
 
-    def select_ccfba_isoenzyme(self):
+    def _select_ccfba_isoenzyme(self):
         """Select least cost enzyme for reactions catalyzed by several isoenzymes.
 
         Other isoenzymes get deleted and gpa updated.
@@ -214,7 +216,7 @@ class EcModel:
                     dir_r.kcatf = [dir_r.kcatf[idx]]
                     dir_r.fbcGeneProdAssoc = gpa
 
-    def add_total_protein_constraint(self, total_protein):
+    def _add_total_protein_constraint(self, total_protein):
         """add total protein constraint to the enzyme constraint model.
 
         add protein pool species to the model

@@ -5,6 +5,8 @@ Adaptation from pytfa https://github.com/EPFL-LCSB/pytfa
 However, inline with xba modelling package and creation of a sbml code
 TFA model that can be processed using CobraPy package
 
+Thermodynamic data in kJ/mol.
+
 Peter Schubert, HHU Duesseldorf, October 2023
 """
 
@@ -26,19 +28,18 @@ from ..xba_model.fbc_objective import FbcObjective
 
 
 TEMPERATURE = 298.15   # 25 deg C
-ENERGY_UNITS = 'kcal/mol'
 MIN_PH = 3
 MAX_PH = 9
 
-# values from pyTFA
-# TODO: debye_huckel_B(T)
-DEBYE_HUCKEL_B_0 = 1.6
-DEBYE_HUCKEL_A = 1.17582 / np.log(10)
+# constants derived from pyTFA / Wikipedia
 BIG_THERMO = 1000.0
-GAS_CONSTANT = 8.3144626     # J mol-1 K-1
-CAL_PER_J = 4.184            # cal/J
-CPD_PROTON = 'cpd00067'      # seed id for protons (H)
-CPD_WATER = 'cpd00001'       # seed id for H2O
+GAS_CONSTANT = 8.314462        # J mol-1 K-1
+FARADAY_CONSTANT = 9.648533e4  # C mol-1  or J mol-1 V-1
+CAL_PER_J = 4.184              # cal/J
+
+# special metabolites
+CPD_PROTON = 'cpd00067'        # seed id for protons (H)
+CPD_WATER = 'cpd00001'         # seed id for H2O
 
 
 class TfaModel:
@@ -116,8 +117,6 @@ class TfaModel:
         self.td_species = {}
         self.td_units = None
         self.temperature = 298.15  # K, TODO: hardcoded for now
-        self.rt = self.temperature * 1.9858775 / 1000.0  # kcal/mol TODO: fix for kJ/mol
-        self.faraday = 23.061  # kcal/eV TODO: fix for kJ/eV
 
     def configure(self, tfa_params_fname):
         """Convert the xba model to TFA model using parameters in fname.
@@ -159,8 +158,8 @@ class TfaModel:
         self._create_td_reactions()
         self._update_species_formula()
         self._create_td_species()
-        self._set_td_species_dgf_tr()
-        self._set_td_reaction_dgr()
+        self._set_td_species_dfg0_tr()
+        self._set_td_reaction_drg()
 
         # adding TFA related constraints and variables
         self._add_tfa_constraints()
@@ -235,9 +234,18 @@ class TfaModel:
         :return: summary of ∆Gr˚ bound updates performed
         :rtype: dict
         """
-        dgro_relaxations = self._relax_dgo_variables(fba_fluxes)
+        drgo_relaxations = self._relax_dgo_variables(fba_fluxes)
         self._remove_slack_configuration()
-        return dgro_relaxations
+        return drgo_relaxations
+
+    def add_displacement(self):
+        """Add displacement variable from ∆Gr.
+
+        How far reactions are operating from TD equilibrium.
+        Based on pyTFA translation variables and constraints.
+        """
+        self._add_displacement_constraints()
+        self._add_displacement_variables()
 
     def validate(self):
         """Validate compliance to SBML standards.
@@ -356,13 +364,17 @@ class TfaModel:
             raise FileNotFoundError
         with open(thermo_data_fname, 'rb') as file:
             all_thermo_data = pickle.loads(zlib.decompress(file.read()))
-        self.td_units = all_thermo_data['units']
+
+        conv_factor = 1.0
+        if all_thermo_data['units'] == 'kcal/mol':
+            conv_factor = CAL_PER_J
 
         # create td_metabolites - selecting requried metabolites only
         all_td_data = all_thermo_data['metabolites']
         modify_seed_ids = tfa_params['modify_seed_ids']['seed_id'].to_dict()
         seed_ids = self._select_td_metabolites(all_td_data, modify_seed_ids)
-        self.td_metabolites = {seed_id: TdMetaboliteData(seed_id, all_td_data[seed_id]) for seed_id in seed_ids}
+        self.td_metabolites = {seed_id: TdMetaboliteData(seed_id, all_td_data[seed_id], conv_factor)
+                               for seed_id in seed_ids}
 
         # modify/correct attributes in td_metabolite_data (based on pyTFA thermo-db)
         if 'modify_td_metabolites' in tfa_params:
@@ -379,7 +391,7 @@ class TfaModel:
             for cue_id in td_data.struct_cues:
                 if cue_id not in self.td_cues:
                     if cue_id in all_td_cues:
-                        self.td_cues[cue_id] = TdCueData(cue_id, all_td_cues[cue_id])
+                        self.td_cues[cue_id] = TdCueData(cue_id, all_td_cues[cue_id], conv_factor)
                     else:
                         to_del.add(cue_id)
             # remove unsupported cues in td_metabolite, e.g. 'NO'
@@ -527,7 +539,7 @@ class TfaModel:
                 ionic_str = self.td_compartments[s.compartment].ionic_strength
                 self.td_species[sid] = TdSpeciesData(sid, {'seed_id': s.seed_id, 'ph': ph, 'ionic_str': ionic_str})
 
-    def _set_td_species_dgf_tr(self):
+    def _set_td_species_dfg0_tr(self):
         """configure transformed Gibbs energy of formation
 
         creates self.td_species
@@ -535,22 +547,31 @@ class TfaModel:
         # calculate transformed gibbs free energy of reaction
         td_params = {'min_ph': self.td_params['min_ph'],
                      'max_ph': self.td_params['max_ph'],
-                     'debye_huckel_a': DEBYE_HUCKEL_A,
-                     'debye_huckel_b': DEBYE_HUCKEL_B_0,
-                     'RT': self.rt,
-                     'adjustment': CAL_PER_J
+                     'temperature': self.temperature,
                      }
         for sid, td_sdata in self.td_species.items():
             td_mdata = self.td_metabolites[td_sdata.seed_id]
-            dgf_tr = td_mdata.get_delta_gf_transformed(td_sdata.ph, td_sdata.ionic_str, td_params)
-            td_sdata.modify_attribute('dgf_tr', dgf_tr)
+            dfg0_tr = td_mdata.get_dfg0_transformed(td_sdata.ph, td_sdata.ionic_str, td_params)
+            td_sdata.modify_attribute('dfg0_tr', dfg0_tr)
 
-    def _calc_metabolic_dgr(self, rid):
-        """Calculate for a reaction the weighted sum of ∆Gf transformed.
+    def _get_metabolic_drg0_tr(self, rid):
+        """Calculate standard transformed Gibbs energy of reaction for metabolic reaction
+
+        based on pyTFA
+
+        Equation 4.4-2 in Alberty's book, 2003:
+            ∆rG'˚ = ∑ v_i ∆fG'˚
+            - ∆fG'˚: standard transformed Gibbs energy of formation for reactant at pH and ionic str
+
+        in transformed properties protons do not appear in ∆fG'˚, see Alberty, 2003
+            - ∆rG' = ∑^(N') v_i' µ_i'                                   (4.2-4)
+            - ∆rG'˚ = ∑^(N') v_i' µ_i'˚                                 (4.2-7)
+            - ∆G' = -S'dT + VdP + ∑^(Ns-1) µ_j' dn_j - RT ln(10) dpH    (4.1.13)
+                - as µ_H+' = 0
 
         :param rid: reaction id
         :type rid: str
-        :return: total ∆Gf transformed  for reactions (or None for invalid)
+        :return: transformed standard Gibbs energy for reactions (or None for invalid)
         :rtype: float
         """
         r = self.model.reactions[rid]
@@ -559,19 +580,32 @@ class TfaModel:
 
         # check that ∆Gf_tr is valid for all reactants/products
         for sid in srefs:
-            if sid not in self.td_species or self.td_species[sid].dgf_tr is None:
+            if sid not in self.td_species or self.td_species[sid].dfg0_tr is None:
                 return None
 
-        total_dgf_tr = 0.0
+        drg0_tr = 0.0
         for sid, met_stoic in srefs.items():
-            td_data = self.td_species[sid]
-            if td_data.seed_id != CPD_PROTON:
-                total_dgf_tr += td_data.dgf_tr * met_stoic
+            td_sdata = self.td_species[sid]
+            if td_sdata.seed_id != CPD_PROTON:
+                drg0_tr += td_sdata.dfg0_tr * met_stoic
+        return drg0_tr
 
-        return total_dgf_tr
+    def _get_transported(self, rid):
 
-    def _calc_transporter_dgr(self, rid):
-        """Calculate ∆Gr for transport reactions
+        r = self.model.reactions[rid]
+        reac_seed2sid = {self.model.species[sid].seed_id: sid for sid in r.reactants}
+        prod_seed2sid = {self.model.species[sid].seed_id: sid for sid in r.products}
+
+        transported = {}
+        for seed_id, r_sid in reac_seed2sid.items():
+            if seed_id in prod_seed2sid:
+                p_sid = prod_seed2sid[seed_id]
+                transported[seed_id] = {'stoic': max(r.reactants[r_sid], r.products[p_sid]),
+                                        'reactant': r_sid, 'product': p_sid}
+        return transported
+
+    def _get_transporter_drg0_tr(self, rid):
+        """Calculate standard transformed Gibbs energy of reaction for transport reaction
 
         :param rid: reaction id
         :type rid: str
@@ -583,27 +617,27 @@ class TfaModel:
 
         # check that ∆Gf_tr is valid for all reactants/products
         for sid in srefs:
-            if sid not in self.td_species or self.td_species[sid].dgf_tr is None:
-                return None, None
+            if sid not in self.td_species or self.td_species[sid].dfg0_tr is None:
+                return None
 
         transported = get_transported(rid, self.model)
+        rt = self.temperature * GAS_CONSTANT / 1000.0        # J/mol -> kJ/mol
 
-        sum_dgfis_trans = 0
+        drg0_tr_trans = 0
         sum_stoic_nh = 0
         rt_sum_h_lc_tpt = 0
         for seed_id, data in transported.items():
             stoic = data['stoic']
-            for met_type in ['reactant', 'product']:
+            for met_type, sign in [('reactant', -1.0), ('product', 1.0)]:
                 sid = data[met_type]
                 td_sdata = self.td_species[sid]
                 td_mdata = self.td_metabolites[td_sdata.seed_id]
                 ph = td_sdata.ph
-                sign = 1 if met_type == 'product' else -1
-                proton_potential = sign * stoic * td_mdata.nh_std * self.rt * np.log(10 ** -ph)
+                proton_potential = - sign * stoic * td_mdata.nh_std * rt * np.log(10) * ph
 
                 if seed_id != CPD_WATER:
                     sum_stoic_nh += proton_potential
-                    sum_dgfis_trans += sign * stoic * td_sdata.dgf_tr
+                    drg0_tr_trans += sign * stoic * td_sdata.dfg0_tr
                 if seed_id == CPD_PROTON:
                     rt_sum_h_lc_tpt += proton_potential
 
@@ -615,7 +649,8 @@ class TfaModel:
                 p_s = self.model.species[data['product']]
                 # TODO: check what is in / out wrt to reaction direction?, R_G3PCabcpp, R_CYTBDpp, R_CYSabc2pp
                 membrane_pot = self.td_compartments[r_s.compartment].membrane_pots[p_s.compartment]
-                sum_f_memp_charge += self.faraday * (membrane_pot / 1000.0) * stoic * r_s.fbcCharge
+                # Note: Faraday constants J/V -> kJ/V; membrane potential mV -> V
+                sum_f_memp_charge += (FARADAY_CONSTANT / 1000.0) * (membrane_pot / 1000.0) * stoic * r_s.fbcCharge
 
         # remove transported species from reaction srefs
         for seed_id, data in transported.items():
@@ -623,21 +658,16 @@ class TfaModel:
             srefs[data['reactant']] += trans_stoic
             srefs[data['product']] -= trans_stoic
 
-        sum_dgfis = 0
+        drg0_tr_non_trans = 0.0
         for sid, met_stoic in srefs.items():
             td_sdata = self.td_species[sid]
             if td_sdata.seed_id != CPD_PROTON:
-                sum_dgfis += met_stoic * td_sdata.dgf_tr
+                drg0_tr_non_trans += td_sdata.dfg0_tr * met_stoic
 
-        dg_trans_rhs = sum_stoic_nh + sum_f_memp_charge + sum_dgfis_trans + rt_sum_h_lc_tpt + sum_dgfis
-        components = {'sum_deltaGFis': sum_dgfis,
-                      'sum_stoic_nH': sum_stoic_nh,
-                      'sum_F_memP_charge': sum_f_memp_charge,
-                      'sum_deltaGFis_trans': sum_dgfis_trans,
-                      'RT_sum_H_LC_tpt': rt_sum_h_lc_tpt}
-        return dg_trans_rhs, components
+        drg0_tr = drg0_tr_non_trans + drg0_tr_trans + sum_stoic_nh + sum_f_memp_charge + rt_sum_h_lc_tpt
+        return drg0_tr
 
-    def _calc_reaction_dfr_err(self, rid):
+    def _get_reaction_drg0_tr_error(self, rid):
         """Calculate ∆Gr error related to ∆Gf of metabolites using group contribution method.
 
         :param rid: reaction id
@@ -651,7 +681,7 @@ class TfaModel:
 
         # check that ∆Gf_tr is valid for all reactants/products
         for sid in srefs:
-            if sid not in self.td_species or self.td_species[sid].dgf_tr is None:
+            if sid not in self.td_species or self.td_species[sid].dfg0_tr is None:
                 return None
 
         cues_balance = defaultdict(float)
@@ -662,31 +692,31 @@ class TfaModel:
                 cues_balance[cue_id] += cue_stoic * met_stoic
 
         cues_unbalance = {cue_id: balance for cue_id, balance in cues_balance.items() if balance != 0.0}
-        sum_cue_dgf_error = 0.0  # pyTFA calculation sqrt of sum of squared errors
+        sum_cue_dfg_error = 0.0  # pyTFA calculation sqrt of sum of squared errors
         # TODO use sum of errors instead of sqrt of sum of squared errors
-        # sum_cue_dgf_error_sum = 0.0  # alternative
+        # sum_cue_dfg_error_sum = 0.0  # alternative
         for cue_id, cues_stoic in cues_unbalance.items():
             cue_data = self.td_cues[cue_id]
-            sum_cue_dgf_error += (cue_data.error * cues_stoic) ** 2
-            # sum_cue_dgf_error_sum += cue_data.error * np.abs(cues_stoic)
-        sum_dgf_error = np.sqrt(sum_cue_dgf_error)
+            sum_cue_dfg_error += (cue_data.error * cues_stoic) ** 2
+            # sum_cue_dfg_error_sum += cue_data.error * np.abs(cues_stoic)
+        sum_dfg_error = np.sqrt(sum_cue_dfg_error)
 
-        # for now inline with pyTFA
-        if sum_dgf_error == 0.0:
-            sum_dgf_error = 2.0
+        # for now inline with pyTFA (in kJ/mol)
+        if sum_dfg_error == 0.0:
+            sum_dfg_error = 2.0 * 4.184
 
-        return sum_dgf_error
+        return sum_dfg_error
 
-    def _set_td_reaction_dgr(self):
+    def _set_td_reaction_drg(self):
 
         for rid, td_rdata in self.td_reactions.items():
             r = self.model.reactions[rid]
             if r.kind == 'metabolic':
-                td_rdata.modify_attribute('dgr', self._calc_metabolic_dgr(rid))
-                td_rdata.modify_attribute('dgr_error', self._calc_reaction_dfr_err(rid))
+                td_rdata.modify_attribute('drg0_tr', self._get_metabolic_drg0_tr(rid))
+                td_rdata.modify_attribute('drg_error', self._get_reaction_drg0_tr_error(rid))
             elif r.kind == 'transporter':
-                td_rdata.modify_attribute('dgr', self._calc_transporter_dgr(rid)[0])
-                td_rdata.modify_attribute('dgr_error', self._calc_reaction_dfr_err(rid))
+                td_rdata.modify_attribute('drg0_tr', self._get_transporter_drg0_tr(rid))
+                td_rdata.modify_attribute('drg_error', self._get_reaction_drg0_tr_error(rid))
             else:
                 print(f'{rid}, {r.kind} not supported for ∆Gr calculation')
 
@@ -705,7 +735,7 @@ class TfaModel:
 
         pseudo_sids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.dgr is not None:
+            if td_rdata.drg is not None:
                 ridx = re.sub('^R_', '', rid)
                 for constr, name in constr2name.items():
                     pseudo_sids[f'C_{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
@@ -723,25 +753,26 @@ class TfaModel:
         """
         var2name = {'DG': '∆Gibbs free energy of reaction',
                     'DGo': 'standard ∆Gibbs free energy of reaction'}
-        td_max_abs_dg_val = BIG_THERMO
 
-        # TODO: dg variables with dimension kJ/mole (after conversion kcat -> kJ)
-        # TODO: individual upper/lower bound per DGo variable, so they can be managed separately?
+        dg_lb_pid = self.model.get_fbc_bnd_pid(-BIG_THERMO, 'kJ_per_mol', 'delta_Gr_lb', reuse=False)
+        dg_ub_pid = self.model.get_fbc_bnd_pid(BIG_THERMO, 'kJ_per_mol', 'delta_Gr_ub', reuse=False)
 
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.dgr is not None:
+            if td_rdata.drg is not None:
                 ridx = re.sub('^R_', '', rid)
-                dg_reaction = f'C_G_{ridx} + C_BU_{ridx} => C_FU_{ridx}'
                 pseudo_rids[f'V_DG_{ridx}'] = [f'{var2name["DG"]} for {ridx}',
-                                               dg_reaction, -td_max_abs_dg_val, td_max_abs_dg_val, 'continuous']
-                dgo_reaction = f'=> C_G_{ridx}'
-                dgo_lb = td_rdata.dgr - td_rdata.dgr_error
-                dgo_ub = td_rdata.dgr + td_rdata.dgr_error
-                pseudo_rids[f'V_DGo_{ridx}'] = [f'{var2name["DGo"]} for {ridx}',
-                                                dgo_reaction, dgo_lb, dgo_ub, 'continuous']
+                                               f'C_G_{ridx} + C_BU_{ridx} -> C_FU_{ridx}',
+                                               dg_lb_pid, dg_ub_pid, 'continuous']
 
-        cols = ['name', 'reactionString', 'fbcLb', 'fbcUb', 'notes']
+                dgo_lb = td_rdata.drg - td_rdata.drg_error
+                dgo_ub = td_rdata.drg + td_rdata.drg_error
+                dgo_lb_pid = self.model.get_fbc_bnd_pid(dgo_lb, 'kJ_per_mol', f'V_DGo_{ridx}_lb', reuse=False)
+                dgo_ub_pid = self.model.get_fbc_bnd_pid(dgo_ub, 'kJ_per_mol', f'V_DGo_{ridx}_ub', reuse=False)
+                pseudo_rids[f'V_DGo_{ridx}'] = [f'{var2name["DGo"]} for {ridx}', f'-> C_G_{ridx}',
+                                                dgo_lb_pid, dgo_ub_pid, 'continuous']
+
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f'{len(df_add_rids):4d} ∆Gr/∆Gr˚ variables to add')
         self.model.add_reactions(df_add_rids)
@@ -754,23 +785,24 @@ class TfaModel:
         var2name = {'FU': 'forward use variable',
                     'BU': 'backward use variable'}
 
-        # TODO: use variables with dimensioneless flux bounds
-        td_max_abs_dg_val = BIG_THERMO
-        fbc_max_abs_flux_val = 0.0
+        fbc_max_abs_flux_val = 1000.0
         for r in self.model.reactions.values():
             fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbcLowerFluxBound].value))
             fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbcUpperFluxBound].value))
 
+        lb_pid = self.model.get_fbc_bnd_pid(0.0, 'fbc_dimensionless', 'binary_use_vars_lb', reuse=False)
+        ub_pid = self.model.get_fbc_bnd_pid(1.0, 'fbc_dimensionless', 'binary_use_vars_ub', reuse=False)
+
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.dgr is not None:
+            if td_rdata.drg is not None:
                 ridx = re.sub('^R_', '', rid)
-                fu_reaction = f'{fbc_max_abs_flux_val} C_UF_{ridx} => {td_max_abs_dg_val} C_FU_{ridx} + C_SU_{ridx}'
-                bu_reaction = f'{fbc_max_abs_flux_val} C_UR_{ridx} => {td_max_abs_dg_val} C_BU_{ridx} + C_SU_{ridx}'
-                pseudo_rids[f'V_FU_{ridx}'] = [f'{var2name["FU"]} for {ridx}', fu_reaction, 0.0, 1.0, 'binary']
-                pseudo_rids[f'V_BU_{ridx}'] = [f'{var2name["BU"]} for {ridx}', bu_reaction, 0.0, 1.0, 'binary']
+                fu_reaction = f'{fbc_max_abs_flux_val} C_UF_{ridx} => {BIG_THERMO} C_FU_{ridx} + C_SU_{ridx}'
+                bu_reaction = f'{fbc_max_abs_flux_val} C_UR_{ridx} => {BIG_THERMO} C_BU_{ridx} + C_SU_{ridx}'
+                pseudo_rids[f'V_FU_{ridx}'] = [f'{var2name["FU"]} for {ridx}', fu_reaction, lb_pid, ub_pid, 'binary']
+                pseudo_rids[f'V_BU_{ridx}'] = [f'{var2name["BU"]} for {ridx}', bu_reaction, lb_pid, ub_pid, 'binary']
 
-        cols = ['name', 'reactionString', 'fbcLb', 'fbcUb', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f'{len(df_add_rids):4d} forward/backward use variables to add')
         self.model.add_reactions(df_add_rids)
@@ -778,11 +810,12 @@ class TfaModel:
     def _add_lc_variables(self):
         """Add log concentration variables.
         """
-        var2name = {'LC': 'ln() concentration'}
+        var2name = {'LC': 'log metabolite concentration'}
+        rt = self.temperature * GAS_CONSTANT / 1000.0        # convert J/mol -> kJ/mol
 
         lc_variables = defaultdict(dict)
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.dgr is not None:
+            if td_rdata.drg is not None:
                 ridx = re.sub('^R_', '', rid)
                 r = self.model.reactions[rid]
                 srefs = {sid: -stoic for sid, stoic in r.reactants.items()}
@@ -796,8 +829,8 @@ class TfaModel:
                             stoic = data['stoic']
                             sid_react = data['reactant']
                             sid_prod = data['product']
-                            lc_variables[sid_react][ridx] = -stoic * self.rt
-                            lc_variables[sid_prod][ridx] = stoic * self.rt
+                            lc_variables[sid_react][ridx] = -stoic * rt
+                            lc_variables[sid_prod][ridx] = stoic * rt
                             srefs[sid_react] += stoic
                             srefs[sid_prod] -= stoic
                     # remove transported species from reaction stoichiometry
@@ -807,21 +840,23 @@ class TfaModel:
                     td_sdata = self.td_species[sid]
                     if td_sdata.seed_id not in [CPD_PROTON, CPD_WATER]:
                         if sid in lc_variables and ridx in lc_variables[sid]:
-                            lc_variables[sid][ridx] += self.rt * stoic
+                            lc_variables[sid][ridx] += stoic * rt
                         else:
-                            lc_variables[sid][ridx] = self.rt * stoic
+                            lc_variables[sid][ridx] = stoic * rt
 
         pseudo_rids = {}
         for lc_sid, data in lc_variables.items():
             sidx = re.sub('^M_', '', lc_sid)
-            lc_lb = np.log(self.model.species[lc_sid].c_min)
-            lc_ub = np.log(self.model.species[lc_sid].c_max)
+            c_min = self.model.species[lc_sid].c_min
+            c_max = self.model.species[lc_sid].c_max
+            lc_lb_pid = self.model.get_fbc_bnd_pid(np.log(c_min), 'fbc_dimensionless', f'V_LC_{sidx}_lb')
+            lc_ub_pid = self.model.get_fbc_bnd_pid(np.log(c_max), 'fbc_dimensionless', f'V_LC_{sidx}_ub')
             reac_str = ' + '.join([f'{-stoic} C_G_{ridx}' for ridx, stoic in data.items() if stoic < 0.0])
             prod_str = ' + '.join([f'{stoic} C_G_{ridx}' for ridx, stoic in data.items() if stoic > 0.0])
-            reaction_str = f'{reac_str} => {prod_str}'
-            pseudo_rids[f'V_LC_{sidx}'] = [f'{var2name["LC"]} of {lc_sid}', reaction_str, lc_lb, lc_ub, 'continuous']
+            pseudo_rids[f'V_LC_{sidx}'] = [f'{var2name["LC"]} of {lc_sid}', f'{reac_str} -> {prod_str}',
+                                           lc_lb_pid, lc_ub_pid, 'continuous']
 
-        cols = ['name', 'reactionString', 'fbcLb', 'fbcUb', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f'{len(df_add_rids):4d} log concentration variables to add')
         self.model.add_reactions(df_add_rids)
@@ -838,7 +873,7 @@ class TfaModel:
         count = 0
         modify_attrs = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.dgr is not None:
+            if td_rdata.drg is not None:
                 r = self.model.reactions[rid]
                 rev_r = self.model.split_reversible_reaction(r)
                 ridx = re.sub('^R_', '', rid)
@@ -871,18 +906,20 @@ class TfaModel:
         """
         var2name = {'NS': 'negative slack variable on ∆Gro',
                     'PS': 'positive slack variable on ∆Gro'}
-        td_max_abs_dg_val = BIG_THERMO
+
+        lb_pid = self.model.get_fbc_bnd_pid(0.0, 'kJ_per_mol', 'slack_lb', reuse=False)
+        ub_pid = self.model.get_fbc_bnd_pid(BIG_THERMO, 'kJ_per_mol', 'slack_ub', reuse=False)
 
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.dgr is not None:
+            if td_rdata.drg is not None:
                 ridx = re.sub('^R_', '', rid)
                 pseudo_rids[f'V_NS_{ridx}'] = [f'{var2name["NS"]} for {ridx}', f'C_G_{ridx} =>',
-                                               0.0, td_max_abs_dg_val, 'continuous']
+                                               lb_pid, ub_pid, 'continuous']
                 pseudo_rids[f'V_PS_{ridx}'] = [f'{var2name["PS"]} for {ridx}', f'=> C_G_{ridx}',
-                                               0.0, td_max_abs_dg_val, 'continuous']
+                                               lb_pid, ub_pid, 'continuous']
 
-        cols = ['name', 'reactionString', 'fbcLb', 'fbcUb', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f'{len(df_add_rids):4d} slack variables for ∆Go to add')
         self.model.add_reactions(df_add_rids)
@@ -928,7 +965,7 @@ class TfaModel:
             if flux > 0.0 and (re.match('V_NS_', vname) or re.match('V_PS_', vname)):
                 dgo_slack[vname] = flux
 
-        dgro_relaxations = {}
+        drgo_relaxations = {}
         modify_attrs = {}
         for vname, slack in dgo_slack.items():
             ridx = re.sub('V_[PN]S_', '', vname)
@@ -941,18 +978,18 @@ class TfaModel:
             if re.match('V_NS_', vname):
                 dgo_new_lb_val = dgo_lb_val - slack - eps
                 modify_attrs[dgo_lb_pid] = ['parameter', 'value', dgo_new_lb_val, 'relaxation']
-                dgro_relaxations[ridx] = f'lower ∆Gr˚ bound from {dgo_lb_val:.4f} to {dgo_new_lb_val:.4f} ' \
-                                         f'[{dgo_new_lb_val:.4f}, {dgo_ub_val:.4f}]'
+                drgo_relaxations[ridx] = f'lower ∆Gr˚ bound from {dgo_lb_val:8.4f} to {dgo_new_lb_val:8.4f} ' \
+                                         f'[{dgo_new_lb_val:8.4f}, {dgo_ub_val:8.4f}]'
             else:
                 dgo_new_ub_val = dgo_ub_val + slack + eps
                 modify_attrs[dgo_ub_pid] = ['parameter', 'value', dgo_new_ub_val, 'relaxation']
-                dgro_relaxations[ridx] = f'upper ∆Gr˚ bound from {dgo_ub_val:.4f} to {dgo_new_ub_val:.4f} ' \
-                                         f'[{dgo_lb_val:.4f}, {dgo_new_ub_val:.4f}]'
+                drgo_relaxations[ridx] = f'upper ∆Gr˚ bound from {dgo_ub_val:8.4f} to {dgo_new_ub_val:8.4f} ' \
+                                         f'[{dgo_lb_val:8.4f}, {dgo_new_ub_val:8.4f}]'
 
         df_modify_attrs = pd.DataFrame(modify_attrs, index=['component', 'attribute', 'value', 'notes']).T
         print(f'{len(df_modify_attrs):4d} ∆Gr˚ variables need relaxation.')
         self.model.modify_attributes(df_modify_attrs, 'parameter')
-        return dgro_relaxations
+        return drgo_relaxations
 
     def _remove_slack_configuration(self):
         """Remove the slack configuration (variables and objective)
@@ -967,3 +1004,62 @@ class TfaModel:
 
         old_obj_id = self.td_params['objective_id']
         self.model.objectives[old_obj_id].modify_attribute('active', True)
+
+    # ADDING DISPLACEMENT VARIABLES AND CONSTRAINTS
+    def _add_displacement_constraints(self):
+        """Add displacement constraints wrt to ∆Gr.
+
+        based on pyTFA
+
+        Adding new species (constraints) to the model
+        """
+        constr2name = {'DC': '∆Gr displacement constraint'}
+
+        pseudo_sids = {}
+        for rid, td_rdata in self.td_reactions.items():
+            if td_rdata.drg is not None:
+                ridx = re.sub('^R_', '', rid)
+                for constr, name in constr2name.items():
+                    pseudo_sids[f'C_{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
+
+        cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant']
+        df_add_species = pd.DataFrame(pseudo_sids.values(), index=list(pseudo_sids), columns=cols)
+        print(f'{len(df_add_species):4d} ∆Gr displacements constraints to add')
+        self.model.add_species(df_add_species)
+
+    def _add_displacement_variables(self):
+        """Add variables for thermodynamic displacement.
+
+        based on pyTFA, see Salvy et al. 2018
+
+        :return:
+        """
+        var2name = {'LNG': 'thermodynamic displacement'}
+
+        lb_pid = self.model.get_fbc_bnd_pid(-BIG_THERMO, 'fbc_dimensionless', 'displacement_lb', reuse=False)
+        ub_pid = self.model.get_fbc_bnd_pid(BIG_THERMO, 'fbc_dimensionless', 'displacement_ub', reuse=False)
+
+        pseudo_rids = {}
+        for rid, td_rdata in self.td_reactions.items():
+            if td_rdata.drg is not None:
+                ridx = re.sub('^R_', '', rid)
+                pseudo_rids[f'V_LNG_{ridx}'] = [f'{var2name["LNG"]} for {ridx}', f'-> C_DC_{ridx}',
+                                                lb_pid, ub_pid, 'continuous']
+
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
+        df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
+        print(f'{len(df_add_rids):4d} thermodynamic displacement variables to add')
+        self.model.add_reactions(df_add_rids)
+
+        # connect DG variables to displacement constraints
+        rt = self.temperature * GAS_CONSTANT / 1000.0        # convert J/mol -> kJ/mol
+        modify_attrs = {}
+        for rid, td_rdata in self.td_reactions.items():
+            if td_rdata.drg is not None:
+                ridx = re.sub('^R_', '', rid)
+                modify_attrs[f'V_DG_{ridx}'] = ['reaction', 'reactant', f'C_DC_{ridx}={1/rt}']
+
+        cols = ['component', 'attribute', 'value']
+        df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)
+        print(f'{len(df_modify_attrs):4d} ∆Gr variables coupled to thermodynamic displacement constraints')
+        self.model.modify_attributes(df_modify_attrs, 'reaction')
