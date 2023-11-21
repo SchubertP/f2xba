@@ -48,10 +48,10 @@ class SbmlReaction(SbmlSBase):
         self.reversible = s_reaction['reversible']
         self.reactants = self.get_srefs(s_reaction['reactants'])
         self.products = self.get_srefs(s_reaction['products'])
-        self.fbcLowerFluxBound = s_reaction['fbcLowerFluxBound']
-        self.fbcUpperFluxBound = s_reaction['fbcUpperFluxBound']
+        self.fbc_lower_bound = s_reaction['fbcLowerFluxBound']
+        self.fbc_upper_bound = s_reaction['fbcUpperFluxBound']
         if ('fbcGeneProdAssoc' in s_reaction) and (type(s_reaction['fbcGeneProdAssoc']) == str):
-            self.fbcGeneProdAssoc = re.sub(r'^assoc=', '', s_reaction['fbcGeneProdAssoc'])
+            self.gene_product_assoc = re.sub(r'^assoc=', '', s_reaction['fbcGeneProdAssoc'])
 
         self.rp_counts = [len(self.reactants), len(self.products)]
         self.rp_compartments = [self.get_compartments(self.reactants, species_dict),
@@ -143,14 +143,14 @@ class SbmlReaction(SbmlSBase):
     def to_dict(self):
         data = super().to_dict()
         data['reversible'] = self.reversible
-        data['fbcLowerFluxBound'] = self.fbcLowerFluxBound
-        data['fbcUpperFluxBound'] = self.fbcUpperFluxBound
+        data['fbcLowerFluxBound'] = self.fbc_lower_bound
+        data['fbcUpperFluxBound'] = self.fbc_upper_bound
         data['reactants'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
                                        for sid, stoic in self.reactants.items()])
         data['products'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
                                       for sid, stoic in self.products.items()])
         if hasattr(self, 'fbcGeneProdAssoc'):
-            data['fbcGeneProdAssoc'] = f'assoc={self.fbcGeneProdAssoc}'
+            data['fbcGeneProdAssoc'] = f'assoc={self.gene_product_assoc}'
         return data
 
     def gpa_remove_gps(self, del_gps):
@@ -164,9 +164,9 @@ class SbmlReaction(SbmlSBase):
         :type del_gps: set or list of str
         """
         if hasattr(self, 'fbcGeneProdAssoc'):
-            gpa = self.fbcGeneProdAssoc
+            gpa = self.gene_product_assoc
             for gp in del_gps:
-                if gp in self.fbcGeneProdAssoc:
+                if gp in self.gene_product_assoc:
                     gpa = re.sub(gp + ' and ', '', gpa)
                     gpa = re.sub(' and ' + gp, '', gpa)
                     gpa = re.sub(gp + ' or ', '', gpa)
@@ -174,9 +174,9 @@ class SbmlReaction(SbmlSBase):
                     gpa = re.sub(gp, '', gpa)
             # if all gene_products have been removed, set gpa to None
             if len(set(re.findall(r"\w+", gpa)).difference({'or', 'and'})) > 0:
-                self.fbcGeneProdAssoc = gpa
+                self.gene_product_assoc = gpa
             else:
-                del self.fbcGeneProdAssoc
+                del self.gene_product_assoc
 
     def set_enzymes(self, eids):
         """Add enzymes to the reaction, also kcat arrays.
@@ -287,9 +287,9 @@ class SbmlReaction(SbmlSBase):
         :type bound_pids: dict (key: 'ub' and/or 'lb, val: parameter id
         """
         if 'lb' in bound_pids:
-            self.fbcLowerFluxBound = bound_pids['lb']
+            self.fbc_lower_bound = bound_pids['lb']
         if 'ub' in bound_pids:
-            self.fbcUpperFluxBound = bound_pids['ub']
+            self.fbc_upper_bound = bound_pids['ub']
 
     def reduce_reactants(self):
         """Reduce reactant/products appearing on both side of the reaction string
@@ -338,9 +338,9 @@ class SbmlReaction(SbmlSBase):
         :param gpa: gene product association
         :type gpa: str
         """
-        self.fbcGeneProdAssoc = gpa
+        self.gene_product_assoc = gpa
         if gpa == '':
-            del self.fbcGeneProdAssoc
+            del self.gene_product_assoc
 
     def is_blocked_old(self, parameters):
         """Check if reaction is blocked due to zero value flux bounds.
@@ -349,8 +349,8 @@ class SbmlReaction(SbmlSBase):
         :type parameters: SbmlParameters
         :return:
         """
-        lb_value = parameters[self.fbcLowerFluxBound].value
-        ub_value = parameters[self.fbcUpperFluxBound].value
+        lb_value = parameters[self.fbc_lower_bound].value
+        ub_value = parameters[self.fbc_upper_bound].value
         if lb_value == 0.0 and ub_value == 0.0:
             return True
         else:
@@ -367,8 +367,8 @@ class SbmlReaction(SbmlSBase):
         :param exclude_ex_reactions: flag if exchange reactions should be excluded
         :type exclude_ex_reactions: bool, (default: False)
         """
-        lb_value = parameters[self.fbcLowerFluxBound].value
-        ub_value = parameters[self.fbcUpperFluxBound].value
+        lb_value = parameters[self.fbc_lower_bound].value
+        ub_value = parameters[self.fbc_upper_bound].value
         if self.reversible is True and (lb_value >= 0.0 or ub_value <= 0.0):
             if exclude_ex_reactions is False:
                 self.reversible = False

@@ -214,7 +214,7 @@ class EcModel:
                         gpa = '(' + gpa + ')'
                     dir_r.enzymes = [dir_r.enzymes[idx]]
                     dir_r.kcatf = [dir_r.kcatf[idx]]
-                    dir_r.fbcGeneProdAssoc = gpa
+                    dir_r.gene_product_assoc = gpa
 
     def _add_total_protein_constraint(self, total_protein):
         """add total protein constraint to the enzyme constraint model.

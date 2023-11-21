@@ -13,6 +13,7 @@ class TdCompartmentData:
         """Instantiate thermodynamic compartment data.
 
         Collect information supplied
+        convert membrane potentials from mV to V
 
         c_data expected to have the keys:
           'ph': compartment pH
@@ -35,4 +36,4 @@ class TdCompartmentData:
         for key, val in c_data.items():
             if key.endswith('_mV'):
                 ocid = re.sub('_mV$', '', key)
-                self.membrane_pots[ocid] = val
+                self.membrane_pots[ocid] = val / 1000.0   # V -> mV

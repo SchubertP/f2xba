@@ -20,7 +20,7 @@ class SbmlSBase(ABC):
         if 'metaid' in s_data:
             self.metaid = s_data['metaid']
         if 'miriamAnnotation' in s_data:
-            self.miriamAnnotation = s_data['miriamAnnotation']
+            self.miriam_annotation = s_data['miriamAnnotation']
         if 'notes' in s_data:
             self.notes = s_data['notes']
 
@@ -34,7 +34,7 @@ class SbmlSBase(ABC):
         if hasattr(self, 'metaid'):
             data['metaid'] = self.metaid
         if hasattr(self, 'miriamAnnotation'):
-            data['miriamAnnotation'] = self.miriamAnnotation
+            data['miriamAnnotation'] = self.miriam_annotation
         if hasattr(self, 'notes'):
             data['notes'] = self.notes
         return data

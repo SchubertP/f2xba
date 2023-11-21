@@ -112,7 +112,7 @@ class RbaEnzymes:
 
                 # determine forward efficiency, but set to zero, if reaction in GEM is blocked (fbcUb = 0.0)
                 kcat = r.kcatf[0]
-                if xba_model.parameters[r.fbcUpperFluxBound].value == 0.0:
+                if xba_model.parameters[r.fbc_upper_bound].value == 0.0:
                     kcat = 0.0
                 if kcat in default_kcats:
                     eff_f = default_kcats[kcat]
@@ -144,7 +144,7 @@ class RbaEnzymes:
                 eff_r = parameters.f_name_zero
                 if r.reversible is True:
                     kcat = r.kcatr[0]
-                    if xba_model.parameters[r.fbcLowerFluxBound].value == 0.0:
+                    if xba_model.parameters[r.fbc_lower_bound].value == 0.0:
                         kcat = 0.0
                     if kcat in default_kcats:
                         eff_r = default_kcats[kcat]
@@ -173,14 +173,14 @@ class RbaEnzymes:
 
             # add enzyme for spontaneous reactions
             elif r.kind != 'exchange' and r.kind != 'biomass':
-                if xba_model.parameters[r.fbcUpperFluxBound].value == 0.0:
+                if xba_model.parameters[r.fbc_upper_bound].value == 0.0:
                     eff_f = parameters.f_name_zero
                 else:
                     eff_f = parameters.f_name_spontaneous
                 if r.reversible is False:
                     eff_r = parameters.f_name_zero
                 else:
-                    if xba_model.parameters[r.fbcLowerFluxBound].value == 0.0:
+                    if xba_model.parameters[r.fbc_lower_bound].value == 0.0:
                         eff_r = parameters.f_name_zero
                     else:
                         eff_r = parameters.f_name_spontaneous

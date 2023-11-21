@@ -41,13 +41,13 @@ class SbmlSpecies(SbmlSBase):
         super().__init__(s_species)
         self.compartment = s_species['compartment']
         self.constant = s_species['constant']
-        self.boundaryCondition = s_species['boundaryCondition']
-        self.hasOnlySubstanceUnits = s_species['hasOnlySubstanceUnits']
+        self.boundary_condition = s_species['boundaryCondition']
+        self.has_only_substance_units = s_species['hasOnlySubstanceUnits']
 
         if 'fbcCharge' in s_species:
-            self.fbcCharge = s_species['fbcCharge']
+            self.charge = s_species['fbcCharge']
         if 'fbcChemicalFormula' in s_species:
-            self.fbcChemicalFormula = s_species['fbcChemicalFormula']
+            self.formula = s_species['fbcChemicalFormula']
 
         # additional attributes
         if 'miriamAnnotation' in s_species:
@@ -73,11 +73,11 @@ class SbmlSpecies(SbmlSBase):
         data = super().to_dict()
         data['compartment'] = self.compartment
         data['constant'] = self.constant
-        data['boundaryCondition'] = self.boundaryCondition
-        data['hasOnlySubstanceUnits'] = self.hasOnlySubstanceUnits
+        data['boundaryCondition'] = self.boundary_condition
+        data['hasOnlySubstanceUnits'] = self.has_only_substance_units
 
         if hasattr(self, 'fbcCharge'):
-            data['fbcCharge'] = self.fbcCharge
+            data['fbcCharge'] = self.charge
         if hasattr(self, 'fbcChemicalFormula'):
-            data['fbcChemicalFormula'] = self.fbcChemicalFormula
+            data['fbcChemicalFormula'] = self.formula
         return data

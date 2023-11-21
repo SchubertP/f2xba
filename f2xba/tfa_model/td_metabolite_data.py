@@ -9,8 +9,6 @@ Peter Schubert, HHU Duesseldorf, Octobert 2023
 """
 import numpy as np
 
-# TODO: debye_huckel_B(T)
-GAS_CONSTANT = 8.314462       # J mol-1 K-1
 DEBYE_HUCKEL_A = 0.51065      # √(l/mol) - Alberty, 2003, section 3.6
 DEBYE_HUCKEL_B = 1.6          # √(l/mol) - Alberty, 2003, section 3.6
 
@@ -67,7 +65,7 @@ class TdMetaboliteData:
         self.error = str(m_data['error'])
         self.struct_cues = m_data['struct_cues']
 
-    def get_dfg0_transformed(self, compartment_ph, ionic_str, td_params):
+    def get_dfg0_transformed(self, compartment_ph, ionic_str, max_ph, rt):
         """ Calculate the transformed Gibbs energy of formation of specie with
         given pH and ionic strength using formula given by Goldberg and Tewari,
         1991
@@ -80,28 +78,45 @@ class TdMetaboliteData:
             - P(I): binding polynomial (partitioning function) at specified ionic strength I
             - ∆fG1'˚(I): standard transformed Gibbs energy of formation of least protonated species of isomer group
 
+        Equation 4.4-9 for protons:
+            ∆fG_H+'˚(I) = ∆fG_H+˚(I=0) - (∆fG_H+˚(I=0) + RT ln(10^-ph))
+            ∆fG_H+'˚ = RT ln(10) pH
+            ∆fG_H+' = ∆fG_H+'˚ - RT ln(10) ph = 0
+
         :param compartment_ph: compartment ph
         :type compartment_ph: float
         :param ionic_str: compartment ionic strength in mol/l
         :type ionic_str: float
-        :param td_params: TD parameters required for calulation
-        :type td_params: dict
-        :returns: transformed standard Gibbs energy of formation
-        :rtype: float
+        :param max_ph: maximum pH for which to consider deprotonations
+        :type max_ph: float
+        :param rt: product RT in kJ/mol
+        :type rt: float
+        :returns: transformed standard Gibbs energy of formation, avg H atoms, avg charge
+        :rtype: float, float, float
         """
-        rt = td_params['temperature'] * GAS_CONSTANT / 1000.0  # convert J/mol -> kJ/mol
-
         if self.id == 'cpd00067':
-            return rt * np.log(10) * compartment_ph
+            # actually not required, as protons get removed from TD calculations
+            dfg0_tr = rt * np.log(10) * compartment_ph
+            return dfg0_tr, self.nh_std, self.charge_std
 
         # Note: we might also return None, if len(pkas) == 1 and pkas[0] > 1000
         if self.error != 'Nil' or self.dfg0 is None:
-            return None
+            return None, None, None
 
-        binding_polynomial_tr = self._get_binding_polynomial_tr(compartment_ph, ionic_str, td_params['max_ph'])
-        dfg0_tr = self._get_dfg10_tr(compartment_ph, ionic_str, td_params) - rt * np.log(binding_polynomial_tr)
+        # protonation steps for metabolite up to max_ph
+        deprot_steps = self._deprotonations_upto(max_ph)
 
-        return dfg0_tr
+        # transformed standard Gibbs energy of formation
+        dfg10_tr = self._get_dfg10_tr(compartment_ph, ionic_str, max_ph, deprot_steps, rt)
+        binding_polynomial_tr, avg_h_binding = self._get_binding_polynomial_tr(compartment_ph, ionic_str,
+                                                                               max_ph, deprot_steps)
+        dfg0_tr = dfg10_tr - rt * np.log(binding_polynomial_tr)
+
+        # average charge and average H atoms
+        avg_h_atoms_tr = self.nh_std - deprot_steps + avg_h_binding
+        avg_charge_tr = self.charge_std - deprot_steps + avg_h_binding
+
+        return dfg0_tr, avg_h_atoms_tr, avg_charge_tr
 
     def _deprotonations_upto(self, max_ph):
         """Determine deprotonation steps upto specified pH.
@@ -134,55 +149,7 @@ class TdMetaboliteData:
                 deprot_steps = min(sum(pkas_below_max > 7.0), self.nh_std)
         return deprot_steps
 
-    def _get_least_protonated_species_old(self, td_params):
-        """Determine least protonated species of an isomeric group in the pysiological pH
-
-        Notes (Peter):
-            Least protonated state is at the highest pH in the defined pH range.
-            At each pKa value below max_ph, the compound adds a proton.
-
-            Chemical formula and charge of compound is based pn predominant form at pH 7
-
-            I.e. if we have pKa values between pH 7 and max_ph, for each of the values
-            the compound could lose a proton and become more negatively charged.
-
-        based on pyTFA MetaboliteThermo.calcDGspA()
-
-        These values are used as the starting point for Alberty's calculations.
-
-        :param td_params: TD parameters required for calulation
-        :type td_params: dict
-        :returns: deltaGspA, sp_charge and sp_nH
-        :rtype: tuple(float, float, int)
-        """
-        rt = td_params['temperature'] * GAS_CONSTANT / 1000.0  # convert J/mol -> kJ/mol
-
-        considered_pkas = self.pkas[self.pkas < td_params['max_ph']]
-        accepted_pkas = considered_pkas[considered_pkas > td_params['min_ph']]
-
-        if len(accepted_pkas) == 0:
-            # with no pKas in physiological range, assume species is already in least protonated state
-            return self.dfg0, self.charge_std, self.nh_std
-
-        # otherwise, assume that compound has zero charge when fully protonated (below lowest pKa value)
-        #  each pKa value up to max pH, increases the negative charge by 1 during deprotonation
-        #  i.e. least protonated state would have a negative charge corresponding to length of pKa values
-        species1_charge = -len(considered_pkas)
-
-        if self.charge_std <= species1_charge:
-            # if species charge is lower or equal to least protonated state,
-            #   we consider the species is already in the least protonated state
-            return self.dfg0, self.charge_std, self.nh_std
-
-        # if species charge is more positive than least protonated state, we deprotonate
-        deprotonation_steps = -(species1_charge - self.charge_std)
-        species1_nh = self.nh_std - deprotonation_steps
-        dfg10 = self.dfg0
-        for pka in considered_pkas[-deprotonation_steps:]:
-            dfg10 += rt * np.log(10.0) * pka
-        return dfg10, species1_charge, species1_nh
-
-    def _transform_pkas_rev(self, ionic_str, max_ph):
+    def _transform_pkas_rev(self, ionic_str, max_ph, deprot_steps):
         """Transform pKa values in pysiological range to given ionic strength
 
         pKa values have to be adapted to ionic strength so we can determine the
@@ -213,18 +180,15 @@ class TdMetaboliteData:
         :type ionic_str: float
         :param max_ph: maximum pH for which to consider deprotonations
         :type max_ph: float
+        :param deprot_steps: deprotonation steps till maximum pH
+        :type deprot_steps: int (>= 0)
         :returns: metabolite pkas in valid range in reverse order (highest to lowest)
         :rtype: list of floats
         """
-
-        deprot_steps = self._deprotonations_upto(max_ph)
         least_prot_charge = self.charge_std - deprot_steps
-
-        #         (_, charge, _) = self._get_least_protonated_species(td_params)
-        #         considered_pkas = self.pkas[(td_params['min_ph'] < self.pkas) & (self.pkas < td_params['max_ph'])]
-        pkas_below_max_rev = np.flip(self.pkas[self.pkas < max_ph])
         extended_dh_factor = DEBYE_HUCKEL_A * np.sqrt(ionic_str) / (1.0 + DEBYE_HUCKEL_B * np.sqrt(ionic_str))
-        # pka values starting at least protonated state (highest pKa)
+        pkas_below_max_rev = np.flip(self.pkas[self.pkas < max_ph])
+
         pkas_tr_rev = []
         for i, pka in enumerate(pkas_below_max_rev):
             sq_charges_factor = - 2 * (least_prot_charge + i)
@@ -232,38 +196,49 @@ class TdMetaboliteData:
             pkas_tr_rev.append(pka_tr)
         return pkas_tr_rev
 
-    def _get_binding_polynomial_tr(self, ph, ionic_str, max_ph):
+    def _get_binding_polynomial_tr(self, compartment_ph, ionic_str, max_ph, deprot_steps):
         """Calculate the transformed binding polynomial of a reactant.
 
         Requried for reactants consisting of multiple species with
         different protonation states in pysiological pH range.
 
-        based on from pyTFA
-
+        binding polynomial
         Alberty, 2003, equation 4.5-7:
             P = 1 + [H+]/K1 + [H+]^2/K1K2 +
             - K1, K2: equilibrium constants wiht K1 having the smallest value (highest pKa)
 
-        :param ph: compartment ph
-        :type ph: float
+        average binding of hydrogen ion avg_NH
+        Alberty, 2003, equations 1.3-7, -8, -9
+        - avg_NH = [H+]/P dP/d[H+]                       (1.3-9)
+        - P = 1 + [H+]/K1 + [H+]^2/K1K2 +                (1.3-8)
+        - N = [H+] dP/d[H+] = [H+]/K1 + 2*[H+]^2/K1K2 +
+        - NH = N/P = ([H+]/K1 + 2*[H+]^2/K1K2 + )/(1 + [H+]/K1 + [H+]^2/K1K2 + )   (1.3-7)
+
+        :param compartment_ph: compartment ph
+        :type compartment_ph: float
         :param ionic_str: compartment ionic strength in mol/l
         :type ionic_str: float
         :param max_ph: maximum pH up to which to consider deprotonation
         :type max_ph: float
-        :returns: The potential of the species
-        :rtype: float
+        :param deprot_steps: deprotonation steps till maximum pH
+        :type deprot_steps: int (>= 0)
+        :returns: binding polynomial, averge hydrogen ion binding
+        :rtype: float, float
         """
-        prod_equilibrium_constants = 1.0
-        p = 1.0
+        prod_eq_constants = 1.0
+        polynomial = 1.0
+        nominator = 0.0
 
-        proton_conc = 10.0 ** -ph
-        pkas_tr_rev = self._transform_pkas_rev(ionic_str, max_ph)
-        for i, pka in enumerate(pkas_tr_rev):
-            prod_equilibrium_constants *= 10.0 ** (-pka)
-            p += proton_conc ** (i + 1) / prod_equilibrium_constants
-        return p
+        pkas_tr_rev = self._transform_pkas_rev(ionic_str, max_ph, deprot_steps)
+        proton_conc = 10.0 ** -compartment_ph
+        for i, pka_tr in enumerate(pkas_tr_rev):
+            prod_eq_constants *= 10.0 ** (-pka_tr)
+            polynomial += proton_conc ** (i + 1) / prod_eq_constants
+            nominator += (i + 1) * proton_conc ** (i + 1) / prod_eq_constants
+        avg_h_binding = nominator/polynomial
+        return polynomial, avg_h_binding
 
-    def _get_dfg10_tr(self, compartment_ph, ionic_str, td_params):
+    def _get_dfg10_tr(self, compartment_ph, ionic_str, max_ph, deprot_steps, rt):
         """Calculate transformed standard Gibbs free energy for least protonated species.
 
         .. in an isomeric group, based on compartment pH and ionic strength.
@@ -289,21 +264,21 @@ class TdMetaboliteData:
         :type compartment_ph: float
         :param ionic_str: compartment ionic strength in mol/l
         :type ionic_str: float
-        :param td_params: TD parameters required for calulation
-        :type td_params: dict
+        :param max_ph: maximum pH for which to consider deprotonations
+        :type max_ph: float
+        :param deprot_steps: deprotonation steps till maximum pH
+        :type deprot_steps: int (>= 0)
+        :param rt: product RT in kJ/mol
+        :type rt: float
         :returns: transported gibbs energy of formation at given ionic strength
         :rtype: float
         """
-        deprot_steps = self._deprotonations_upto(td_params['max_ph'])
-
-        rt = td_params['temperature'] * GAS_CONSTANT / 1000.0   # J/mol -> kJ/mol
         dfg10 = self.dfg0
         if deprot_steps > 0:
-            pkas_below_max_rev = np.flip(self.pkas[self.pkas < td_params['max_ph']])
+            pkas_below_max_rev = np.flip(self.pkas[self.pkas < max_ph])
             for pka in pkas_below_max_rev[:deprot_steps]:
                 dfg10 += rt * np.log(10.0) * pka
 
-        #             (dfg10, charge, n_h) = self._get_least_protonated_species(td_params)
         extended_dh_factor = DEBYE_HUCKEL_A * np.sqrt(ionic_str) / (1.0 + DEBYE_HUCKEL_B * np.sqrt(ionic_str))
         least_prot_n_h = self.nh_std - deprot_steps
         least_prot_zsq = (self.charge_std - deprot_steps) ** 2

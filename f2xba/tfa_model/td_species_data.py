@@ -31,6 +31,8 @@ class TdSpeciesData:
         self.ph = s_data['ph']
         self.ionic_str = s_data['ionic_str']
         self.dfg0_tr = s_data.get('dfg0_tr')
+        self.avg_h_atoms_tr = None
+        self.avg_charge_tr = None
 
     def modify_attribute(self, attribute, value):
         """modify attribute value.

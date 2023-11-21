@@ -68,7 +68,7 @@ class XbaModel:
                          'n_gps': len(self.gps), 'n_pids': len(self.parameters)}
 
         # determine flux bound unit id used in genome scale model for reuse
-        any_fbc_pid = self.reactions[list(self.reactions)[0]].fbcLowerFluxBound
+        any_fbc_pid = self.reactions[list(self.reactions)[0]].fbc_lower_bound
         self.flux_uid = self.parameters[any_fbc_pid].units
         # collect all flux bound parameters used in the genome scale model for reuse
         # val2pid = {f'{data.value:{FBC_BOUND_TOL}}': pid for pid, data in self.parameters.items()
@@ -79,8 +79,8 @@ class XbaModel:
         # determine flux range used in genome scale model
         self.fbc_flux_range = list([0.0, 0.0])
         for r in self.reactions.values():
-            self.fbc_flux_range[0] = min(self.fbc_flux_range[0], self.parameters[r.fbcLowerFluxBound].value)
-            self.fbc_flux_range[1] = max(self.fbc_flux_range[1], self.parameters[r.fbcUpperFluxBound].value)
+            self.fbc_flux_range[0] = min(self.fbc_flux_range[0], self.parameters[r.fbc_lower_bound].value)
+            self.fbc_flux_range[1] = max(self.fbc_flux_range[1], self.parameters[r.fbc_upper_bound].value)
 
         self.enzymes = {}
         self.proteins = {}
@@ -125,7 +125,7 @@ class XbaModel:
         locus2rids = {}
         for rid, r in self.reactions.items():
             if hasattr(r, 'fbcGeneProdAssoc'):
-                tmp_gpa = re.sub(r'[()]', '', r.fbcGeneProdAssoc)
+                tmp_gpa = re.sub(r'[()]', '', r.gene_product_assoc)
                 gpids = {gpid.strip() for gpid in re.sub(r'( and )|( or )', ',', tmp_gpa).split(',')}
                 for gpid in gpids:
                     locus = self.gps[gpid].label
@@ -288,14 +288,14 @@ class XbaModel:
         used_pids = set()
         used_gpids = set()
         for rid, r in self.reactions.items():
-            used_pids.add(r.fbcLowerFluxBound)
-            used_pids.add(r.fbcUpperFluxBound)
+            used_pids.add(r.fbc_lower_bound)
+            used_pids.add(r.fbc_upper_bound)
             for sid in r.reactants:
                 used_sids.add(sid)
             for sid in r.products:
                 used_sids.add(sid)
             if hasattr(r, 'fbcGeneProdAssoc'):
-                gpa = re.sub('and', '', r.fbcGeneProdAssoc)
+                gpa = re.sub('and', '', r.gene_product_assoc)
                 gpa = re.sub('or', '', gpa)
                 gpa = re.sub('[()]', '', gpa)
                 for gpx in gpa.split(' '):
@@ -771,7 +771,7 @@ class XbaModel:
         for rid, r in self.reactions.items():
             eids = []
             if hasattr(r, 'fbcGeneProdAssoc'):
-                gpa = re.sub(' and ', '_and_', r.fbcGeneProdAssoc)
+                gpa = re.sub(' and ', '_and_', r.gene_product_assoc)
                 gpa = re.sub(r'[()]', '', gpa)
                 gp_sets = [item.strip() for item in gpa.split('or')]
                 for gp_set in gp_sets:
@@ -838,7 +838,7 @@ class XbaModel:
         """
         rxnkind2rids = {'reversible': set()}
         for rid, r in self.reactions.items():
-            if hasattr(r, 'fbcGeneProdAssoc') and len(r.fbcGeneProdAssoc) > 1:
+            if hasattr(r, 'fbcGeneProdAssoc') and len(r.gene_product_assoc) > 1:
                 if r.reversible is True:
                     rxnkind2rids['reversible'].add(rid)
                 if r.kind not in rxnkind2rids:
@@ -1116,8 +1116,8 @@ class XbaModel:
         rev_r.reverse_substrates()
         rev_r.enzymes = reaction.enzymes
         rev_r.kcatf = reaction.kcatr
-        rev_lb = -min(0.0, self.parameters[reaction.fbcUpperFluxBound].value)
-        rev_ub = -min(0.0, self.parameters[reaction.fbcLowerFluxBound].value)
+        rev_lb = -min(0.0, self.parameters[reaction.fbc_upper_bound].value)
+        rev_ub = -min(0.0, self.parameters[reaction.fbc_lower_bound].value)
         lb_pid = self.get_fbc_bnd_pid(rev_lb, self.flux_uid, f'fbc_{rev_rid}_lb')
         ub_pid = self.get_fbc_bnd_pid(rev_ub, self.flux_uid, f'fbc_{rev_rid}_ub')
         rev_r.modify_bounds({'lb': lb_pid, 'ub': ub_pid})
@@ -1125,8 +1125,8 @@ class XbaModel:
         self.reactions[rev_rid] = rev_r
 
         # make forward reaction irreversible and check flux bounds
-        lb = max(0.0, self.parameters[reaction.fbcLowerFluxBound].value)
-        ub = max(0.0, self.parameters[reaction.fbcUpperFluxBound].value)
+        lb = max(0.0, self.parameters[reaction.fbc_lower_bound].value)
+        ub = max(0.0, self.parameters[reaction.fbc_upper_bound].value)
         lb_pid = self.get_fbc_bnd_pid(lb, self.flux_uid, f'fbc_{reaction.id}_lb')
         ub_pid = self.get_fbc_bnd_pid(ub, self.flux_uid, f'fbc_{reaction.id}_ub')
         reaction.modify_bounds({'lb': lb_pid, 'ub': ub_pid})
@@ -1180,7 +1180,7 @@ class XbaModel:
                         arm_r.metaid = f'meta_{arm_rid}'
                     arm_reactant = {pmet_sid: 1.0}
                     arm_r.reactants = arm_reactant
-                    del arm_r.fbcGeneProdAssoc
+                    del arm_r.gene_product_assoc
                     reactions_to_add[arm_rid] = arm_r
 
                 # add iso reactions, one for each isoenzyme
@@ -1199,7 +1199,7 @@ class XbaModel:
                                                for locus in enz.composition]))
                     if ' and ' in gpa:
                         gpa = '(' + gpa + ')'
-                    iso_r.fbcGeneProdAssoc = gpa
+                    iso_r.gene_product_assoc = gpa
                     iso_r.enzymes = [eid]
                     iso_r.kcatf = [orig_r.kcatf[idx]]
                     if orig_r.reversible:
@@ -1243,8 +1243,8 @@ class XbaModel:
                         rev_r.kcat = rev_r.kcatf[0]
                 else:
                     # ensure that the irreversible reaction has correct flux bounds
-                    lb = max(0.0, self.parameters[r.fbcLowerFluxBound].value)
-                    ub = max(0.0, self.parameters[r.fbcUpperFluxBound].value)
+                    lb = max(0.0, self.parameters[r.fbc_lower_bound].value)
+                    ub = max(0.0, self.parameters[r.fbc_upper_bound].value)
                     lb_pid = self.get_fbc_bnd_pid(lb, self.flux_uid, f'fbc_{rid}_lb')
                     ub_pid = self.get_fbc_bnd_pid(ub, self.flux_uid, f'fbc_{rid}_ub')
                     r.modify_bounds({'lb': lb_pid, 'ub': ub_pid})

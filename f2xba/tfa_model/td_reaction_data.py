@@ -22,7 +22,7 @@ class TdReactionData:
         """
         self.id = rid
         self.drg0_tr = None
-        self.drg_error = None
+        self.drg0_tr_error = None
 
     def modify_attribute(self, attribute, value):
         """modify attribute value.

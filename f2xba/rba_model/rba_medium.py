@@ -73,10 +73,10 @@ class RbaMedium:
             if r.kind == 'exchange':
                 if len(r.reactants) == 1:
                     sid = list(r.reactants)[0]
-                    flux_bnd = xba_model.parameters[r.fbcLowerFluxBound].value
+                    flux_bnd = xba_model.parameters[r.fbc_lower_bound].value
                 else:
                     sid = list(r.products)[0]
-                    flux_bnd = xba_model.parameters[r.fbcUpperFluxBound].value
+                    flux_bnd = xba_model.parameters[r.fbc_upper_bound].value
                 mid, cid = sid.rsplit('_', 1)
                 assert (cid == xba_model.external_compartment)
                 if abs(flux_bnd) > 0.0:

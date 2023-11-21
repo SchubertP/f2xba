@@ -23,7 +23,7 @@ from .td_metabolite_data import TdMetaboliteData
 from .td_cue_data import TdCueData
 from .td_reaction_data import TdReactionData
 from .td_species_data import TdSpeciesData
-from ..utils.tfa_utils import extract_atoms, get_transported
+from ..utils.tfa_utils import extract_atoms
 from ..xba_model.fbc_objective import FbcObjective
 
 
@@ -33,9 +33,9 @@ MAX_PH = 9
 
 # constants derived from pyTFA / Wikipedia
 BIG_THERMO = 1000.0
-GAS_CONSTANT = 8.314462        # J mol-1 K-1
-FARADAY_CONSTANT = 9.648533e4  # C mol-1  or J mol-1 V-1
-CAL_PER_J = 4.184              # cal/J
+GAS_CONSTANT = 8.314462 / 1000.0         # kJ mol-1 K-1
+FARADAY_CONSTANT = 9.648533e4 / 1000.0   # kC mol-1  or kJ mol-1 V-1
+CAL_PER_J = 4.184                        # cal/J
 
 # special metabolites
 CPD_PROTON = 'cpd00067'        # seed id for protons (H)
@@ -470,11 +470,11 @@ class TfaModel:
             if r.kind in ['drain', 'exchange', 'biomass']:
                 continue
 
-            # exclude transport reactions for water (R_H2Otex and R_H2Otpp in iJO1366)
-            if r.kind == 'transporter':
-                transported = get_transported(rid, self.model)
-                if len(transported) == 1 and 'cpd00001' in transported:
-                    continue
+#            # exclude transport reactions for water (R_H2Otex and R_H2Otpp in iJO1366)
+#            if r.kind == 'transporter' and len(r.reactants) == 1:
+#                s = self.model.reactions[list(r.reactants.keys())[0]]
+#                if s.seed_id == 'cpd00001':
+#                    continue
 
             charge_balance = 0
             atom_balance = defaultdict(float)
@@ -545,14 +545,14 @@ class TfaModel:
         creates self.td_species
         """
         # calculate transformed gibbs free energy of reaction
-        td_params = {'min_ph': self.td_params['min_ph'],
-                     'max_ph': self.td_params['max_ph'],
-                     'temperature': self.temperature,
-                     }
+        rt = self.temperature * GAS_CONSTANT
         for sid, td_sdata in self.td_species.items():
             td_mdata = self.td_metabolites[td_sdata.seed_id]
-            dfg0_tr = td_mdata.get_dfg0_transformed(td_sdata.ph, td_sdata.ionic_str, td_params)
+            dfg0_tr, avg_h_atoms_tr, avg_charge_tr = td_mdata.get_dfg0_transformed(td_sdata.ph, td_sdata.ionic_str,
+                                                                                   self.td_params['max_ph'], rt)
             td_sdata.modify_attribute('dfg0_tr', dfg0_tr)
+            td_sdata.modify_attribute('avg_h_atoms_tr', avg_h_atoms_tr)
+            td_sdata.modify_attribute('avg_charge_tr', avg_charge_tr)
 
     def _get_metabolic_drg0_tr(self, rid):
         """Calculate standard transformed Gibbs energy of reaction for metabolic reaction
@@ -586,85 +586,106 @@ class TfaModel:
         drg0_tr = 0.0
         for sid, met_stoic in srefs.items():
             td_sdata = self.td_species[sid]
+            # protons get removed for TD calculations when using transformed properties
             if td_sdata.seed_id != CPD_PROTON:
                 drg0_tr += td_sdata.dfg0_tr * met_stoic
         return drg0_tr
 
-    def _get_transported(self, rid):
+    def _get_transported_metabolites_old(self, rid):
+        """Get transported metabolites (for transport reaction).
 
+        A transported metabolite has same seed_id for related reactant and product.
+
+        :param rid: reacion id
+        :type rid: str
+        :return: seed ids of transported metabolites, sids for reactant/product and quantity
+        :rtype: dict of dict (key: seed_id/str, val: dict with keys ('stoic', 'reactant', 'product')
+        """
         r = self.model.reactions[rid]
-        reac_seed2sid = {self.model.species[sid].seed_id: sid for sid in r.reactants}
         prod_seed2sid = {self.model.species[sid].seed_id: sid for sid in r.products}
 
         transported = {}
-        for seed_id, r_sid in reac_seed2sid.items():
+        for r_sid, r_stoic in r.reactants.items():
+            seed_id = self.model.species[r_sid].seed_id
             if seed_id in prod_seed2sid:
                 p_sid = prod_seed2sid[seed_id]
-                transported[seed_id] = {'stoic': max(r.reactants[r_sid], r.products[p_sid]),
+                transported[seed_id] = {'stoic': max(r_stoic, r.products[p_sid]),
                                         'reactant': r_sid, 'product': p_sid}
         return transported
+
+    def _get_total_charge_transport(self, rid):
+        """Determine positive charge transport across membrane.
+
+        Charges of reaction reactants and products are added to corresponding
+        compartment charge balance. Stoichiometry is considered.
+        Transfer of electrons, e.g. iJO1366 reaction R_FDH4pp, is implicitly supported.
+
+        Here we use the charges configured for model species (i.e. biochemical reactants)
+        Optionally, we could (and not avg charges based on isomeric groups)
+
+        We return total postive charge transfer from donor to destination compartment.
+
+        :param rid: reaction id
+        :return: direction of
+        :rtype: dict (key: src_cid -> dest_cid / str, val: charge amount
+        """
+        r = self.model.reactions[rid]
+
+        charge_balance = {cid: 0.0 for cid in r.compartment.split('-')}
+        for sid, stoic in r.reactants.items():
+            s = self.model.species[sid]
+            charge_balance[s.compartment] -= stoic * s.charge
+        for sid, stoic in r.products.items():
+            s = self.model.species[sid]
+            charge_balance[s.compartment] += stoic * s.charge
+
+        dest = {cid: charge for cid, charge in charge_balance.items() if charge > 0}
+        src = {cid: -charge for cid, charge in charge_balance.items() if charge < 0}
+        src_cids = list(src.keys())
+
+        charge_transport = {}
+        for dest_cid, charge in dest.items():
+            for src_cid in src_cids:
+                if src[src_cid] > 0.0:
+                    if charge <= src[src_cid]:
+                        charge_transport[f'{src_cid}->{dest_cid}'] = charge
+                        src[src_cid] -= charge
+                        break
+                    else:
+                        charge -= src[src_cid]
+                        charge_transport[f'{src_cid}->{dest_cid}'] = src[src_cid]
+                        src[src_cid] = 0.0
+        return charge_transport
 
     def _get_transporter_drg0_tr(self, rid):
         """Calculate standard transformed Gibbs energy of reaction for transport reaction
 
+        Transporter ∆rG'˚ is based on sum of ∆fG'˚ plus an electrical work term
+
+            electrical work = F ∆φm ∑ v_i z_i
+                - ∆φm: membrane potential (dest - src) in V
+                - electrical transported charges are summed up
+                - total charges accross different membranes are provided by get_total_charge_transport()
+
         :param rid: reaction id
         :type rid: str
-        :return:
+        :return: transformed standard Gibbs reaction energy including electrical work terms
+        :rtype: float or None
         """
-        r = self.model.reactions[rid]
-        srefs = {sid: -stoic for sid, stoic in r.reactants.items()}
-        srefs |= {sid: stoic for sid, stoic in r.products.items()}
+        # ∆rG'˚ due to metabolites
+        drg0_tr_metabs = self._get_metabolic_drg0_tr(rid)
+        if drg0_tr_metabs is None:
+            return None
 
-        # check that ∆Gf_tr is valid for all reactants/products
-        for sid in srefs:
-            if sid not in self.td_species or self.td_species[sid].dfg0_tr is None:
-                return None
+        # determine electrial work
+        charge_transport = self._get_total_charge_transport(rid)
+        electrical_work = 0.0
+        for transport_dir, charge in charge_transport.items():
+            src_cid, dest_cid = transport_dir.split('->')
+            membrane_pot = -self.td_compartments[dest_cid].membrane_pots[src_cid]
+            electrical_work += FARADAY_CONSTANT * membrane_pot * charge
+        drg0_tr = drg0_tr_metabs + electrical_work
 
-        transported = get_transported(rid, self.model)
-        rt = self.temperature * GAS_CONSTANT / 1000.0        # J/mol -> kJ/mol
-
-        drg0_tr_trans = 0
-        sum_stoic_nh = 0
-        rt_sum_h_lc_tpt = 0
-        for seed_id, data in transported.items():
-            stoic = data['stoic']
-            for met_type, sign in [('reactant', -1.0), ('product', 1.0)]:
-                sid = data[met_type]
-                td_sdata = self.td_species[sid]
-                td_mdata = self.td_metabolites[td_sdata.seed_id]
-                ph = td_sdata.ph
-                proton_potential = - sign * stoic * td_mdata.nh_std * rt * np.log(10) * ph
-
-                if seed_id != CPD_WATER:
-                    sum_stoic_nh += proton_potential
-                    drg0_tr_trans += sign * stoic * td_sdata.dfg0_tr
-                if seed_id == CPD_PROTON:
-                    rt_sum_h_lc_tpt += proton_potential
-
-        sum_f_memp_charge = 0
-        for seed_id, data in transported.items():
-            if seed_id != CPD_WATER:
-                stoic = data['stoic']
-                r_s = self.model.species[data['reactant']]
-                p_s = self.model.species[data['product']]
-                # TODO: check what is in / out wrt to reaction direction?, R_G3PCabcpp, R_CYTBDpp, R_CYSabc2pp
-                membrane_pot = self.td_compartments[r_s.compartment].membrane_pots[p_s.compartment]
-                # Note: Faraday constants J/V -> kJ/V; membrane potential mV -> V
-                sum_f_memp_charge += (FARADAY_CONSTANT / 1000.0) * (membrane_pot / 1000.0) * stoic * r_s.fbcCharge
-
-        # remove transported species from reaction srefs
-        for seed_id, data in transported.items():
-            trans_stoic = data['stoic']
-            srefs[data['reactant']] += trans_stoic
-            srefs[data['product']] -= trans_stoic
-
-        drg0_tr_non_trans = 0.0
-        for sid, met_stoic in srefs.items():
-            td_sdata = self.td_species[sid]
-            if td_sdata.seed_id != CPD_PROTON:
-                drg0_tr_non_trans += td_sdata.dfg0_tr * met_stoic
-
-        drg0_tr = drg0_tr_non_trans + drg0_tr_trans + sum_stoic_nh + sum_f_memp_charge + rt_sum_h_lc_tpt
         return drg0_tr
 
     def _get_reaction_drg0_tr_error(self, rid):
@@ -713,10 +734,10 @@ class TfaModel:
             r = self.model.reactions[rid]
             if r.kind == 'metabolic':
                 td_rdata.modify_attribute('drg0_tr', self._get_metabolic_drg0_tr(rid))
-                td_rdata.modify_attribute('drg_error', self._get_reaction_drg0_tr_error(rid))
+                td_rdata.modify_attribute('drg0_tr_error', self._get_reaction_drg0_tr_error(rid))
             elif r.kind == 'transporter':
                 td_rdata.modify_attribute('drg0_tr', self._get_transporter_drg0_tr(rid))
-                td_rdata.modify_attribute('drg_error', self._get_reaction_drg0_tr_error(rid))
+                td_rdata.modify_attribute('drg0_tr_error', self._get_reaction_drg0_tr_error(rid))
             else:
                 print(f'{rid}, {r.kind} not supported for ∆Gr calculation')
 
@@ -735,7 +756,7 @@ class TfaModel:
 
         pseudo_sids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 for constr, name in constr2name.items():
                     pseudo_sids[f'C_{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
@@ -759,14 +780,14 @@ class TfaModel:
 
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 pseudo_rids[f'V_DG_{ridx}'] = [f'{var2name["DG"]} for {ridx}',
                                                f'C_G_{ridx} + C_BU_{ridx} -> C_FU_{ridx}',
                                                dg_lb_pid, dg_ub_pid, 'continuous']
 
-                dgo_lb = td_rdata.drg - td_rdata.drg_error
-                dgo_ub = td_rdata.drg + td_rdata.drg_error
+                dgo_lb = td_rdata.drg0_tr - td_rdata.drg0_tr_error
+                dgo_ub = td_rdata.drg0_tr + td_rdata.drg0_tr_error
                 dgo_lb_pid = self.model.get_fbc_bnd_pid(dgo_lb, 'kJ_per_mol', f'V_DGo_{ridx}_lb', reuse=False)
                 dgo_ub_pid = self.model.get_fbc_bnd_pid(dgo_ub, 'kJ_per_mol', f'V_DGo_{ridx}_ub', reuse=False)
                 pseudo_rids[f'V_DGo_{ridx}'] = [f'{var2name["DGo"]} for {ridx}', f'-> C_G_{ridx}',
@@ -787,15 +808,15 @@ class TfaModel:
 
         fbc_max_abs_flux_val = 1000.0
         for r in self.model.reactions.values():
-            fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbcLowerFluxBound].value))
-            fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbcUpperFluxBound].value))
+            fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbc_lower_bound].value))
+            fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbc_upper_bound].value))
 
         lb_pid = self.model.get_fbc_bnd_pid(0.0, 'fbc_dimensionless', 'binary_use_vars_lb', reuse=False)
         ub_pid = self.model.get_fbc_bnd_pid(1.0, 'fbc_dimensionless', 'binary_use_vars_ub', reuse=False)
 
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 fu_reaction = f'{fbc_max_abs_flux_val} C_UF_{ridx} => {BIG_THERMO} C_FU_{ridx} + C_SU_{ridx}'
                 bu_reaction = f'{fbc_max_abs_flux_val} C_UR_{ridx} => {BIG_THERMO} C_BU_{ridx} + C_SU_{ridx}'
@@ -811,33 +832,18 @@ class TfaModel:
         """Add log concentration variables.
         """
         var2name = {'LC': 'log metabolite concentration'}
-        rt = self.temperature * GAS_CONSTANT / 1000.0        # convert J/mol -> kJ/mol
+        rt = self.temperature * GAS_CONSTANT
 
         lc_variables = defaultdict(dict)
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 r = self.model.reactions[rid]
                 srefs = {sid: -stoic for sid, stoic in r.reactants.items()}
                 srefs |= {sid: stoic for sid, stoic in r.products.items()}
-
-                if r.kind == 'transporter':
-                    # in case of transporter, treat transported species separately
-                    transported = get_transported(rid, self.model)
-                    for seed_id, data in transported.items():
-                        if seed_id != CPD_PROTON:
-                            stoic = data['stoic']
-                            sid_react = data['reactant']
-                            sid_prod = data['product']
-                            lc_variables[sid_react][ridx] = -stoic * rt
-                            lc_variables[sid_prod][ridx] = stoic * rt
-                            srefs[sid_react] += stoic
-                            srefs[sid_prod] -= stoic
-                    # remove transported species from reaction stoichiometry
-                    srefs = {sid: stoic for sid, stoic in srefs.items() if stoic != 0.0}
-
                 for sid, stoic in srefs.items():
                     td_sdata = self.td_species[sid]
+                    # water and protons are not included in reaction quotient
                     if td_sdata.seed_id not in [CPD_PROTON, CPD_WATER]:
                         if sid in lc_variables and ridx in lc_variables[sid]:
                             lc_variables[sid][ridx] += stoic * rt
@@ -873,7 +879,7 @@ class TfaModel:
         count = 0
         modify_attrs = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 r = self.model.reactions[rid]
                 rev_r = self.model.split_reversible_reaction(r)
                 ridx = re.sub('^R_', '', rid)
@@ -912,7 +918,7 @@ class TfaModel:
 
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 pseudo_rids[f'V_NS_{ridx}'] = [f'{var2name["NS"]} for {ridx}', f'C_G_{ridx} =>',
                                                lb_pid, ub_pid, 'continuous']
@@ -970,8 +976,8 @@ class TfaModel:
         for vname, slack in dgo_slack.items():
             ridx = re.sub('V_[PN]S_', '', vname)
             dgo_var = self.model.reactions[f'V_DGo_{ridx}']
-            dgo_lb_pid = dgo_var.fbcLowerFluxBound
-            dgo_ub_pid = dgo_var.fbcUpperFluxBound
+            dgo_lb_pid = dgo_var.fbc_lower_bound
+            dgo_ub_pid = dgo_var.fbc_upper_bound
             dgo_lb_val = self.model.parameters[dgo_lb_pid].value
             dgo_ub_val = self.model.parameters[dgo_ub_pid].value
 
@@ -1017,7 +1023,7 @@ class TfaModel:
 
         pseudo_sids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 for constr, name in constr2name.items():
                     pseudo_sids[f'C_{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
@@ -1041,7 +1047,7 @@ class TfaModel:
 
         pseudo_rids = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 pseudo_rids[f'V_LNG_{ridx}'] = [f'{var2name["LNG"]} for {ridx}', f'-> C_DC_{ridx}',
                                                 lb_pid, ub_pid, 'continuous']
@@ -1052,10 +1058,10 @@ class TfaModel:
         self.model.add_reactions(df_add_rids)
 
         # connect DG variables to displacement constraints
-        rt = self.temperature * GAS_CONSTANT / 1000.0        # convert J/mol -> kJ/mol
+        rt = self.temperature * GAS_CONSTANT
         modify_attrs = {}
         for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.drg is not None:
+            if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 modify_attrs[f'V_DG_{ridx}'] = ['reaction', 'reactant', f'C_DC_{ridx}={1/rt}']
 
