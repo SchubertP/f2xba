@@ -124,7 +124,7 @@ class XbaModel:
         """
         locus2rids = {}
         for rid, r in self.reactions.items():
-            if hasattr(r, 'fbcGeneProdAssoc'):
+            if hasattr(r, 'gene_product_assoc'):
                 tmp_gpa = re.sub(r'[()]', '', r.gene_product_assoc)
                 gpids = {gpid.strip() for gpid in re.sub(r'( and )|( or )', ',', tmp_gpa).split(',')}
                 for gpid in gpids:
@@ -294,7 +294,7 @@ class XbaModel:
                 used_sids.add(sid)
             for sid in r.products:
                 used_sids.add(sid)
-            if hasattr(r, 'fbcGeneProdAssoc'):
+            if hasattr(r, 'gene_product_assoc'):
                 gpa = re.sub('and', '', r.gene_product_assoc)
                 gpa = re.sub('or', '', gpa)
                 gpa = re.sub('[()]', '', gpa)
@@ -770,7 +770,7 @@ class XbaModel:
         n_created = 0
         for rid, r in self.reactions.items():
             eids = []
-            if hasattr(r, 'fbcGeneProdAssoc'):
+            if hasattr(r, 'gene_product_assoc'):
                 gpa = re.sub(' and ', '_and_', r.gene_product_assoc)
                 gpa = re.sub(r'[()]', '', gpa)
                 gp_sets = [item.strip() for item in gpa.split('or')]
@@ -838,7 +838,7 @@ class XbaModel:
         """
         rxnkind2rids = {'reversible': set()}
         for rid, r in self.reactions.items():
-            if hasattr(r, 'fbcGeneProdAssoc') and len(r.gene_product_assoc) > 1:
+            if hasattr(r, 'gene_product_assoc') and len(r.gene_product_assoc) > 1:
                 if r.reversible is True:
                     rxnkind2rids['reversible'].add(rid)
                 if r.kind not in rxnkind2rids:

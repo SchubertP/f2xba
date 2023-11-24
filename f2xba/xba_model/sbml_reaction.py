@@ -149,7 +149,7 @@ class SbmlReaction(SbmlSBase):
                                        for sid, stoic in self.reactants.items()])
         data['products'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
                                       for sid, stoic in self.products.items()])
-        if hasattr(self, 'fbcGeneProdAssoc'):
+        if hasattr(self, 'gene_product_assoc'):
             data['fbcGeneProdAssoc'] = f'assoc={self.gene_product_assoc}'
         return data
 
@@ -163,7 +163,7 @@ class SbmlReaction(SbmlSBase):
         :param del_gps: coenzyme gene products
         :type del_gps: set or list of str
         """
-        if hasattr(self, 'fbcGeneProdAssoc'):
+        if hasattr(self, 'gene_product_assoc'):
             gpa = self.gene_product_assoc
             for gp in del_gps:
                 if gp in self.gene_product_assoc:
