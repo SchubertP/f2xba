@@ -241,7 +241,7 @@ class EcModel:
         draw_name = f'total concentration active protein'
         lb_pid = self.model.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'conc_0_bound')
         ub_pid = self.model.get_fbc_bnd_pid(total_protein, 'mmol_per_gDW', 'conc_active_protein')
-        protein_vars[draw_rid] = [draw_name, f' => {pool_sid}', lb_pid, ub_pid, None]
+        protein_vars[draw_rid] = [draw_name, f' => {pool_sid}', lb_pid, ub_pid, None, 'protein']
 
         # add protein drain reactions - supporting MOMENT with specific protein split in protein species per reaction
         ub_pid = self.model.get_fbc_bnd_pid(1000.0, 'mmol_per_gDW', 'conc_default_ub')
@@ -250,9 +250,9 @@ class EcModel:
             draw_name = f'conc_prot_{uid}'
             products = ' + '.join([sid for sid in p.linked_sids])
             reaction_string = f'{p.mw / 1000.0} {pool_sid} => {products}'
-            protein_vars[draw_rid] = [draw_name, reaction_string, lb_pid, ub_pid, self.model.uid2gp[uid]]
+            protein_vars[draw_rid] = [draw_name, reaction_string, lb_pid, ub_pid, self.model.uid2gp[uid], 'protein']
 
-        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'fbcGeneProdAssoc']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'fbcGeneProdAssoc', 'kind']
         df_add_rids = pd.DataFrame(protein_vars.values(), index=list(protein_vars), columns=cols)
         print(f'{len(df_add_rids):4d} protein variables to add')
         self.model.add_reactions(df_add_rids)

@@ -35,6 +35,7 @@ class SbmlReaction(SbmlSBase):
             - 'miriamAnnotation': str - handled in parent class
             - 'notes': str - handled in parent class
             - 'fbcGeneProdAssoc': str
+            - 'kind': str
 
         A reaction compartment is set based on compartments of reaction reactants/products.
         In case of transporters, the compartment ids are concatenated using '-'
@@ -57,7 +58,7 @@ class SbmlReaction(SbmlSBase):
         self.rp_compartments = [self.get_compartments(self.reactants, species_dict),
                                 self.get_compartments(self.products, species_dict)]
         self.compartment = '-'.join(sorted(self.rp_compartments[0].union(self.rp_compartments[1])))
-        self.kind = self.get_reaction_kind()
+        self.kind = s_reaction.get('kind', self.get_reaction_kind())
         self.enzymes = []
         self.kcatf = None
         self.kcatr = None

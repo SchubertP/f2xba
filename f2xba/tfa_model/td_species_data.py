@@ -16,7 +16,7 @@ import numpy as np
 
 DEBYE_HUCKEL_A = 0.51065        # √(l/mol) - Alberty, 2003, section 3.6
 DEBYE_HUCKEL_B = 1.6            # √(l/mol) - Alberty, 2003, section 3.6
-PH_MARGIN = 2.0                 # PH margin to be added to compartment pH to determine isomer group
+PH_MARGIN = 0.0                 # PH margin to be added to compartment pH to determine isomer group
 MAX_ABS_CHARGE = 4              # maximum absolute electrical charge (to consider for activity reduction)
 
 
@@ -124,6 +124,8 @@ class TdSpeciesData:
         Using pKa values, charge_std, nh_std.
 
         Initially assumed, that structure is uncharged below lowest pKa.
+        - if there are no pka values up to max_ph, we assume that structure in correct
+          protonation state
         - During deprotonation, structure becomes more negatively charged (1 unit per step)
         - if final charge is above or equal to standard charge, no deprotonation required
         - if deprotonation steps > 2: assume that struction is already at pH 7.0 and
@@ -141,7 +143,7 @@ class TdSpeciesData:
         pkas_below_max = self.pkas[self.pkas < max_ph]
 
         total_steps = len(pkas_below_max)
-        if self.charge_std <= -total_steps:
+        if total_steps == 0 or self.charge_std <= -total_steps:
             deprot_steps = 0
         else:
             deprot_steps = min(total_steps - (-self.charge_std), self.nh_std)

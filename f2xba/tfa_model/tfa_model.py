@@ -137,7 +137,7 @@ class TfaModel:
             print(f'{tfa_params_fname} does not exist')
             raise FileNotFoundError
         tfa_params_sheets = ['general', 'td_compartments', 'modify_xba_attrs',
-                             'modify_td_sids', 'modify_thermo_data']
+                             'modify_td_sids', 'modify_thermo_data', 'modify_drg0_bounds']
         tfa_params = {}
         with pd.ExcelFile(tfa_params_fname) as xlsx:
             for sheet in xlsx.sheet_names:
@@ -161,6 +161,10 @@ class TfaModel:
         # adding TFA related constraints and variables
         self._add_tfa_constraints()
         self._add_tfa_variables()
+
+        # in case relaxed parameters are already available, implement them
+        if 'modify_drg0_bounds' in tfa_params:
+            self.modify_drg0_bounds(tfa_params['modify_drg0_bounds'], remove_slack=False)
 
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_TFA'
@@ -229,9 +233,38 @@ class TfaModel:
         :return: summary of ∆Gr˚ bound updates performed
         :rtype: dict
         """
-        drgo_relaxations = self._relax_drgo_variables(fba_fluxes)
+        drgo_relaxations = self._relax_drg0_variables(fba_fluxes)
         self._remove_slack_configuration()
         return drgo_relaxations
+
+    def modify_drg0_bounds(self, df_modify_drg0_bounds, remove_slack=True):
+        """Modify ∆rG'˚ bounds after model relaxation.
+
+        We reused exising parameter ids for ∆rG'˚.
+        These get updated with data from df_modify_drg0_bounds.
+            index: variable id (str) for drg0 variables 'V_DRG0_<rid>'
+            columns:
+                component: set to 'reaction' / str
+                attribute: either 'fbc_lower_bound' or 'fbc_upper_bound' / str
+                value: new bound value / float
+
+        :param df_modify_drg0_bounds: data on bounds to be updated
+        :type df_modify_drg0_bounds: pandas DataFrame
+        :param remove_slack: if True, remove slack variables
+        :type remove_slack: bool (default: True)
+        """
+        modify_attrs = {}
+        for var_id, row in df_modify_drg0_bounds.iterrows():
+            drg0_var = self.model.reactions[var_id]
+            pid = getattr(drg0_var, row['attribute'])
+            modify_attrs[pid] = ['parameter', 'value', row['value'], 'relaxation']
+        cols = ['component', 'attribute', 'value', 'notes']
+        df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)
+        print(f"{len(df_modify_attrs):4d} ∆Gr'˚ variables need relaxation.")
+        self.model.modify_attributes(df_modify_attrs, 'parameter')
+
+        if remove_slack is True:
+            self._remove_slack_configuration()
 
     def add_displacement(self):
         """Add displacement variable from ∆Gr.
@@ -697,16 +730,16 @@ class TfaModel:
             ridx = re.sub('^R_', '', rid)
             pseudo_rids[f'V_DRG_{ridx}'] = [f'{var2name["DRG"]} for {ridx}',
                                             f'C_DRG_{ridx} + C_GFC_{ridx} -> C_GRC_{ridx}',
-                                            drg_lb_pid, drg_ub_pid, 'continuous']
+                                            drg_lb_pid, drg_ub_pid, 'td_variable', 'continuous']
 
             drgo_lb = td_rdata.drg0_tr - td_rdata.drg0_tr_error
             drgo_ub = td_rdata.drg0_tr + td_rdata.drg0_tr_error
             drgo_lb_pid = self.model.get_fbc_bnd_pid(drgo_lb, 'kJ_per_mol', f'V_DRG0_{ridx}_lb', reuse=False)
             drgo_ub_pid = self.model.get_fbc_bnd_pid(drgo_ub, 'kJ_per_mol', f'V_DRG0_{ridx}_ub', reuse=False)
             pseudo_rids[f'V_DRG0_{ridx}'] = [f'{var2name["DRG0"]} for {ridx}', f'-> C_DRG_{ridx}',
-                                             drgo_lb_pid, drgo_ub_pid, 'continuous']
+                                             drgo_lb_pid, drgo_ub_pid, 'td_variable', 'continuous']
 
-        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f"{len(df_add_rids):4d} ∆rG'/∆rG'˚ variables to add")
         self.model.add_reactions(df_add_rids)
@@ -761,10 +794,12 @@ class TfaModel:
                 ridx = re.sub('^R_', '', rid)
                 fu_reaction = f'{fbc_max_abs_flux_val} C_FFC_{ridx} => {MAX_DRG} C_GFC_{ridx} + C_SU_{ridx}'
                 bu_reaction = f'{fbc_max_abs_flux_val} C_FRC_{ridx} => {MAX_DRG} C_GRC_{ridx} + C_SU_{ridx}'
-                pseudo_rids[f'V_FU_{ridx}'] = [f'{var2name["FU"]} for {ridx}', fu_reaction, lb_pid, ub_pid, 'binary']
-                pseudo_rids[f'V_RU_{ridx}'] = [f'{var2name["RU"]} for {ridx}', bu_reaction, lb_pid, ub_pid, 'binary']
+                pseudo_rids[f'V_FU_{ridx}'] = [f'{var2name["FU"]} for {ridx}', fu_reaction,
+                                               lb_pid, ub_pid, 'td_variable', 'binary']
+                pseudo_rids[f'V_RU_{ridx}'] = [f'{var2name["RU"]} for {ridx}', bu_reaction,
+                                               lb_pid, ub_pid, 'td_variable', 'binary']
 
-        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f'{len(df_add_rids):4d} forward/reverse use variables to add')
         self.model.add_reactions(df_add_rids)
@@ -790,9 +825,9 @@ class TfaModel:
         """
         var2name = {'LC': 'log reactant concentration'}
 
+        # first we identify for each model species the reactions (including stoic) it participates in
         lc_variables = defaultdict(dict)
         for rid, td_rdata in self.td_reactions.items():
-            assert(td_rdata.drg0_tr is not None)
             ridx = re.sub('^R_', '', rid)
             r = self.model.reactions[rid]
             srefs = {sid: -stoic for sid, stoic in r.reactants.items()}
@@ -801,10 +836,10 @@ class TfaModel:
                 td_rdata = self.td_reactants[sid]
                 # water and protons are not included in reaction quotient
                 if td_rdata.td_sid not in [CPD_PROTON, CPD_WATER]:
-                    if sid in lc_variables and ridx in lc_variables[sid]:
-                        lc_variables[sid][ridx] += stoic * RT
-                    else:
-                        lc_variables[sid][ridx] = stoic * RT
+                    # if sid in lc_variables and ridx in lc_variables[sid]:
+                    #     lc_variables[sid][ridx] += stoic * RT
+                    # else:
+                    lc_variables[sid][ridx] = stoic * RT
 
         pseudo_rids = {}
         for lc_sid, data in lc_variables.items():
@@ -816,36 +851,22 @@ class TfaModel:
             reac_str = ' + '.join([f'{-rt_stoic} C_DRG_{ridx}' for ridx, rt_stoic in data.items() if rt_stoic < 0.0])
             prod_str = ' + '.join([f'{rt_stoic} C_DRG_{ridx}' for ridx, rt_stoic in data.items() if rt_stoic > 0.0])
             pseudo_rids[f'V_LC_{sidx}'] = [f'{var2name["LC"]} of {lc_sid}', f'{reac_str} -> {prod_str}',
-                                           lc_lb_pid, lc_ub_pid, 'continuous']
+                                           lc_lb_pid, lc_ub_pid, 'td_variable', 'continuous']
 
-        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f'{len(df_add_rids):4d} log concentration variables to add')
         self.model.add_reactions(df_add_rids)
 
-    def _add_tfa_variables(self):
-        """Add TFA related variables to the model as pseudo reactions.
-
-        based on pyTFA
-
-        TFA specific variables are created and connected to constraints. Variables include:
-        - transfromed standard Gibbs eneryg of reaction ∆rG'˚ and ∆rG' variables
-        - forward/reverse use binary variables for direction / ∆rG' coupling
-        - loc concentration variable for reactants
+    def _split_and_couple_reactions(self):
+        """Split and couple reactions with TD information
 
         reactions with TD information get split into forward / reverse
         reactions are connected to forward/reverse coupling constraints
-
         """
-        self._add_gibbs_reaction_variables()
-        self._add_use_variables()
-        self._add_log_concentration_variables()
-
-        # split reactions in forward and reverse direction and connect to direction use constraints
         count = 0
         modify_attrs = {}
         for rid, td_rdata in self.td_reactions.items():
-            assert(td_rdata.drg0_tr is not None)
             r = self.model.reactions[rid]
             rev_r = self.model.split_reversible_reaction(r)
             ridx = re.sub('^R_', '', rid)
@@ -858,6 +879,21 @@ class TfaModel:
         df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)
         print(f'{len(df_modify_attrs):4d} fwd/rev reactions to couple with flux direction')
         self.model.modify_attributes(df_modify_attrs, 'reaction')
+
+    def _add_tfa_variables(self):
+        """Add TFA related variables to the model as pseudo reactions.
+
+        based on pyTFA
+        TFA specific variables are created and connected to constraints. Variables include:
+        - transfromed standard Gibbs eneryg of reaction ∆rG'˚ and ∆rG' variables
+        - forward/reverse use binary variables for direction / ∆rG' coupling
+        - loc concentration variable for reactants
+        - split reactions with TD info in fwd/rev and connect to coupling constraints
+        """
+        self._add_gibbs_reaction_variables()
+        self._add_use_variables()
+        self._add_log_concentration_variables()
+        self._split_and_couple_reactions()
 
         print(f'{len(self.model.parameters):4d} parameters')
 
@@ -887,11 +923,11 @@ class TfaModel:
             if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 pseudo_rids[f'V_NS_{ridx}'] = [f'{var2name["NS"]} for {ridx}', f'C_DRG_{ridx} =>',
-                                               lb_pid, ub_pid, 'continuous']
+                                               lb_pid, ub_pid, 'td_variable', 'continuous']
                 pseudo_rids[f'V_PS_{ridx}'] = [f'{var2name["PS"]} for {ridx}', f'=> C_DRG_{ridx}',
-                                               lb_pid, ub_pid, 'continuous']
+                                               lb_pid, ub_pid, 'td_variable', 'continuous']
 
-        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f"{len(df_add_rids):4d} slack variables for ∆rG'˙ to add")
         self.model.add_reactions(df_add_rids)
@@ -915,7 +951,7 @@ class TfaModel:
         slack_obj_dict = {'type': 'minimize', 'active': True, 'fluxObjectives': srefs_str}
         self.model.objectives[slack_obj_id] = FbcObjective(pd.Series(slack_obj_dict, name=slack_obj_id))
 
-    def _relax_drgo_variables(self, fluxes):
+    def _relax_drg0_variables(self, fluxes):
         """Relax ∆rG'˚ variable bounds based on slack minimization of slack model.
 
         Nonzero negative / positive slack variables are identified and
@@ -1022,9 +1058,9 @@ class TfaModel:
             if td_rdata.drg0_tr is not None:
                 ridx = re.sub('^R_', '', rid)
                 pseudo_rids[f'V_LNG_{ridx}'] = [f'{var2name["LNG"]} for {ridx}', f'-> C_DC_{ridx}',
-                                                lb_pid, ub_pid, 'continuous']
+                                                lb_pid, ub_pid, 'td_variable', 'continuous']
 
-        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'notes']
+        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
         print(f'{len(df_add_rids):4d} thermodynamic displacement variables to add')
         self.model.add_reactions(df_add_rids)
