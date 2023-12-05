@@ -482,7 +482,7 @@ class TfaModel:
         We are not replacing structure and formula from td_metabolites. While
         linking model species to td_metabolite, we ensure compatibility of
         structure and electrical charge.
-        Caluation of ∆fG'˚ is anyway done based on isomer group calculation
+        Caluation of ∆fG'˚ is anyway based on isomer group thermodynamics
         using least protonated species near the compartment pH
         """
         not_supported = 0
@@ -547,7 +547,6 @@ class TfaModel:
         :rtype: dict (key: src_cid -> dest_cid / str, val: charge amount
         """
         r = self.model.reactions[rid]
-
         charge_balance = {cid: 0.0 for cid in r.compartment.split('-')}
         if len(charge_balance) == 1:
             return {}
@@ -729,7 +728,7 @@ class TfaModel:
             assert(td_rdata.drg0_tr is not None)
             ridx = re.sub('^R_', '', rid)
             pseudo_rids[f'V_DRG_{ridx}'] = [f'{var2name["DRG"]} for {ridx}',
-                                            f'C_DRG_{ridx} + C_GFC_{ridx} -> C_GRC_{ridx}',
+                                            f'C_DRG_{ridx} + C_GRC_{ridx} -> C_GFC_{ridx}',
                                             drg_lb_pid, drg_ub_pid, 'td_variable', 'continuous']
 
             drgo_lb = td_rdata.drg0_tr - td_rdata.drg0_tr_error
@@ -778,12 +777,7 @@ class TfaModel:
         """
         var2name = {'FU': 'forward use variable',
                     'RU': 'reverse use variable'}
-
-        fbc_max_abs_flux_val = 1000.0
-        for r in self.model.reactions.values():
-            if re.match('V_', r.id) is None:
-                fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbc_lower_bound].value))
-                fbc_max_abs_flux_val = max(fbc_max_abs_flux_val, abs(self.model.parameters[r.fbc_upper_bound].value))
+        fbc_max_abs_flux_val = max(abs(self.model.fbc_flux_range[0]), abs(self.model.fbc_flux_range[1]))
 
         lb_pid = self.model.get_fbc_bnd_pid(0.0, 'fbc_dimensionless', 'binary_use_vars_lb', reuse=False)
         ub_pid = self.model.get_fbc_bnd_pid(1.0, 'fbc_dimensionless', 'binary_use_vars_ub', reuse=False)
@@ -861,22 +855,37 @@ class TfaModel:
     def _split_and_couple_reactions(self):
         """Split and couple reactions with TD information
 
+        Optionally (based on 'all_reversible' general parameter), we update the
+        flux bounds of blocked reversible reactions.
+
         reactions with TD information get split into forward / reverse
         reactions are connected to forward/reverse coupling constraints
         """
+        all_reversible = self.td_params.get('all_reversible', False)
+        fbc_max_flux_val = self.model.fbc_flux_range[1]
+        fbc_max_flux_pid = self.model.get_fbc_bnd_pid(fbc_max_flux_val, 'mmol_per_gDW', 'max_reverse_flux')
+
         count = 0
-        modify_attrs = {}
+        count_opened_rev_dir = 0
+        modify_attrs = []
         for rid, td_rdata in self.td_reactions.items():
             r = self.model.reactions[rid]
             rev_r = self.model.split_reversible_reaction(r)
             ridx = re.sub('^R_', '', rid)
-            modify_attrs[rid] = ['reaction', 'product', f'C_FFC_{ridx}=1.0']
-            modify_attrs[rev_r.id] = ['reaction', 'product', f'C_FRC_{ridx}=1.0']
+            modify_attrs.append([rid, 'reaction', 'product', f'C_FFC_{ridx}=1.0'])
+            modify_attrs.append([rev_r.id, 'reaction', 'product', f'C_FRC_{ridx}=1.0'])
+            if all_reversible is True:
+                r_lb = self.model.parameters[r.fbc_lower_bound].value
+                rev_r_ub = self.model.parameters[rev_r.fbc_upper_bound].value
+                if rev_r_ub == 0.0 and r_lb == 0.0:
+                    modify_attrs.append([rev_r.id, 'reaction', 'fbc_upper_bound', fbc_max_flux_pid])
+                    count_opened_rev_dir += 1
             count += 1
-        print(f'{count:4d} TD reactions split in forward/reverse')
+        print(f'{count:4d} TD reactions split in forward/reverse, {count_opened_rev_dir} opened reverse direction')
 
-        cols = ['component', 'attribute', 'value']
-        df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)
+        cols = ['id', 'component', 'attribute', 'value']
+        df_modify_attrs = pd.DataFrame(modify_attrs, columns=cols)
+        df_modify_attrs.set_index('id', inplace=True)
         print(f'{len(df_modify_attrs):4d} fwd/rev reactions to couple with flux direction')
         self.model.modify_attributes(df_modify_attrs, 'reaction')
 

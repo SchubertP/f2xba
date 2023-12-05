@@ -71,13 +71,12 @@ class XbaModel:
         any_fbc_pid = self.reactions[list(self.reactions)[0]].fbc_lower_bound
         self.flux_uid = self.parameters[any_fbc_pid].units
         # collect all flux bound parameters used in the genome scale model for reuse
-        # val2pid = {f'{data.value:{FBC_BOUND_TOL}}': pid for pid, data in self.parameters.items()
-        #              if data.units == self.flux_uid}
         val2pid = {data.value: pid for pid, data in self.parameters.items()
                    if data.units == self.flux_uid and data.reuse is True}
         self.fbc_shared_pids = {self.flux_uid: val2pid}
+
         # determine flux range used in genome scale model
-        self.fbc_flux_range = list([0.0, 0.0])
+        self.fbc_flux_range = [0.0, 0.0]
         for r in self.reactions.values():
             self.fbc_flux_range[0] = min(self.fbc_flux_range[0], self.parameters[r.fbc_lower_bound].value)
             self.fbc_flux_range[1] = max(self.fbc_flux_range[1], self.parameters[r.fbc_upper_bound].value)
@@ -1103,6 +1102,8 @@ class XbaModel:
         :return: reverse reaction with reactants/bounds inverted
         :rtype: Reaction
         """
+        zero_flux_bnd_pid = self.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'zero_flux_bound')
+
         r_dict = reaction.to_dict()
         rev_rid = f'{reaction.id}_REV'
         rev_r = SbmlReaction(pd.Series(r_dict, name=rev_rid), self.species)
@@ -1125,11 +1126,10 @@ class XbaModel:
         self.reactions[rev_rid] = rev_r
 
         # make forward reaction irreversible and check flux bounds
-        lb = max(0.0, self.parameters[reaction.fbc_lower_bound].value)
-        ub = max(0.0, self.parameters[reaction.fbc_upper_bound].value)
-        lb_pid = self.get_fbc_bnd_pid(lb, self.flux_uid, f'fbc_{reaction.id}_lb')
-        ub_pid = self.get_fbc_bnd_pid(ub, self.flux_uid, f'fbc_{reaction.id}_ub')
-        reaction.modify_bounds({'lb': lb_pid, 'ub': ub_pid})
+        if self.parameters[reaction.fbc_lower_bound].value < 0.0:
+            reaction.modify_bounds({'lb': zero_flux_bnd_pid})
+        if self.parameters[reaction.fbc_upper_bound].value < 0.0:
+            reaction.modify_bounds({'ub': zero_flux_bnd_pid})
         reaction.reversible = False
         reaction.kcatr = None
 
@@ -1139,6 +1139,15 @@ class XbaModel:
         """Add reactions catalyzed by isoenzymes.
 
         This will only affect reactions catalyzed by isoenzymes.
+
+        Integration with Thermodynamic FBA (TFA):
+            TFA splits TD related reations in fwd/rev (_REV)
+            TFA also split reactions that in base model are not reversible
+            TFA adds forward flux coupling constraint (C_FFC_<rid>) as product to fwd reaction
+            TFA adds reverse flux coupling constraint (C_RFC_<rid>) as product or rev reaction
+            new reaction ids: for reverse direction add _isox_ and _arm_ prior to _REV
+            keep flux coupling constraints as products in _isox_ reactions
+            have no flux coupling constraints in _arm_ reaction
 
         reactions catalyzed by isoenzymes get split up
         - new reactions are created based on original reaction
@@ -1157,20 +1166,25 @@ class XbaModel:
             if len(orig_r.enzymes) > 1:
                 orig_r_dict = orig_r.to_dict()
                 rids_to_del.append(rid)
-                arm_reactant = 'undefined'
+                pmet_sid = 'undefined'
+                # support iso and arm reactions after reaction has been split (i.e. <base_rid>_REV)
+                postfix = '' if re.search('_REV$', rid) is None else '_REV'
+                base_rid = re.sub('_REV$', '', rid)
                 if create_arm is True:
                     # add pseudo metabolite to connect iso reactions with arm reaction
-                    first_product = sorted(orig_r.products)[0]
-                    cid = self.species[first_product].compartment
-                    react_id = re.sub('^R_', '', rid)
-                    pmet_sid = f'M_pmet_{react_id}_{cid}'
-                    pmet_name = f'pseudo metabolite for arm reaction of {react_id}'
+                    product_srefs = {sid: stoic for sid, stoic in orig_r.products.items()
+                                     if re.match('C_', sid) is None}
+                    cid = self.species[sorted(list(product_srefs))[0]].compartment
+
+                    ridx = re.sub('^R_', '', base_rid)
+                    pmet_sid = f'M_pmet_{ridx}_{cid}'
+                    pmet_name = f'pseudo metabolite for arm reaction of {ridx}'
                     pmet_dict = {'id': pmet_sid, 'name': pmet_name, 'compartment': cid,
                                  'hasOnlySubstanceUnits': False, 'boundaryCondition': False, 'constant': False}
                     self.species[pmet_sid] = SbmlSpecies(pd.Series(pmet_dict, name=pmet_sid))
 
                     # add arm reaction to control overall flux, based on original reaction
-                    arm_rid = f'{rid}_arm'
+                    arm_rid = f'{base_rid}_arm{postfix}'
                     arm_r = SbmlReaction(pd.Series(orig_r_dict, name=arm_rid), self.species)
                     arm_r.orig_rid = rid
 
@@ -1178,14 +1192,17 @@ class XbaModel:
                         arm_r.name += ' (arm)'
                     if hasattr(arm_r, 'metaid'):
                         arm_r.metaid = f'meta_{arm_rid}'
-                    arm_reactant = {pmet_sid: 1.0}
-                    arm_r.reactants = arm_reactant
+
+                    # arm reaction is connected behind the enzyme reactions. It produces the original products
+                    arm_r.reactants = {pmet_sid: 1.0}
+                    arm_r.products = product_srefs
+
                     del arm_r.gene_product_assoc
                     reactions_to_add[arm_rid] = arm_r
 
                 # add iso reactions, one for each isoenzyme
                 for idx, eid in enumerate(orig_r.enzymes):
-                    iso_rid = f'{rid}_iso{idx+1}'
+                    iso_rid = f'{base_rid}_iso{idx+1}{postfix}'
                     iso_r = SbmlReaction(pd.Series(orig_r_dict, name=iso_rid), self.species)
                     iso_r.orig_rid = rid
                     if hasattr(iso_r, 'name'):
@@ -1193,17 +1210,18 @@ class XbaModel:
                     if hasattr(iso_r, 'metaid'):
                         iso_r.metaid = f'meta_{iso_rid}'
                     if create_arm is True:
-                        iso_r.products = arm_reactant
+                        # overwrite the products. Replace by pseudo metabolite, but retain any constraints
+                        constraint_refs = {sid: stoic for sid, stoic in orig_r.products.items() if re.match('C_', sid)}
+                        iso_r.products = {pmet_sid: 1.0} | constraint_refs
                     enz = self.enzymes[eid]
-                    gpa = ' and '.join(sorted([self.uid2gp[self.locus2uid[locus]]
-                                               for locus in enz.composition]))
+                    gpa = ' and '.join(sorted([self.uid2gp[self.locus2uid[locus]] for locus in enz.composition]))
                     if ' and ' in gpa:
                         gpa = '(' + gpa + ')'
                     iso_r.gene_product_assoc = gpa
                     iso_r.enzymes = [eid]
-                    iso_r.kcatf = [orig_r.kcatf[idx]]
+                    iso_r.kcatf = [orig_r.kcatf[idx]] if orig_r.kcatf is not None else None
                     if orig_r.reversible:
-                        iso_r.kcatr = [orig_r.kcatr[idx]]
+                        iso_r.kcatr = [orig_r.kcatr[idx]] if orig_r.kcatr is not None else None
                     reactions_to_add[iso_rid] = iso_r
 
         # add arm and iso reactions to the model
@@ -1217,7 +1235,7 @@ class XbaModel:
     def make_irreversible(self):
         """Split enzyme catalyzed reactions into irreversible reactions.
 
-        for enzyme catalyzed reactions that are already irreversilbe,
+        for enzyme catalyzed reactions that are already irreversible,
         check that flux bounds are >= 0.0 and configure kcat value from
         kcatsf
 
@@ -1225,32 +1243,31 @@ class XbaModel:
         with suffic '_REV', switch reactants/products and inverse flux
         bounds (create new flux bound parameters if required).
 
-        Result: all enzyme catalyzed reactions are made irreversilble.
-        Prio reversible reactions will be split.
+        Result: all enzyme catalyzed reactions are made irreversible.
+        Reversible reactions of the original model will be split in fwd/rev
         Flux bound are checked and reversible flag set to 'False'
         """
+        zero_flux_bnd_pid = self.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'zero_flux_bound')
+
         # Note: self.reactions gets modified in the loop, therefore iterate though initial list of reactions
         rids = list(self.reactions)
         for rid in rids:
             r = self.reactions[rid]
             if len(r.enzymes) > 0 or rid.endswith('arm'):
                 if r.reversible:
-                    rev_r = self.split_reversible_reaction(r)
-                    # set kcat value for irreversible reaction
                     assert(len(r.enzymes) <= 1)
-                    if len(r.enzymes) == 1:
-                        r.kcat = r.kcatf[0]
-                        rev_r.kcat = rev_r.kcatf[0]
+                    rev_r = self.split_reversible_reaction(r)
+                    # arm reactions have no enzymes and no kcats
+                    r.kcat = r.kcatf[0] if r.kcatf is not None else None
+                    rev_r.kcat = rev_r.kcatf[0] if rev_r.kcatf is not None else None
                 else:
                     # ensure that the irreversible reaction has correct flux bounds
-                    lb = max(0.0, self.parameters[r.fbc_lower_bound].value)
-                    ub = max(0.0, self.parameters[r.fbc_upper_bound].value)
-                    lb_pid = self.get_fbc_bnd_pid(lb, self.flux_uid, f'fbc_{rid}_lb')
-                    ub_pid = self.get_fbc_bnd_pid(ub, self.flux_uid, f'fbc_{rid}_ub')
-                    r.modify_bounds({'lb': lb_pid, 'ub': ub_pid})
+                    if self.parameters[r.fbc_lower_bound].value < 0.0:
+                        r.modify_bounds({'lb': zero_flux_bnd_pid})
+                    if self.parameters[r.fbc_upper_bound].value < 0.0:
+                        r.modify_bounds({'ub': zero_flux_bnd_pid})
                     assert (len(r.enzymes) <= 1)
-                    if len(r.enzymes) == 1:
-                        r.kcat = r.kcatf[0]
+                    r.kcat = r.kcatf[0] if r.kcatf is not None else None
 
     def reaction_enzyme_coupling(self):
         """Couple reactions with enzyme/protein requirement via kcats.
@@ -1263,7 +1280,7 @@ class XbaModel:
         """
         for r in self.reactions.values():
             assert (len(r.enzymes) <= 1)
-            if len(r.enzymes) == 1:
+            if len(r.enzymes) == 1 and r.kcat is not None:
                 kcat_per_h = r.kcat * 3600.0
                 enz = self.enzymes[r.enzymes[0]]
                 for locus, stoic in enz.composition.items():

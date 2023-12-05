@@ -33,7 +33,7 @@ class SbmlSBase(ABC):
             data['sboterm'] = self.sboterm
         if hasattr(self, 'metaid'):
             data['metaid'] = self.metaid
-        if hasattr(self, 'miriamAnnotation'):
+        if hasattr(self, 'miriam_annotation'):
             data['miriamAnnotation'] = self.miriam_annotation
         if hasattr(self, 'notes'):
             data['notes'] = self.notes

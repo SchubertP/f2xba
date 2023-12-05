@@ -154,7 +154,7 @@ class EcModel:
     def _add_moment_protein_species(self):
         """Add protein species to MOMENT model.
 
-        Execute before makeing model irreversilbe.
+        Execute before making model irreversilbe.
 
         In MOMENT promiscuous enzymes can catalyze several reactions in parallel
         To implement this constraint, we add for each catalzyed (iso)reaction
@@ -188,6 +188,11 @@ class EcModel:
 
         Other isoenzymes get deleted and gpa updated.
 
+        Integration with Thermodynamic FBA (TFA):
+            TFA splits TD related reations in fwd/rev (_REV)
+            TFA also split reactions that in base model are not reversible
+            i.e. we may have irreversible '<rid>_REV' with no kcat
+
         Selection is based on molecular weight and turnover number.
         Select enzyme with minimal MW/kcat.
 
@@ -206,15 +211,21 @@ class EcModel:
                     directional_rs.append(rev_r)
 
                 for dir_r in directional_rs:
-                    idx = np.argmin([self.model.enzymes[e].mw / kcat for e, kcat in zip(dir_r.enzymes, dir_r.kcatf)])
-                    eid = dir_r.enzymes[idx]
-                    gpa = ' and '.join(sorted([self.model.uid2gp[self.model.locus2uid[locus]]
-                                               for locus in self.model.enzymes[eid].composition]))
-                    if ' and ' in gpa:
-                        gpa = '(' + gpa + ')'
-                    dir_r.enzymes = [dir_r.enzymes[idx]]
-                    dir_r.kcatf = [dir_r.kcatf[idx]]
-                    dir_r.gene_product_assoc = gpa
+                    # consider reactions with undefined kcatf (due to TD integration)
+                    if dir_r.kcatf is not None:
+                        idx = np.argmin([self.model.enzymes[e].mw / kcat
+                                         for e, kcat in zip(dir_r.enzymes, dir_r.kcatf)])
+                        eid = dir_r.enzymes[idx]
+                        gpa = ' and '.join(sorted([self.model.uid2gp[self.model.locus2uid[locus]]
+                                                   for locus in self.model.enzymes[eid].composition]))
+                        if ' and ' in gpa:
+                            gpa = '(' + gpa + ')'
+                        dir_r.enzymes = [dir_r.enzymes[idx]]
+                        dir_r.kcatf = [dir_r.kcatf[idx]]
+                        dir_r.gene_product_assoc = gpa
+                    else:
+                        dir_r.enzymes = []
+                        dir_r.set_gpa('')
 
     def _add_total_protein_constraint(self, total_protein):
         """add total protein constraint to the enzyme constraint model.
@@ -237,7 +248,7 @@ class EcModel:
 
         # add total protein pool exchange reaction
         protein_vars = {}
-        draw_rid = f'R_conc_active_protein'
+        draw_rid = f'V_PC_total_active'
         draw_name = f'total concentration active protein'
         lb_pid = self.model.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'conc_0_bound')
         ub_pid = self.model.get_fbc_bnd_pid(total_protein, 'mmol_per_gDW', 'conc_active_protein')
@@ -246,7 +257,7 @@ class EcModel:
         # add protein drain reactions - supporting MOMENT with specific protein split in protein species per reaction
         ub_pid = self.model.get_fbc_bnd_pid(1000.0, 'mmol_per_gDW', 'conc_default_ub')
         for uid, p in self.model.proteins.items():
-            draw_rid = f'R_conc_prot_{uid}'
+            draw_rid = f'V_PC_{uid}'
             draw_name = f'conc_prot_{uid}'
             products = ' + '.join([sid for sid in p.linked_sids])
             reaction_string = f'{p.mw / 1000.0} {pool_sid} => {products}'
