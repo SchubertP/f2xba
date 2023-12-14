@@ -37,7 +37,7 @@ class RbaMacromolecules:
             print(f'{self.type} not imported!')
 
     def add_macromolecule(self, mm_id, c_name, composition):
-        """Add a macromolecule
+        """Add a macromolecule and determine weight.
 
         :param mm_id: id of macromolecule
         :type mm_id: str
@@ -48,9 +48,12 @@ class RbaMacromolecules:
         :return:
         """
         if mm_id not in self.macromolecules:
-            self.macromolecules[mm_id] = RbaMacromolecule(mm_id, compartment=c_name, composition=composition)
+            mm = RbaMacromolecule(mm_id, compartment=c_name, composition=composition)
+            for comp_id, stoic in mm.composition.items():
+                mm.weight += stoic * self.components[comp_id].weight
+            self.macromolecules[mm_id] = mm
 
-    def from_xba(self, rba_params, xba_model, c_names):
+    def from_xba(self, rba_params, xba_model, cid_mappings):
         """Configure macromolecules.
 
         Components get configured based on RBA parameters
@@ -66,15 +69,15 @@ class RbaMacromolecules:
         :type rba_params: dict of pandas DataFrames
         :param xba_model: xba model based on genome scale metabolic model
         :type xba_model: Class XbaModel
-        :param c_names: dictionary of specific compartment names
-        :type c_names: dict
+        :param cid_mappings: dictionary of specific compartment names
+        :type cid_mappings: dict
         """
         df_pmaps_data = rba_params['processing_maps']
         df_mach_data = rba_params['machineries']
         df_trna_data = rba_params['trna2locus']
         df_components = df_pmaps_data[df_pmaps_data['macromolecules'] == self.type]
-        cytoplasm_name = c_names['cytoplasm_name']
-        cid2name = c_names['cid2name']
+        cytoplasm_cid = cid_mappings['cytoplasm_cid']
+        rcid2cid = cid_mappings['rcid2cid']
 
         # configure components
         if self.type in ['dna', 'rnas']:
@@ -89,6 +92,7 @@ class RbaMacromolecules:
                 if cmp_id != 'cofactor':
                     name = row['name'] if type(row['name']) is str else None
                     self.components[cmp_id] = RbaComponent(cmp_id, name=name, c_type='amino_acid', weight=row['weight'])
+            # TODO: move cofactor to enzyme level for SBML model
             for p in xba_model.proteins.values():
                 for sid in p.cofactors:
                     if sid not in self.components:
@@ -100,33 +104,37 @@ class RbaMacromolecules:
             # add DNA composition using average DNA composition
             gc = xba_model.ncbi_data.get_gc_content()
             rel_conc = {'G': gc / 2.0, 'C': gc / 2.0, 'A': (1.0 - gc) / 2.0, 'T': (1.0 - gc) / 2.0}
-            self.macromolecules['dna'] = RbaMacromolecule('dna', compartment=cytoplasm_name, composition=rel_conc)
+            self.macromolecules['dna'] = RbaMacromolecule('dna', compartment=cytoplasm_cid, composition=rel_conc)
 
         if self.type == 'rnas':
             # add mRNA using average mRNA composition
             mrna_avg_comp = xba_model.ncbi_data.get_mrna_avg_composition()
-            self.macromolecules['mrna'] = RbaMacromolecule('mrna', compartment=cytoplasm_name,
+            self.macromolecules['mrna'] = RbaMacromolecule('mrna', compartment=cytoplasm_cid,
                                                            composition=mrna_avg_comp)
             # add tRNAs
             for trna_id, row in df_trna_data.iterrows():
-                c_name = cid2name[row['compartment']]
+                cid = rcid2cid[row['compartment']]
                 record = xba_model.ncbi_data.locus2record[row['locus']]
-                self.macromolecules[trna_id] = RbaMacromolecule(trna_id, compartment=c_name,
+                self.macromolecules[trna_id] = RbaMacromolecule(trna_id, compartment=cid,
                                                                 composition=record.composition)
             # add rRNAs
             for _pm, row in df_mach_data[df_mach_data['macromolecules'] == 'rnas'].iterrows():
-                c_name = cid2name[row['compartment']]
+                cid = rcid2cid[row['compartment']]
                 record = xba_model.ncbi_data.locus2record[row['locus']]
                 rrna_id = row['id']
-                self.macromolecules[rrna_id] = RbaMacromolecule(rrna_id, compartment=c_name,
+                self.macromolecules[rrna_id] = RbaMacromolecule(rrna_id, compartment=cid,
                                                                 composition=record.composition)
-
         if self.type == 'proteins':
             for p in xba_model.proteins.values():
                 locus = p.locus
-                c_name = cid2name[p.compartment]
-                self.macromolecules[locus] = RbaMacromolecule(locus, compartment=c_name,
+                cid = rcid2cid[p.compartment]
+                self.macromolecules[locus] = RbaMacromolecule(locus, compartment=cid,
                                                               composition=p.aa_composition | p.cofactors)
+
+        # calulate macromolecular weight
+        for mm in self.macromolecules.values():
+            for comp_id, stoic in mm.composition.items():
+                mm.weight += stoic * self.components[comp_id].weight
 
         print(f'{len(self.macromolecules):4d} macromolecules ({len(self.components)} components) in {self.type} ')
 
@@ -219,6 +227,8 @@ class RbaMacromolecule:
         self.id = mmid
         self.compartment = compartment
         self.composition = composition if type(composition) is dict else {}
+        self.weight = 0.0
+        self.sid = None
 
     @staticmethod
     def import_xml(macromolecules):

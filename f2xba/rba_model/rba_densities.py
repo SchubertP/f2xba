@@ -35,6 +35,7 @@ class RbaDensities:
     def from_xba(self, rba_params, parameters):
         """Configure Density Constraints based on RBA sepecific parameters.
 
+        used: rba_params['compartments']
         functions and aggregates are added to Parameters
 
         :param rba_params: RBA model specific parametrization
@@ -48,7 +49,7 @@ class RbaDensities:
             func = row.get('density_constraint_function', np.nan)
             agg = row.get('density_constraint_aggregate', np.nan)
             p_name = parameters.create_parameter(f'{c_name}_density', constant, func, agg)
-            if type(p_name) is str:
+            if p_name:
                 target_value = RbaTargetValue.get_target_value(value_type, p_name)
                 self.densities[c_name] = RbaDensity(c_name, target_value)
         print(f'{len(self.densities):4d} density constraints added')
@@ -92,8 +93,8 @@ class RbaDensity:
     def __init__(self, cid, target_value=None):
         self.id = cid
         self.target_value = target_value
+        self.sid = None
 
-    @staticmethod
     def import_xml(target_densities):
         data = {}
         for target_density in target_densities.findall('targetDensity'):

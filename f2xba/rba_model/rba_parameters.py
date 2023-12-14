@@ -47,11 +47,12 @@ class RbaParameters:
 
         :param f_name_base: base name of parameter name
         :type f_name_base: str
-        :param constant:
-        :param func:
-        :type func:
-        :param agg:
-        :type agg:
+        :param constant: constant parameter
+        :type constant: int/float or nan
+        :param func: function definition with required keywords
+        :type func: str or nan
+        :param agg: comma separated list if function names
+        :type agg: str or nan
         :return: parameter name or None
         :rtype: str or Name
         """
@@ -106,6 +107,25 @@ class RbaParameters:
 
     def add_aggregate(self, agg_name, f_names):
         self.aggregates[agg_name] = RbaAggregate(agg_name, agg_type='multiplication', f_names=f_names)
+
+    def get_values(self, params):
+        """Get function and aggregate values
+        :param params: variables with their values
+        :type params: dict (keys: variable id / str, val: value / float)
+        :return: parameter values values determined based on params
+        :rtype: dict (key: function/aggregate id / str, val value / float)
+        """
+        for f in self.functions.values():
+            f.set_value(params)
+        for agg in self.aggregates.values():
+            agg.set_value(self.functions)
+
+        parameter_values = {}
+        for fid, f in self.functions.items():
+            parameter_values[fid] = f.value
+        for agg_id, agg in self.aggregates.items():
+            parameter_values[agg_id] = agg.value
+        return parameter_values
 
     def export_xml(self, model_dir):
 
@@ -162,6 +182,7 @@ class RbaFunction:
         self.type = f_type
         self.variable = f_variable
         self.parameters = f_params if type(f_params) is dict else {}
+        self.value = 0.0
 
     @staticmethod
     def import_xml(functions):
@@ -202,6 +223,37 @@ class RbaFunction:
                 SubElement(parameters, 'parameter', {'id': parameter, 'value': str(value)})
         return function
 
+    def set_value(self, params):
+        """Set function value based parameters provided.
+
+        :param params: variables with their values
+        :type params: dict (keys: variable id / str, val: value / float)
+        """
+        value = 0.0
+        param_val = params.get(self.variable, 0.0)
+        if self.type == 'indicator':
+            value = 1 if self.parameters["X_MIN"] <= param_val <= self.parameters["X_MAX"] else 0
+        else:
+            if 'X_MIN' in self.parameters:
+                param_val = max(param_val, self.parameters['X_MIN'])
+            if 'X_MAX' in self.parameters:
+                param_val = min(param_val, self.parameters['X_MAX'])
+
+            if self.type == 'constant':
+                value = self.parameters["CONSTANT"]
+            elif self.type == 'linear':
+                value = self.parameters["LINEAR_CONSTANT"] + param_val * self.parameters["LINEAR_COEF"]
+            elif self.type == 'michaelisMenten':
+                value = self.parameters["kmax"] * param_val / (self.parameters["Km"] + param_val)
+            elif self.type == 'exponential':
+                value = np.exp(self.parameters["RATE"] * param_val)
+
+            if 'Y_MIN' in self.parameters:
+                value = max(value, self.parameters['Y_MIN'])
+            if 'Y_MAX' in self.parameters:
+                value = min(value, self.parameters['Y_MAX'])
+        self.value = round(value, 8)
+
     def get_value_info(self):
         """Convert Function Configuration into a string representation
 
@@ -237,6 +289,7 @@ class RbaAggregate:
         self.id = aggid
         self.type = agg_type
         self.functions = f_names if type(f_names) is list else []
+        self.value = 1.0
 
     @staticmethod
     def import_xml(aggregates):
@@ -270,6 +323,12 @@ class RbaAggregate:
         for function_ref in self.functions:
             SubElement(function_refs, 'functionReference', {'function': function_ref})
         return aggregate
+
+    def set_value(self, functions):
+        value = 1.0
+        for fid in self.functions:
+            value *= functions[fid].value
+        self.value = round(value, 8)
 
     def get_value_info(self):
         return f'aggregate: {", ".join(self.functions)}'

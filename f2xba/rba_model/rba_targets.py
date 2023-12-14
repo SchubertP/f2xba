@@ -121,10 +121,10 @@ class RbaTargets:
     def from_xba(self, rba_params, xba_model, parameters):
         """Configure Target Constraints based on RBA specific parameters.
 
-        used rba_parameters['targets']
+        used: rba_parameters['targets']
         functions and aggregates are added to Parameters
 
-        concentration targets for biomass components can be generated automatially.
+        concentration targets for biomass components can be generated automatically.
         As 'target' provide biomass reaction id and, comma separated the type the component
         ['metabolites', 'amino_acids', 'dna'], e.g. 'R_BIOMASS_Ec_iJO1366_WT_53p95M, metabolites'
         in 'target_constant' provide a scaling factor.
@@ -150,9 +150,9 @@ class RbaTargets:
 
                 # special treatment of biomass related concentration targets
                 if (',' in target) and (np.isfinite(constant)):
-                    rid, component_type = [item.strip() for item in target.split(',')]
-                    assert(rid in xba_model.reactions)
-                    srefs = self.get_biomass_composition(rid, component_type, rba_params, xba_model)
+                    biomass_rid, component_type = [item.strip() for item in target.split(',')]
+                    assert(biomass_rid in xba_model.reactions)
+                    srefs = self.get_biomass_composition(biomass_rid, component_type, rba_params, xba_model)
                     for sid, stoic in srefs.items():
                         p_name = parameters.create_parameter(f'{sid}_{target_type}_auto_target', stoic * constant,
                                                              np.nan, np.nan)
@@ -161,7 +161,7 @@ class RbaTargets:
                         rba_tg.add_target(sid, target_type, target_value)
                 else:
                     p_name = parameters.create_parameter(f'{target}_{target_type}_target', constant, func, agg)
-                    if type(p_name) is str:
+                    if p_name:
                         n_targets += 1
                         target_value = RbaTargetValue.get_target_value(value_type, p_name)
                         rba_tg.add_target(target, target_type, target_value)

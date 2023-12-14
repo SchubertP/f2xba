@@ -81,6 +81,7 @@ class XbaModel:
             self.fbc_flux_range[0] = min(self.fbc_flux_range[0], self.parameters[r.fbc_lower_bound].value)
             self.fbc_flux_range[1] = max(self.fbc_flux_range[1], self.parameters[r.fbc_upper_bound].value)
 
+        self.user_chebi2sid = {}
         self.enzymes = {}
         self.proteins = {}
         self.ncbi_data = None
@@ -196,7 +197,10 @@ class XbaModel:
         # map cofactors #
         #################
         if 'chebi2sid' in xba_params:
-            count = self.map_cofactors(xba_params['chebi2sid'])
+            self.user_chebi2sid = {str(chebi): sid for chebi, sid in xba_params['chebi2sid']['sid'].items()
+                                   if sid in self.species}
+        if general_params.get('cofactor_flag', False) is True:
+            count = self.map_cofactors()
             print(f'{count:4d} cofactors mapped to species ids')
 
         #####################
@@ -507,6 +511,19 @@ class XbaModel:
                 data['metaid'] = f'meta_{cid}'
             self.compartments[cid] = SbmlCompartment(pd.Series(data, name=cid))
 
+    def add_objectives(self, objectives_config):
+        """Add (FBC) objectives to the model.
+
+        objective_config contains for each new objetive id its specific
+        configuration. Instead of providing 'fluxObjectives' (str) one can provide
+        'coefficients' (dict) directly.
+
+        :param objectives_config: objectives configurations
+        :type objectives_config: dict of dict
+        """
+        for obj_id, data in objectives_config.items():
+            self.objectives[obj_id] = FbcObjective(pd.Series(data, name=obj_id))
+
     def modify_uniprot_loci_old(self, modify_loci):
         """Modify locus information for selected uniprot ids.
 
@@ -591,6 +608,30 @@ class XbaModel:
         for r in self.reactions.values():
             r.correct_reversibility_old(self.parameters, exclude_ex_reactions=True)
 
+    def del_components(self, component, ids):
+        """Delete / remove components from the model.
+
+        We are not cleaning up yet any leftovers, e.g. species no longer requried
+
+        :param component: component type, e.g. 'species', 'reactions', etc.
+        :type component: str
+        :param ids: list of component ids to be deleted
+        :type ids: list of str
+        """
+        component_mapping = {'species': self.species, 'reactions': self.reactions,
+                             'proteins': self.proteins, 'enzymes': self.enzymes,
+                             'objectives': self.objectives}
+
+        if component in component_mapping:
+            count = 0
+            for component_id in ids:
+                if component_id in component_mapping[component]:
+                    del component_mapping[component][component_id]
+                    count += 1
+            print(f'{count:4d} {component} removed')
+        else:
+            print(f'component type {component} not yet supported')
+
     #######################
     # PROTEIN COMPOSITION #
     #######################
@@ -670,7 +711,7 @@ class XbaModel:
         self.locus2uid = {gp.label: gp.uid for gp in self.gps.values()}
         return n_added
 
-    def map_cofactors(self, df_chebi2sid=None):
+    def map_cofactors(self):
         """Map protein cofactors to species ids.
 
         Cofactors are retrieved from Uniprot.
@@ -682,16 +723,9 @@ class XbaModel:
         - mapping table in df_chebi2sid provides a direct mapping to sid,
           required for cofactor CHEBI ids that can not be mapped to model species
 
-        :param df_chebi2sid: mapping of chebi id to species ids
-        :type df_chebi2sid: pandas DataFrame (index: chebi id, (str or int), or None
         :return: number of mapped cofactors
         :rtype: int
         """
-        user_chebi2sid = {}
-        if df_chebi2sid is not None:
-            user_chebi2sid = {str(chebi): sid for chebi, sid in df_chebi2sid['sid'].items()
-                              if sid in self.species}
-
         # get mapping chebi id to species for model species
         chebi2sid = {}
         for sid, s in self.species.items():
@@ -707,8 +741,8 @@ class XbaModel:
             if len(p.up_cofactors) > 0:
                 for up_cf, stoic in p.up_cofactors.items():
                     chebi = p.up_cofactor2chebi[up_cf]
-                    if chebi in user_chebi2sid:
-                        selected_sid = user_chebi2sid[chebi]
+                    if chebi in self.user_chebi2sid:
+                        selected_sid = self.user_chebi2sid[chebi]
                         if selected_sid not in p.cofactors:
                             p.cofactors[selected_sid] = stoic
                             n_cf_mapped += 1
@@ -1055,10 +1089,19 @@ class XbaModel:
 
         # if parameter id does not exist, first create it
         if uid not in self.fbc_shared_pids:
-            if uid == 'mmol_per_gDW':
-                u_dict = {'id': uid, 'name': 'Millimoles per gram (dry weight)', 'metaid': f'meta_{uid}',
+            if uid == 'umol_per_gDW':
+                u_dict = {'id': uid, 'name': 'micromoles per gram (dry weight)', 'metaid': f'meta_{uid}',
+                          'units': ('kind=mole, exp=1.0, scale=-6, mult=1.0; '
+                                    'kind=gram, exp=-1.0, scale=0, mult=1.0')}
+            elif uid == 'mmol_per_gDW':
+                u_dict = {'id': uid, 'name': 'millimoles per gram (dry weight)', 'metaid': f'meta_{uid}',
                           'units': ('kind=mole, exp=1.0, scale=-3, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0')}
+            elif uid == 'umol_per_gDWh':
+                u_dict = {'id': uid, 'name': 'micromoles per gram (dry weight) per hour', 'metaid': f'meta_{uid}',
+                          'units': ('kind=mole, exp=1.0, scale=-6, mult=1.0; '
+                                    'kind=gram, exp=-1.0, scale=0, mult=1.0; '
+                                    'kind=second, exp=-1.0, scale=0, mult=3600.0')}
             elif uid == 'kJ_per_mol':
                 u_dict = {'id': uid, 'name': 'kilo joule per mole', 'metaid': f'meta_{uid}',
                           'units': ('kind=joule, exp=1.0, scale=3, mult=1.0; '

@@ -59,7 +59,7 @@ class RbaProcesses:
         df_pmaps_data = rba_params['processing_maps']
         df_proc_data = rba_params['processes']
         df_mach_data = rba_params['machineries']
-        cytoplasm_name = rba_model.c_names['cytoplasm_name']
+        cytoplasm_cid = rba_model.cid_mappings['cytoplasm_cid']
 
         pmap2set = {}
         # Process data
@@ -76,7 +76,7 @@ class RbaProcesses:
             agg = row.get('capacity_aggregate', np.nan)
             p_name = rba_model.parameters.create_parameter(f'{proc_id}_capacity', constant, func, agg)
             machinery = {}
-            if type(p_name) is str:
+            if p_name:
                 machinery['capacity'] = RbaTargetValue.get_target_value('value', p_name)
                 machinery['reactants'] = {}
                 machinery['products'] = {}
@@ -106,7 +106,7 @@ class RbaProcesses:
                             if p.has_signal_peptide is True:
                                 filtered_list.append(locus)
                         else:
-                            if rba_model.proteins.macromolecules[locus].compartment != cytoplasm_name:
+                            if rba_model.proteins.macromolecules[locus].compartment != cytoplasm_cid:
                                 filtered_list.append(locus)
                     inputs = filtered_list
 
@@ -265,6 +265,7 @@ class RbaProcess:
         self.machinery = machinery if type(machinery) is dict else {}
         self.productions = productions if type(productions) is dict else {}
         self.degradations = degradations if type(degradations) is dict else {}
+        self.sid = None
 
     @staticmethod
     def import_xml(processes):

@@ -23,8 +23,8 @@ class SbmlReaction(SbmlSBase):
         - mandatory attributes:
             - Series.name: str - reaction id
             - 'reversible': bool
-            - 'reactants': str
-            - 'products': str
+            - 'reactants': str 'species=<sid>, stoic=float; ...', or dict {<sid>: float, ...}
+            - 'products': str, or dict
             - 'fbcLowerFluxBound': str - parameter id
             - 'fbcUpperFluxBound': str - parameter id
 
@@ -47,8 +47,14 @@ class SbmlReaction(SbmlSBase):
         """
         super().__init__(s_reaction)
         self.reversible = s_reaction['reversible']
-        self.reactants = self.get_srefs(s_reaction['reactants'])
-        self.products = self.get_srefs(s_reaction['products'])
+        if type(s_reaction['reactants']) is dict:
+            self.reactants = s_reaction['reactants'].copy()
+        else:
+            self.reactants = self.get_srefs(s_reaction['reactants'])
+        if type(s_reaction['products']) is dict:
+            self.products = s_reaction['products'].copy()
+        else:
+            self.products = self.get_srefs(s_reaction['products'])
         self.fbc_lower_bound = s_reaction['fbcLowerFluxBound']
         self.fbc_upper_bound = s_reaction['fbcUpperFluxBound']
         if ('fbcGeneProdAssoc' in s_reaction) and (type(s_reaction['fbcGeneProdAssoc']) == str):
@@ -186,9 +192,10 @@ class SbmlReaction(SbmlSBase):
         :type eids: list of str
         """
         self.enzymes = sorted(eids)
-        self.kcatf = np.zeros(len(self.enzymes))
-        if self.reversible is True:
-            self.kcatr = np.zeros(len(self.enzymes))
+        if len(self.enzymes) > 0:
+            self.kcatf = np.zeros(len(self.enzymes))
+            if self.reversible is True:
+                self.kcatr = np.zeros(len(self.enzymes))
 
     def set_kcat(self, eid, dirxn, kcat):
         """Set kcat value for specified enzyme and reaction direction.

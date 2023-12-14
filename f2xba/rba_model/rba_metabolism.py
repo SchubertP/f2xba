@@ -61,8 +61,8 @@ class RbaMetabolism:
         :param xba_model: xba model based on genome scale metabolic model
         :type xba_model: Class XbaModel
         """
-        for c_name in rba_params['compartments'].index:
-            self.compartments[c_name] = RbaCompartment(c_name)
+        for cid, row in rba_params['compartments'].iterrows():
+            self.compartments[cid] = RbaCompartment(cid, row['name'])
         print(f'{len(self.compartments):4d} compartments')
 
         for sid, s in xba_model.species.items():
@@ -72,7 +72,7 @@ class RbaMetabolism:
 
         for rid, r in xba_model.reactions.items():
             if r.kind != 'exchange' and r.kind != 'biomass':
-                self.reactions[rid] = RbaReaction(rid, r.reversible, r.reactants, r.products)
+                self.reactions[rid] = RbaReaction(rid, r.reversible, r.reactants.copy(), r.products.copy())
         print(f'{len(self.reactions):4d} reactions')
 
     def export_xml(self, model_dir):
@@ -122,8 +122,9 @@ class RbaMetabolism:
 
 class RbaCompartment:
 
-    def __init__(self, cid):
+    def __init__(self, cid, name=None):
         self.id = cid
+        self.name = name
 
     @staticmethod
     def import_xml(compartments):
@@ -190,8 +191,8 @@ class RbaReaction:
     def __init__(self, sid, reversible=True, reactants=None, products=None):
         self.id = sid
         self.reversible = reversible
-        self.reactants = reactants if type(reactants) is dict else {}
-        self.products = products if type(products) is dict else {}
+        self.reactants = reactants if reactants is not None else None
+        self.products = products if products is not None else None
 
     @staticmethod
     def import_xml(reactions):

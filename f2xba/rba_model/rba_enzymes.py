@@ -4,10 +4,13 @@ Peter Schubert, CCB, HHU Duesseldorf, December 2022
 """
 
 import os
+import re
 import pandas as pd
 from xml.etree.ElementTree import parse, ElementTree, Element, SubElement, indent
 
 from ..utils.rba_utils import get_species_refs_from_xml, get_species_refs_from_str
+
+DEFAULT_ENZ_SATURATION = .55
 
 
 class RbaEnzymes:
@@ -61,13 +64,14 @@ class RbaEnzymes:
 
         default_kcats = {kcat: f'default_kcat_{round(kcat, 1)}' for kcat, count in kcat_counts.items()
                          if count >= min_count}
+
         for kcat, p_name in default_kcats.items():
             f_params = {'type': 'constant', 'variable': 'growth_rate',
                         'params': {'CONSTANT': kcat * avg_enz_sat * 3600.0}}
             parameters.add_function(p_name, f_params)
         return default_kcats
 
-    def from_xba(self, rba_params, xba_model, parameters, c_names, medium):
+    def from_xba(self, general_params, xba_model, parameters, cid_mappings, medium):
         """Configure Density Constraints based on RBA sepecific parameters.
 
         functions and aggregates are added to Parameters
@@ -75,88 +79,58 @@ class RbaEnzymes:
         a hight occurance get shared function parameters, otherwise
         parameter name is constructed from enzyme name
 
-        kcat is converted to and efficiency considering average enzyme saturation
+        kcat is converted to an efficiency considering average enzyme saturation
 
-        :param rba_params: RBA model specific parametrization
-        :type rba_params: dict of pandas DataFrames
+        :param general_params: gemeral RBA parameters loaded from file
+        :type general_params: dict
         :param xba_model: xba model based on genome scale metabolic model
         :type xba_model: Class XbaModel
         :param parameters: RBA model parameters
         :type parameters: Class RbaParameters
-        :param c_names: dictionary of specific compartment names
-        :type c_names: dict
+        :param cid_mappings: dictionary of specific compartment id mappings
+        :type cid_mappings: dict
         :param medium: Medium definition
         :type medium: class RbaMedium
         """
-        avg_enz_sat = .55
-        if 'avg_enz_sat' in rba_params['general'].index:
-            avg_enz_sat = rba_params['general'].at['avg_enz_sat', 'value']
+        avg_enz_sat = general_params.get('avg_enz_sat', DEFAULT_ENZ_SATURATION)
         default_kcats = self.add_default_kcats(xba_model, parameters, avg_enz_sat)
-
-        uptake_cids = c_names['uptake_cids']
-        medium_cid = c_names['medium_cid']
+        uptake_rcids = cid_mappings['uptake_rcids']
+        medium_cid = cid_mappings['medium_cid']
 
         # identify medium related species for saturation terms (once medium is set)
-        # this is a bit dirty
         saturation_sids = set()
         for mid in medium.concentrations:
             if f'{mid}_{medium_cid}' in xba_model.species:
                 saturation_sids.add(f'{mid}_{medium_cid}')
-            elif f'{mid}_{xba_model.external_compartment}' in xba_model.species:
-                saturation_sids.add(f'{mid}_{xba_model.external_compartment}')
 
         for rid, r in xba_model.reactions.items():
-            eid = f'{rid}_enzyme'
-            if len(r.enzymes) == 1:
-                e = xba_model.enzymes[r.enzymes[0]]
-
-                # determine forward efficiency, but set to zero, if reaction in GEM is blocked (fbcUb = 0.0)
-                kcat = r.kcatf[0]
-                if xba_model.parameters[r.fbc_upper_bound].value == 0.0:
-                    kcat = 0.0
-                if kcat in default_kcats:
-                    eff_f = default_kcats[kcat]
-                else:
-                    eff_f = f'{rid}_fwd_eff'
-                    f_params = {'type': 'constant', 'variable': 'growth_rate',
-                                'params': {'CONSTANT': kcat * avg_enz_sat * 3600.0}}
-                    parameters.add_function(eff_f, f_params)
-
-                # in case of medium uptake, create an aggregate with michaelisMenten saturation term
-                # using default km/kcat values
-                if r.compartment in uptake_cids:
-                    f_names = []
-                    for sid in r.reactants:
-                        if sid in saturation_sids:
-                            f_name = f'saturation_{sid}'
-                            if f_name not in parameters.functions:
-                                f_params = {'type': 'michaelisMenten', 'variable': sid,
-                                            'params': {'kmax': 1.0, 'Km': 0.8}}
-                                parameters.add_function(f_name, f_params)
-                            f_names.append(f_name)
-                    if len(f_names) > 0:
-                        f_names.append(eff_f)
-                        agg_name = f'{rid}_fwd_eff_agg'
-                        parameters.add_aggregate(agg_name, f_names)
-                        eff_f = agg_name
-
-                # determine reverse efficiency
-                eff_r = parameters.f_name_zero
-                if r.reversible is True:
-                    kcat = r.kcatr[0]
-                    if xba_model.parameters[r.fbc_lower_bound].value == 0.0:
-                        kcat = 0.0
-                    if kcat in default_kcats:
-                        eff_r = default_kcats[kcat]
+            fids = {}
+            ridx = re.sub('^R_', '', rid)
+            eid = f'{ridx}_enzyme'
+            composition = {}
+            if len(r.enzymes) > 0:
+                assert (len(r.enzymes) == 1)
+                composition = xba_model.enzymes[r.enzymes[0]].composition
+                kcats = {'fwd': r.kcatf[0] if r.kcatf is not None else None,
+                         'rev': r.kcatr[0] if r.kcatr is not None else None}
+                for r_dir, kcat in kcats.items():
+                    if kcat is not None:
+                        if kcat in default_kcats:
+                            fid = default_kcats[kcat]
+                        else:
+                            fid = f'{ridx}_{r_dir}_eff'
+                            f_params = {'type': 'constant', 'variable': 'growth_rate',
+                                        'params': {'CONSTANT': kcat * avg_enz_sat * 3600.0}}
+                            parameters.add_function(fid, f_params)
                     else:
-                        eff_r = f'{rid}_rev_eff'
-                        f_params = {'type': 'constant', 'variable': 'growth_rate',
-                                    'params': {'CONSTANT': kcat * avg_enz_sat * 3600.0}}
-                        parameters.add_function(eff_r, f_params)
+                        fid = parameters.f_name_zero
 
-                    if r.compartment in uptake_cids:
+                    # in case of medium uptake, create an aggregate with michaelisMenten saturation term
+                    #   using default km/kcat values
+                    srefs = {'fwd': r.reactants, 'rev': r.products}
+                    if r.compartment in uptake_rcids:
                         f_names = []
-                        for sid in r.products:
+                        for sid in srefs[r_dir]:
                             if sid in saturation_sids:
                                 f_name = f'saturation_{sid}'
                                 if f_name not in parameters.functions:
@@ -165,26 +139,24 @@ class RbaEnzymes:
                                     parameters.add_function(f_name, f_params)
                                 f_names.append(f_name)
                         if len(f_names) > 0:
-                            f_names.append(eff_r)
-                            agg_name = f'{rid}_rev_eff_agg'
+                            f_names.append(fid)
+                            agg_name = f'{ridx}_{r_dir}_eff_agg'
                             parameters.add_aggregate(agg_name, f_names)
-                            eff_r = agg_name
-                self.enzymes[eid] = RbaEnzyme(eid, rid=rid, eff_f=eff_f, eff_r=eff_r, m_reac=e.composition)
+                            fid = agg_name
+                    fids[r_dir] = fid
 
-            # add enzyme for spontaneous reactions
+            # add enzyme for spontaneous reactions (required for RBApy 1.0 to suppress warning messages
             elif r.kind != 'exchange' and r.kind != 'biomass':
-                if xba_model.parameters[r.fbc_upper_bound].value == 0.0:
-                    eff_f = parameters.f_name_zero
-                else:
-                    eff_f = parameters.f_name_spontaneous
+                ub = xba_model.parameters[r.fbc_upper_bound].value
+                fids['fwd'] = parameters.f_name_spontaneous if ub > 0.0 else parameters.f_name_zero
                 if r.reversible is False:
-                    eff_r = parameters.f_name_zero
+                    fids['rev'] = parameters.f_name_zero
                 else:
-                    if xba_model.parameters[r.fbc_lower_bound].value == 0.0:
-                        eff_r = parameters.f_name_zero
-                    else:
-                        eff_r = parameters.f_name_spontaneous
-                self.enzymes[eid] = RbaEnzyme(eid, rid=rid, eff_f=eff_f, eff_r=eff_r)
+                    lb = xba_model.parameters[r.fbc_lower_bound].value
+                    fids['rev'] = parameters.f_name_spontaneous if lb < 0.0 else parameters.f_name_zero
+
+            if len(fids) == 2:
+                self.enzymes[eid] = RbaEnzyme(eid, rid=rid, eff_f=fids['fwd'], eff_r=fids['rev'], m_reac=composition)
         print(f'{len(self.enzymes):4d} enzymes')
 
     def export_xml(self, model_dir):
@@ -246,6 +218,8 @@ class RbaEnzyme:
         self.zero_cost = zero_cost
         self.mach_reactants = m_reac if type(m_reac) is dict else {}
         self.mach_products = m_prod if type(m_prod) is dict else {}
+        self.sid_fwd = None
+        self.sid_rev = None
 
     @staticmethod
     def import_xml(enzymes):

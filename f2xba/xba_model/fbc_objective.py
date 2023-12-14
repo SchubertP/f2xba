@@ -35,10 +35,13 @@ class FbcObjective(SbmlSBase):
         super().__init__(s_fbc_objective)
         self.direction = s_fbc_objective['type']
         self.active = s_fbc_objective['active']
-        self.coefficients = {}
-        for reac_ref in sbmlxdf.record_generator(s_fbc_objective['fluxObjectives']):
-            params = sbmlxdf.extract_params(reac_ref)
-            self.coefficients[params['reac']] = float(params['coef'])
+        if 'coefficients' in s_fbc_objective:
+            self.coefficients = s_fbc_objective['coefficients']
+        else:
+            self.coefficients = {}
+            for reac_ref in sbmlxdf.record_generator(s_fbc_objective['fluxObjectives']):
+                params = sbmlxdf.extract_params(reac_ref)
+                self.coefficients[params['reac']] = float(params['coef'])
 
     def to_dict(self):
         data = super().to_dict()

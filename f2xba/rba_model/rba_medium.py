@@ -6,6 +6,8 @@ Peter Schubert, CCB, HHU Duesseldorf, December 2022
 import os
 import pandas as pd
 
+MAX_MEDIUM_CONC = 10.0
+
 
 class RbaMedium:
 
@@ -27,12 +29,12 @@ class RbaMedium:
         else:
             print(f'medium not imported!')
 
-    def from_xba(self, rba_params, xba_model):
+    def from_xba(self, general_params, xba_model):
         """Configure Medium based xba_model reactions.
 
         Medium defines the nutrient environment for the model simulation.
         In FBA based simulations, exchange reactions import metabolites into the model.
-        Imporation of a specific metabolite is allowed when the corresponding
+        Import of a specific metabolite is allowed when the corresponding
         exchange reaction is unblocked in the updake direction (usually a negative lower flux bound).
 
         RBA modelling does not use exchange reactions, instead if defines positive
@@ -51,22 +53,20 @@ class RbaMedium:
         affected during simulation
         Usually ,using Outer Membrane Transporters, external species are transported
         from external compartment to periplasm. These OM transporters will have an associated
-        protein cost linear with the total importation rate.
+        protein cost linear with the total import rate.
 
         In E. coli metabolite concentration in external medium and periplasm are close to identical.
-        RBA then implement Michaelis Menten Kinetics for importing species from periplasm to cytosol,
+        RBA then implement Michaelis Menten kinetics for importing species from periplasm to cytosol,
         using as species concentration the respective concentration of the medium metabolite.
 
         Maximum medium concentration from rba_params['general']['medium_max_conc']['value']
 
-        :param rba_params: RBA model specific parametrization
-        :type rba_params: dict of pandas DataFrames
+        :param general_params: general RBA parameters loaded from file
+        :type general_params: dict
         :param xba_model: xba model based on genome scale metabolic model
         :type xba_model: Class XbaModel
         """
-        medium_max_conc = 10.0
-        if ('general' in rba_params) and ('medium_max_conc' in rba_params['general']):
-            medium_max_conc = rba_params['general'].at['medium_max_conc', 'value']
+        medium_max_conc = general_params.get('medium_max_conc', MAX_MEDIUM_CONC)
 
         nutrients = 0
         for rid, r in xba_model.reactions.items():
