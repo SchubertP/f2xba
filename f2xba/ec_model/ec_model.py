@@ -8,6 +8,8 @@ import re
 import numpy as np
 import pandas as pd
 
+MAX_CONC_PROT = 10  # mg/gDW maximum protein concentration
+
 
 class EcModel:
     """Class EcModel
@@ -106,7 +108,7 @@ class EcModel:
             return False
 
         self._add_total_protein_constraint(protein_pool)
-        self.model.reaction_enzyme_coupling()
+        self._reaction_enzyme_coupling()
 
         # remove model components that are not used in the model
         self.model.clean()
@@ -234,6 +236,8 @@ class EcModel:
         add protein drain reactions to the model
         add protein pool exchange reation to the model
 
+        protein concentration in model has units of mg/gDW
+
         :param total_protein: total active protein mass balance in g/gDW
         :type total_protein: float
         """
@@ -250,23 +254,54 @@ class EcModel:
         protein_vars = {}
         draw_rid = f'V_PC_total_active'
         draw_name = f'total concentration active protein'
-        lb_pid = self.model.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'conc_0_bound')
-        ub_pid = self.model.get_fbc_bnd_pid(total_protein, 'mmol_per_gDW', 'conc_active_protein')
-        protein_vars[draw_rid] = [draw_name, f' => {pool_sid}', lb_pid, ub_pid, None, 'protein']
+        zero_mg_pid = self.model.get_fbc_bnd_pid(0.0, 'mg_per_gDW', 'zero_mass_conc_mg')
+        total_prot_mg_pid = self.model.get_fbc_bnd_pid(total_protein * 1000.0, 'mg_per_gDW', 'conc_active_protein_mg')
+        protein_vars[draw_rid] = [draw_name, f' => {pool_sid}', zero_mg_pid, total_prot_mg_pid, None, 'protein']
 
         # add protein drain reactions - supporting MOMENT with specific protein split in protein species per reaction
-        ub_pid = self.model.get_fbc_bnd_pid(1000.0, 'mmol_per_gDW', 'conc_default_ub')
+        max_conc_mg_pid = self.model.get_fbc_bnd_pid(MAX_CONC_PROT, 'mg_per_gDW', 'max_conc_prot_mg')
         for uid, p in self.model.proteins.items():
             draw_rid = f'V_PC_{uid}'
             draw_name = f'conc_prot_{uid}'
             products = ' + '.join([sid for sid in p.linked_sids])
             reaction_string = f'{p.mw / 1000.0} {pool_sid} => {products}'
-            protein_vars[draw_rid] = [draw_name, reaction_string, lb_pid, ub_pid, self.model.uid2gp[uid], 'protein']
+            protein_vars[draw_rid] = [draw_name, reaction_string, zero_mg_pid, max_conc_mg_pid,
+                                      self.model.uid2gp[uid], 'protein']
 
         cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'fbcGeneProdAssoc', 'kind']
         df_add_rids = pd.DataFrame(protein_vars.values(), index=list(protein_vars), columns=cols)
         print(f'{len(df_add_rids):4d} protein variables to add')
         self.model.add_reactions(df_add_rids)
+
+    def _reaction_enzyme_coupling(self):
+        """Couple reactions with enzyme/protein requirement via kcats.
+
+        applicable to enzyme catalyzed reactions.
+        from reaction get enzyme and corresponding kcat
+        convert kcat from s-1 to h-1
+        also consider enzymes/proteins in mg/mgDW
+
+        from enzyme get proteins and their stoichiometry in the enzyme complex
+        add to reaction reactants the proteins with 1/kcat_per_h scaled by stoic.
+        """
+        for r in self.model.reactions.values():
+            assert (len(r.enzymes) <= 1)
+            if len(r.enzymes) == 1 and r.kcat is not None:
+                kcat_per_h = r.kcat * 3600.0
+                enz = self.model.enzymes[r.enzymes[0]]
+                for locus, stoic in enz.composition.items():
+                    uid = self.model.locus2uid[locus]
+                    linked_sids = self.model.proteins[uid].linked_sids
+                    prot_sid = None
+                    if len(linked_sids) == 1:
+                        prot_sid = list(linked_sids)[0]
+                    else:
+                        rev_rid = re.sub('_REV$', '', r.id)
+                        for linked_sid in linked_sids:
+                            if rev_rid in linked_sid:
+                                prot_sid = linked_sid
+                                break
+                    r.reactants[prot_sid] = stoic / kcat_per_h * 1e3
 
     def query_kcats(self):
         """Query enzyme-reaction kcat values.

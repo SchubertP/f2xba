@@ -1106,6 +1106,10 @@ class XbaModel:
                 u_dict = {'id': uid, 'name': 'kilo joule per mole', 'metaid': f'meta_{uid}',
                           'units': ('kind=joule, exp=1.0, scale=3, mult=1.0; '
                                     'kind=mole, exp=-1.0, scale=0, mult=1.0')}
+            elif uid == 'mg_per_gDW':
+                u_dict = {'id': uid, 'name': 'milligram per gram (dry weight)', 'metaid': f'meta_{uid}',
+                          'units': ('kind=gram, exp=1.0, scale=-3, mult=1.0; '
+                                    'kind=gram, exp=-1.0, scale=0, mult=1.0')}
             elif uid == 'fbc_dimensionless':
                 u_dict = {'id': uid, 'name': 'dimensionless', 'metaid': f'meta_{uid}',
                           'units': 'kind=dimensionless, exp=1.0, scale=0, mult=1.0'}
@@ -1311,34 +1315,6 @@ class XbaModel:
                         r.modify_bounds({'ub': zero_flux_bnd_pid})
                     assert (len(r.enzymes) <= 1)
                     r.kcat = r.kcatf[0] if r.kcatf is not None else None
-
-    def reaction_enzyme_coupling(self):
-        """Couple reactions with enzyme/protein requirement via kcats.
-
-        applicable to enzyme catalyzed reactions.
-        from reaction get enzyme and corresponding kcat
-        convert kcat from s-1 to h-1
-        from enzyme get proteins and their stoichiometry in the enzyme complex
-        add to reaction reactants the proteins with 1/kcat_per_h scaled by stoic.
-        """
-        for r in self.reactions.values():
-            assert (len(r.enzymes) <= 1)
-            if len(r.enzymes) == 1 and r.kcat is not None:
-                kcat_per_h = r.kcat * 3600.0
-                enz = self.enzymes[r.enzymes[0]]
-                for locus, stoic in enz.composition.items():
-                    uid = self.locus2uid[locus]
-                    linked_sids = self.proteins[uid].linked_sids
-                    prot_sid = None
-                    if len(linked_sids) == 1:
-                        prot_sid = list(linked_sids)[0]
-                    else:
-                        rev_rid = re.sub('_REV$', '', r.id)
-                        for linked_sid in linked_sids:
-                            if rev_rid in linked_sid:
-                                prot_sid = linked_sid
-                                break
-                    r.reactants[prot_sid] = stoic / kcat_per_h
 
     def remove_unused_gps(self):
         """Remove unused genes, proteins, enzymes from the model
