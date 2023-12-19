@@ -72,7 +72,7 @@ class RbaEnzymes:
         return default_kcats
 
     def from_xba(self, general_params, xba_model, parameters, cid_mappings, medium):
-        """Configure Density Constraints based on RBA sepecific parameters.
+        """Configure Enzymes based on RBA sepecific parameters.
 
         functions and aggregates are added to Parameters
         to reduce number of functions, kcat values with same value and

@@ -229,6 +229,7 @@ class RbaMacromolecule:
         self.composition = composition if type(composition) is dict else {}
         self.weight = 0.0
         self.sid = None
+        self.scale = 1000.0
 
     @staticmethod
     def import_xml(macromolecules):
