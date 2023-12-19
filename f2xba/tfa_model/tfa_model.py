@@ -840,8 +840,8 @@ class TfaModel:
             sidx = re.sub('^M_', '', lc_sid)
             c_min = self.model.species[lc_sid].c_min
             c_max = self.model.species[lc_sid].c_max
-            lc_lb_pid = self.model.get_fbc_bnd_pid(np.log(c_min), 'fbc_dimensionless', f'V_LC_{sidx}_lb')
-            lc_ub_pid = self.model.get_fbc_bnd_pid(np.log(c_max), 'fbc_dimensionless', f'V_LC_{sidx}_ub')
+            lc_lb_pid = self.model.get_fbc_bnd_pid(np.log(c_min), 'kJ_per_mol', f'V_LC_{sidx}_lb')
+            lc_ub_pid = self.model.get_fbc_bnd_pid(np.log(c_max), 'kJ_per_mol', f'V_LC_{sidx}_ub')
             reac_str = ' + '.join([f'{-rt_stoic} C_DRG_{ridx}' for ridx, rt_stoic in data.items() if rt_stoic < 0.0])
             prod_str = ' + '.join([f'{rt_stoic} C_DRG_{ridx}' for ridx, rt_stoic in data.items() if rt_stoic > 0.0])
             pseudo_rids[f'V_LC_{sidx}'] = [f'{var2name["LC"]} of {lc_sid}', f'{reac_str} -> {prod_str}',
@@ -889,6 +889,25 @@ class TfaModel:
         print(f'{len(df_modify_attrs):4d} fwd/rev reactions to couple with flux direction')
         self.model.modify_attributes(df_modify_attrs, 'reaction')
 
+    def _add_rhs_variables(self):
+        """Add (fixed) RHS variables so RHS can be left at zero:
+        """
+        one_mmol_pid = self.model.get_fbc_bnd_pid(1.0, self.model.flux_uid, 'one_mmol', reuse=False)
+        one_kj_pid = self.model.get_fbc_bnd_pid(1.0, 'kJ_per_mol', 'one_kJ', reuse=False)
+
+        rhs_vars = {}
+        rhs_flux_reactants = {sid: 999.99 for sid in self.model.species if re.match('(C_GFC_)|(C_GRC_)', sid)}
+        rhs_energy_reactants = {sid: 1.0 for sid in self.model.species if re.match('C_SU_', sid)}
+        rhs_vars[f'V_RHS_flux'] = [f'RHS for TD C_SU_ constraints', rhs_flux_reactants, {}, False,
+                                   one_mmol_pid, one_mmol_pid, 'fixed variable', 'continuous']
+        rhs_vars[f'V_RHS_energy'] = [f'RHS for TD C_GxC_ constraints', rhs_energy_reactants, {}, False,
+                                     one_kj_pid, one_kj_pid, 'fixed variable', 'continuous']
+        cols = ['name', 'reactants', 'products', 'reversible', 'fbcLowerFluxBound', 'fbcUpperFluxBound',
+                'kind', 'notes']
+        df_add_rids = pd.DataFrame(rhs_vars.values(), index=list(rhs_vars), columns=cols)
+        print(f"{len(rhs_vars):4d} RHS variables to add")
+        self.model.add_reactions(df_add_rids)
+
     def _add_tfa_variables(self):
         """Add TFA related variables to the model as pseudo reactions.
 
@@ -903,6 +922,7 @@ class TfaModel:
         self._add_use_variables()
         self._add_log_concentration_variables()
         self._split_and_couple_reactions()
+        self._add_rhs_variables()
 
         print(f'{len(self.model.parameters):4d} parameters')
 

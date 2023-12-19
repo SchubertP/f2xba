@@ -843,7 +843,7 @@ class RbaModel:
         self.model.add_objectives(objectives_config)
         print(f"{len(obj_coeffs):4d} concentration variables to minimize as objective.")
 
-    def _xba_unblock_exchange_reactions(self):
+    def _xba_unblock_exchange_reactions_old(self):
         """Unblock import of metabolites.
 
         In RBA formulation, nutrient environment is provided as metabolite concentrations (medium).
