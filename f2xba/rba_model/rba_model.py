@@ -374,11 +374,13 @@ class RbaModel:
         self.model.add_species(df_add_species)
 
     def _xba_add_rba_constraints(self):
-        """Add rba constraint to XBA model
+        """Add rba constraints to XBA model.
 
-        - process machine capacities
-        - enzyme fwd/rev capacities
-        - compartment densities
+        constrains are added as pseudo species (similare to mass balance constraints of metabolites)
+        'C_PMC_<prod_id>: process machine capacities
+        'C_EF_<eid>: forward enzyme capacities
+        'C_ER_<eid>: reverse enzyme capacities
+        'C_D_<cid>: compartment density constraints
         """
         mm_species = {}
         for proc_id, proc in self.processes.processes.items():
@@ -415,6 +417,11 @@ class RbaModel:
         i.e. respective forward enzyme efficiency as added as product to enzyme catalyzed reaction
              respective reverse enzyme efficiency added as substrate to reversible enzyme catalyzed reaction
 
+        Note: for reverse reaction enzyme coupling RBA and TRBA reactions have to be
+          coupled differently to the enzyme.
+            - RBA: C_ER_<ridx> coupled with -1 to reaction rid
+            - TFBA: C_ER_<ridx> coupled with +1 to reaction rid_REV
+
         Enzyme coupling constraint:
             C_EF_<ridx>_enzyme: R_<ridx> - kcat * V_EC_<ridx> ≤ 0
             C_ER_<ridx>_enzyme: -1 R_<ridx> - kcat * V_EC_<ridx> ≤ 0
@@ -425,9 +432,12 @@ class RbaModel:
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
                 rid = e.reaction
                 if e.forward_eff != self.parameters.f_name_zero:
-                    modify_attrs.append([rid, 'reaction', 'product', f'{e.sid_fwd}=1.0'])
+                    modify_attrs.append([e.reaction, 'reaction', 'product', f'{e.sid_fwd}=1.0'])
                 if e.backward_eff != self.parameters.f_name_zero:
-                    modify_attrs.append([rid, 'reaction', 'reactant', f'{e.sid_rev}=1.0'])
+                    if e.rev_reaction == rid:
+                        modify_attrs.append([rid, 'reaction', 'reactant', f'{e.sid_rev}=1.0'])
+                    else:
+                        modify_attrs.append([e.rev_reaction, 'reaction', 'product', f'{e.sid_rev}=1.0'])
 
         cols = ['id', 'component', 'attribute', 'value']
         df_modify_attrs = pd.DataFrame(modify_attrs, columns=cols)
@@ -670,7 +680,7 @@ class RbaModel:
         Variable bounds need to be updated during bisection optimization.
 
         V_TSMC: Target concentrations for small molecules are collected in a single variable
-        Unit: mmol/gDW
+        Unit: µmol/gDW
         The variable is fixed at the growth rate (lower/upper bound)
         Reactant coefficients are the target concentrations (these can be functions of growth rate by itself)
         Growth rate dependent coefficients and variable bounds need to be updated during bisection optimiztion.
@@ -709,15 +719,16 @@ class RbaModel:
                     if not(fid in self.parameters.functions and self.parameters.functions[fid].type == 'constant'):
                         self.nonconst_fids[var_id] = {mm.sid: fid}
                 else:
-                    reactants_tsmc[tid] = self.parameter_values[fid]
+                    reactants_tsmc[tid] = self.parameter_values[fid] * 1000.0
                     if not(fid in self.parameters.functions and self.parameters.functions[fid].type == 'constant'):
                         reactants_tsmc_vars[tid] = fid
 
         # concentration targets for small metabolites without weight cost
         var_id_tsmc = f'V_TSMC'
-        mu_mmol_pid = self.model.get_fbc_bnd_pid(growth_rate, 'mmol_per_gDW', 'growth_rate_conc_mmol', reuse=False)
+        mu_umol_pid = self.model.get_fbc_bnd_pid(growth_rate/1000.0, 'umol_per_gDW',
+                                                 'growth_rate_conc_mmol', reuse=False)
         conc_targets[var_id_tsmc] = [f'small metabolite concentration targets (mmol)', False, reactants_tsmc, {},
-                                     mu_mmol_pid, mu_mmol_pid, 'RBA_sm_conc', 'RBA small molecule target concentration']
+                                     mu_umol_pid, mu_umol_pid, 'RBA_sm_conc', 'RBA small molecule target concentration']
         if len(reactants_tsmc_vars) > 0:
             self.nonconst_fids[var_id_tsmc] = reactants_tsmc_vars
 

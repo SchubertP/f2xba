@@ -190,8 +190,9 @@ class XbaModel:
             if 'modify_attributes' in xba_params:
                 self.modify_attributes(xba_params['modify_attributes'], 'uniprot')
 
-        count = self.create_proteins()
-        print(f'{count:4d} proteins created with UniProt information')
+        if self.uniprot_data:
+            count = self.create_proteins()
+            print(f'{count:4d} proteins created with UniProt information')
 
         #################
         # map cofactors #
@@ -206,34 +207,36 @@ class XbaModel:
         #####################
         # configure enzymes #
         #####################
-        count = self.create_enzymes()
-        print(f'{count:4d} enzymes added with default stoichiometry')
+        if len(self.proteins) > 0:
+            count = self.create_enzymes()
+            print(f'{count:4d} enzymes added with default stoichiometry')
 
-        # set specific enzyme composition
-        if 'enzyme_comp_fname' in general_params:
-            count = self.set_enzyme_composition(general_params['enzyme_comp_fname'])
-            print(f'{count:4d} enzyme compositions updated from {fname}')
+            # set specific enzyme composition
+            if 'enzyme_comp_fname' in general_params:
+                count = self.set_enzyme_composition(general_params['enzyme_comp_fname'])
+                print(f'{count:4d} enzyme compositions updated from {fname}')
 
-        # modify enzyme composition, e.g. ABC transporters
-        if 'modify_attributes' in xba_params:
-            self.modify_attributes(xba_params['modify_attributes'], 'enzyme')
+            # modify enzyme composition, e.g. ABC transporters
+            if 'modify_attributes' in xba_params:
+                self.modify_attributes(xba_params['modify_attributes'], 'enzyme')
 
-        # print summary information on catalyzed reactions
-        n_catalyzed = sum([1 for r in self.reactions.values() if len(r.enzymes) > 0])
-        n_enzymes = len({eid for r in self.reactions.values() for eid in r.enzymes})
-        print(f'{n_catalyzed} reactions catalyzed by {n_enzymes} enzymes')
+            # print summary information on catalyzed reactions
+            n_catalyzed = sum([1 for r in self.reactions.values() if len(r.enzymes) > 0])
+            n_enzymes = len({eid for r in self.reactions.values() for eid in r.enzymes})
+            print(f'{n_catalyzed} reactions catalyzed by {n_enzymes} enzymes')
 
         #########################
         # configure kcat values #
         #########################
-        default_kcats = {'metabolic': general_params.get('default_metabolic_kcat', 12.5),
-                         'transporter': general_params.get('default_transporter_kcat', 100.0)}
-        self.create_default_kcats(default_kcats)
+        if len(self.enzymes) > 0:
+            default_kcats = {'metabolic': general_params.get('default_metabolic_kcat', 12.5),
+                             'transporter': general_params.get('default_transporter_kcat', 100.0)}
+            self.create_default_kcats(default_kcats)
 
-        # set specific kcat values
-        if 'kcats_fname' in general_params:
-            count = self.set_reaction_kcats(general_params['kcats_fname'])
-            print(f'{count:4d} kcat values updated from {fname}')
+            # set specific kcat values
+            if 'kcats_fname' in general_params:
+                count = self.set_reaction_kcats(general_params['kcats_fname'])
+                print(f'{count:4d} kcat values updated from {fname}')
 
         print('baseline XBA model configured!')
 
@@ -1182,6 +1185,51 @@ class XbaModel:
 
         return rev_r
 
+    def _create_arm_reaction(self, orig_r):
+        """Create optional arm reactions and connecting pseudo metabolites.
+
+        Arm reactions is in series to several isoenzyme reactions. It controls
+        total flux through these isoenzyme reactions that all orignate from same
+        original reaction.
+        Isoenzyme reactions consume original reactant and produce a common pseudo metabolite
+        Arm reaction consume the pseudo metabolite and produces original product.
+
+        :param orig_r: reaction for which to produce an arm reaction and a pseudo metabolite
+        :type orig_r: f2xba.xba_model.sbml_reaction.SbmlReaction
+        :return: arm reaction
+        :rtype: f2xba.xba_model.sbml_reaction.SbmlReaction
+        """
+        # add pseudo metabolite to connect iso reactions with arm reaction, exclude other constraints
+        product_srefs = {sid: stoic for sid, stoic in orig_r.products.items()
+                         if re.match('C_', sid) is None}
+        cid = self.species[sorted(list(product_srefs))[0]].compartment
+        ridx = re.sub('^R_', '', orig_r.orig_rid)
+        pmet_sid = f'M_pmet_{ridx}_{cid}'
+        pmet_name = f'pseudo metabolite for arm reaction of {ridx}'
+        pmet_dict = {'id': pmet_sid, 'name': pmet_name, 'compartment': cid,
+                     'hasOnlySubstanceUnits': False, 'boundaryCondition': False, 'constant': False}
+        self.species[pmet_sid] = SbmlSpecies(pd.Series(pmet_dict, name=pmet_sid))
+
+        # add arm reaction to control overall flux, based on original reaction
+        if re.search('_REV$', orig_r.id):
+            arm_rid = f"{re.sub('_REV$', '', orig_r.id)}_arm_REV"
+        else:
+            arm_rid = f"{orig_r.id}_arm"
+        arm_r = SbmlReaction(pd.Series(orig_r.to_dict(), name=arm_rid), self.species)
+        arm_r.orig_rid = orig_r.id
+
+        if hasattr(arm_r, 'name'):
+            arm_r.name += ' (arm)'
+        if hasattr(arm_r, 'metaid'):
+            arm_r.metaid = f'meta_{arm_rid}'
+
+        # arm reaction is connected behind the enzyme reactions. It produces the original products
+        arm_r.reactants = {pmet_sid: 1.0}
+        arm_r.products = product_srefs
+        del arm_r.gene_product_assoc
+
+        return arm_r
+
     def add_isoenzyme_reactions(self, create_arm=True):
         """Add reactions catalyzed by isoenzymes.
 
@@ -1198,13 +1246,13 @@ class XbaModel:
 
         reactions catalyzed by isoenzymes get split up
         - new reactions are created based on original reaction
-        - one new arm reaction to control overall flux
+        - one new arm reaction to control overall flux (optional, see create_arm)
         - several new iso reactions, each catalyzed by a single isoenzyme
-        - one new pseudo metabolite to connect iso reactions with arm reaction
+        - one new pseudo metabolite to connect iso reactions with arm reaction (optional, see create_arm)
         - reaction parameters are updated accordingly
         - original reaction is removed
 
-        :param create_arm: Flag to indicate if arm reaction should be created
+        :param create_arm: Flag to indicate if arm reactions and pseudo metabolites should be created
         :type create_arm: bool (default: True)
         """
         reactions_to_add = {}
@@ -1213,53 +1261,28 @@ class XbaModel:
             if len(orig_r.enzymes) > 1:
                 orig_r_dict = orig_r.to_dict()
                 rids_to_del.append(rid)
-                pmet_sid = 'undefined'
-                # support iso and arm reactions after reaction has been split (i.e. <base_rid>_REV)
-                postfix = '' if re.search('_REV$', rid) is None else '_REV'
-                base_rid = re.sub('_REV$', '', rid)
+                iso_arm_products = None
                 if create_arm is True:
-                    # add pseudo metabolite to connect iso reactions with arm reaction
-                    product_srefs = {sid: stoic for sid, stoic in orig_r.products.items()
-                                     if re.match('C_', sid) is None}
-                    cid = self.species[sorted(list(product_srefs))[0]].compartment
+                    arm_r = self._create_arm_reaction(orig_r)
+                    reactions_to_add[arm_r.id] = arm_r
+                    constraint_refs = {sid: stoic for sid, stoic in orig_r.products.items() if re.match('C_', sid)}
+                    iso_arm_products = arm_r.reactants | constraint_refs
 
-                    ridx = re.sub('^R_', '', base_rid)
-                    pmet_sid = f'M_pmet_{ridx}_{cid}'
-                    pmet_name = f'pseudo metabolite for arm reaction of {ridx}'
-                    pmet_dict = {'id': pmet_sid, 'name': pmet_name, 'compartment': cid,
-                                 'hasOnlySubstanceUnits': False, 'boundaryCondition': False, 'constant': False}
-                    self.species[pmet_sid] = SbmlSpecies(pd.Series(pmet_dict, name=pmet_sid))
-
-                    # add arm reaction to control overall flux, based on original reaction
-                    arm_rid = f'{base_rid}_arm{postfix}'
-                    arm_r = SbmlReaction(pd.Series(orig_r_dict, name=arm_rid), self.species)
-                    arm_r.orig_rid = rid
-
-                    if hasattr(arm_r, 'name'):
-                        arm_r.name += ' (arm)'
-                    if hasattr(arm_r, 'metaid'):
-                        arm_r.metaid = f'meta_{arm_rid}'
-
-                    # arm reaction is connected behind the enzyme reactions. It produces the original products
-                    arm_r.reactants = {pmet_sid: 1.0}
-                    arm_r.products = product_srefs
-
-                    del arm_r.gene_product_assoc
-                    reactions_to_add[arm_rid] = arm_r
-
-                # add iso reactions, one for each isoenzyme
+                # add iso reactions, one per isoenzyme
+                # support iso and arm reactions after reaction has been split (i.e. <base_rid>_REV)
                 for idx, eid in enumerate(orig_r.enzymes):
-                    iso_rid = f'{base_rid}_iso{idx+1}{postfix}'
+                    if re.search('_REV$', rid):
+                        iso_rid = f"{re.sub('_REV$', '', rid)}_iso{idx+1}_REV"
+                    else:
+                        iso_rid = f"{rid}_iso{idx + 1}"
                     iso_r = SbmlReaction(pd.Series(orig_r_dict, name=iso_rid), self.species)
                     iso_r.orig_rid = rid
+                    if create_arm is True:
+                        iso_r.products = iso_arm_products
                     if hasattr(iso_r, 'name'):
                         iso_r.name += f' (iso{idx+1})'
                     if hasattr(iso_r, 'metaid'):
                         iso_r.metaid = f'meta_{iso_rid}'
-                    if create_arm is True:
-                        # overwrite the products. Replace by pseudo metabolite, but retain any constraints
-                        constraint_refs = {sid: stoic for sid, stoic in orig_r.products.items() if re.match('C_', sid)}
-                        iso_r.products = {pmet_sid: 1.0} | constraint_refs
                     enz = self.enzymes[eid]
                     gpa = ' and '.join(sorted([self.uid2gp[self.locus2uid[locus]] for locus in enz.composition]))
                     if ' and ' in gpa:
@@ -1271,7 +1294,7 @@ class XbaModel:
                         iso_r.kcatr = [orig_r.kcatr[idx]] if orig_r.kcatr is not None else None
                     reactions_to_add[iso_rid] = iso_r
 
-        # add arm and iso reactions to the model
+        # add arm (optional) and iso reactions to the model
         for new_rid, new_r in reactions_to_add.items():
             self.reactions[new_rid] = new_r
 
