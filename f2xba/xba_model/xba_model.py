@@ -8,6 +8,7 @@ import time
 import re
 import numpy as np
 import pandas as pd
+from collections import defaultdict
 import sbmlxdf
 
 from .sbml_unit_def import SbmlUnitDef
@@ -22,7 +23,6 @@ from .protein import Protein
 from .enzyme import Enzyme
 from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
-from ..uniprot.uniprot_protein import UniprotProtein
 from ..utils.mapping_utils import get_srefs, parse_reaction_string
 
 FBC_BOUND_TOL = '.10e'
@@ -59,10 +59,13 @@ class XbaModel:
         self.gps = {gp_id: FbcGeneProduct(row)
                     for gp_id, row in model_dict['fbcGeneProducts'].iterrows()}
         self.groups = {gid: SbmlGroup(row)
-                       for gid, row in model_dict['groups'].iterrows()}
-        self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items()}
-        self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
-        self.locus2uid = {gp.label: gp.id for gp in self.gps.values()}
+                       for gid, row in model_dict['groups'].iterrows()} if 'groups' in model_dict else None
+
+        self.uid2gp = {}
+        self.locus2gp = {}
+        self.locus2uid = {}
+        self.locus2rids = {}
+        self._update_gp_mappings()
 
         self.gem_size = {'n_sids': len(self.species), 'n_rids': len(self.reactions),
                          'n_gps': len(self.gps), 'n_pids': len(self.parameters)}
@@ -87,13 +90,18 @@ class XbaModel:
         self.ncbi_data = None
         self.uniprot_data = None
 
-        self.locus2rids = self._get_locus2rids()
         # determin external compartment and identify drain reactions
         self.external_compartment = self._get_external_compartment()
         for rid, r in self.reactions.items():
             if r.kind == 'exchange':
                 if r.compartment != self.external_compartment:
                     r.kind = 'drain'
+
+    def _update_gp_mappings(self):
+        self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items()}
+        self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
+        self.locus2uid = {gp.label: gp.id for gp in self.gps.values()}
+        self.locus2rids = self._get_locus2rids()
 
     def _get_external_compartment(self):
         """Determine the external compartment id.
@@ -124,7 +132,7 @@ class XbaModel:
         """
         locus2rids = {}
         for rid, r in self.reactions.items():
-            if hasattr(r, 'gene_product_assoc'):
+            if r.gene_product_assoc:
                 tmp_gpa = re.sub(r'[()]', '', r.gene_product_assoc)
                 gpids = {gpid.strip() for gpid in re.sub(r'( and )|( or )', ',', tmp_gpa).split(',')}
                 for gpid in gpids:
@@ -147,7 +155,7 @@ class XbaModel:
         :param fname: name of configuration parameters in Excel spreadsheet
         :type fname: str
         """
-        sheets = ['general', 'modify_attributes', 'remove_gps',
+        sheets = ['general', 'modify_attributes', 'remove_gps', 'add_gps', 'add_parameters',
                   'add_species', 'add_reactions', 'chebi2sid']
         xba_params = {}
         with pd.ExcelFile(fname) as xlsx:
@@ -167,10 +175,14 @@ class XbaModel:
         if 'remove_gps' in xba_params:
             remove_gps = list(xba_params['remove_gps'].index)
             self.gpa_remove_gps(remove_gps)
+        if 'add_gps' in xba_params:
+            self.add_gps(xba_params['add_gps'])
         if 'add_species' in xba_params:
             self.add_species(xba_params['add_species'])
         if 'add_reactions' in xba_params:
             self.add_reactions(xba_params['add_reactions'])
+        for r in self.reactions.values():
+            r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
 
         #################
         # add NCBI data #
@@ -207,6 +219,7 @@ class XbaModel:
         #####################
         # configure enzymes #
         #####################
+
         if len(self.proteins) > 0:
             count = self.create_enzymes()
             print(f'{count:4d} enzymes added with default stoichiometry')
@@ -229,15 +242,36 @@ class XbaModel:
         # configure kcat values #
         #########################
         if len(self.enzymes) > 0:
-            default_kcats = {'metabolic': general_params.get('default_metabolic_kcat', 12.5),
-                             'transporter': general_params.get('default_transporter_kcat', 100.0)}
-            self.create_default_kcats(default_kcats)
+            # configure default kcat values provided in parameters
+            default_kcats = {}
+            if np.isfinite(general_params.get('default_metabolic_kcat', np.nan)):
+                default_kcats['metabolic'] = general_params['default_metabolic_kcat']
+            if np.isfinite(general_params.get('default_transporter_kcat', np.nan)):
+                default_kcats['transporter'] = general_params['default_transporter_kcat']
+            if len(default_kcats) > 0:
+                self.create_default_kcats(default_kcats)
+                print(f'default kcat values configured for {list(default_kcats)} reactions')
 
-            # set specific kcat values
+            # configure reaction/enzyme specific kcat values
             if 'kcats_fname' in general_params:
                 count = self.set_reaction_kcats(general_params['kcats_fname'])
                 print(f'{count:4d} kcat values updated from {fname}')
 
+            # remove enzyme from reactions if kcat values have not been provided
+            count = 0
+            for rid, r in self.reactions.items():
+                if len(r.enzymes) > 0:
+                    valid_kcatsf = (sum([1 for kcat in r.kcatsf if np.isfinite(kcat)])
+                                    if r.kcatsf is not None else 0)
+                    if len(r.enzymes) != valid_kcatsf:
+                        r.enzymes = []
+                        r.kcatsf = None
+                        r.kcatsr = None
+                        count += 1
+            print(f'{count:4d} enzymes removed due to missing kcat values')
+
+        self.clean()
+        self.print_size()
         print('baseline XBA model configured!')
 
     def get_compartments(self, component_type):
@@ -300,7 +334,7 @@ class XbaModel:
                 used_sids.add(sid)
             for sid in r.products:
                 used_sids.add(sid)
-            if hasattr(r, 'gene_product_assoc'):
+            if r.gene_product_assoc:
                 gpa = re.sub('and', '', r.gene_product_assoc)
                 gpa = re.sub('or', '', gpa)
                 gpa = re.sub('[()]', '', gpa)
@@ -334,20 +368,18 @@ class XbaModel:
         for cid in unused_cids:
             del self.compartments[cid]
 
-        # update groups
-        rid2orig = {rid: r.orig_rid for rid, r in self.reactions.items()}
-        orig2rids = {}
-        for rid, orig in rid2orig.items():
-            if orig not in orig2rids:
-                orig2rids[orig] = set()
-            orig2rids[orig].add(rid)
-
-        for group in self.groups.values():
-            new_refs = set()
-            for ref in group.id_refs:
-                if ref in orig2rids:
-                    new_refs |= orig2rids[ref]
-            group.id_refs = new_refs
+        # update reactions in groups component
+        orig2rids = defaultdict(set)
+        if self.groups:
+            rid2orig = {rid: r.orig_rid for rid, r in self.reactions.items()}
+            for rid, orig in rid2orig.items():
+                orig2rids[orig].add(rid)
+            for group in self.groups.values():
+                new_refs = set()
+                for ref in group.id_refs:
+                    if ref in orig2rids:
+                        new_refs |= orig2rids[ref]
+                group.id_refs = new_refs
 
     def validate(self):
         """Validate compliance to SBML standards.
@@ -365,8 +397,10 @@ class XbaModel:
             'reactions': pd.DataFrame([data.to_dict() for data in self.reactions.values()]).set_index('id'),
             'fbcObjectives': pd.DataFrame([data.to_dict() for data in self.objectives.values()]).set_index('id'),
             'fbcGeneProducts': pd.DataFrame([data.to_dict() for data in self.gps.values()]).set_index('id'),
-            'groups': pd.DataFrame([data.to_dict() for data in self.groups.values()]),
         }
+        if self.groups:
+            m_dict['groups'] = pd.DataFrame([data.to_dict() for data in self.groups.values()])
+
         model = sbmlxdf.Model()
         model.from_df(m_dict)
         errors = model.validate_sbml()
@@ -394,8 +428,10 @@ class XbaModel:
             'reactions': pd.DataFrame([data.to_dict() for data in self.reactions.values()]).set_index('id'),
             'fbcObjectives': pd.DataFrame([data.to_dict() for data in self.objectives.values()]).set_index('id'),
             'fbcGeneProducts': pd.DataFrame([data.to_dict() for data in self.gps.values()]).set_index('id'),
-            'groups': pd.DataFrame([data.to_dict() for data in self.groups.values()]),
         }
+        if self.groups:
+            m_dict['groups'] = pd.DataFrame([data.to_dict() for data in self.groups.values()])
+
         extension = fname.split('.')[-1]
         if extension not in ['xml', 'xlsx']:
             print(f'model not exported, unknown file extension, expected ".xml" or ".xlsx": {fname}')
@@ -489,9 +525,9 @@ class XbaModel:
                     r_data[key] = val
             if 'fbcLowerFluxBound' not in r_data:
                 assert(('fbcLb' in r_data) and ('fbcUb' in r_data))
-                uid = r_data.get('fbcBndUid', self.flux_uid)
-                r_data['fbcLowerFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcLb'], uid, f'fbc_{rid}_lb')
-                r_data['fbcUpperFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcUb'], uid, f'fbc_{rid}_ub')
+                unit_id = r_data.get('fbcBndUid', self.flux_uid)
+                r_data['fbcLowerFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcLb'], unit_id, f'fbc_{rid}_lb')
+                r_data['fbcUpperFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcUb'], unit_id, f'fbc_{rid}_ub')
             self.reactions[rid] = SbmlReaction(r_data, self.species)
         print(f'{n_count:4d} reactions added to the model ({len(self.reactions)} total reactions)')
 
@@ -526,17 +562,6 @@ class XbaModel:
         """
         for obj_id, data in objectives_config.items():
             self.objectives[obj_id] = FbcObjective(pd.Series(data, name=obj_id))
-
-    def modify_uniprot_loci_old(self, modify_loci):
-        """Modify locus information for selected uniprot ids.
-
-        Uniprot loci might be missing in uniprot export,
-            e.g. 'P0A6D5' entry has missing locus (as per July 2023)
-
-        :param modify_loci: uniprot ids with assigned locus
-        :type modify_loci: dict (key: uniprot id [str], val: locus id [str])
-        """
-        self.uniprot_data.modify_loci(modify_loci)
 
     def modify_attributes(self, df_modify, component_type):
         """Modify model attributes for specified component ids.
@@ -590,9 +615,8 @@ class XbaModel:
             if gp in self.gps:
                 n_count += 1
                 del self.gps[gp]
-        self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
-        self.locus2uid = {gp.label: gp.uid for gp in self.gps.values()}
-        self.locus2rids = self._get_locus2rids()
+        # update mapping tables
+        self._update_gp_mappings()
         print(f'{n_count:4d} gene product(s) removed from reactions ({len(self.gps)} gene products remaining)')
 
     def remove_blocked_reactions_old(self):
@@ -601,15 +625,6 @@ class XbaModel:
         remove_rids = [rid for rid, r in self.reactions.items() if r.is_blocked_old(self.parameters)]
         for rid in remove_rids:
             del self.reactions[rid]
-
-    def correct_reversibility_old(self):
-        """Correct reaction reversibility (excluding exchange reactions)
-
-        Inline with lower/upper flux bounds configured for the reaction
-        Exchange reactions get configured as reversible
-        """
-        for r in self.reactions.values():
-            r.correct_reversibility_old(self.parameters, exclude_ex_reactions=True)
 
     def del_components(self, component, ids):
         """Delete / remove components from the model.
@@ -647,26 +662,22 @@ class XbaModel:
         First we try getting a valid uniprot id from gp annotation.
         Alternatively we check if gene locus is found in uniprot ids.
 
-        protein compartemnt is defined by reaction compartment of a reaction that
+        We only create proteins, if they are used
+        protein compartment is defined by reaction compartment of a reaction that
         is catalyzed by gene product. We use one of the reactions as reference.
 
         We also configure gene id and gene name 'notes'-field of gene product
-
         """
         n_created = 0
         for gp in self.gps.values():
-            if gp.uid not in self.uniprot_data.proteins:
-                gp.uid = self.uniprot_data.locus2uid.get(gp.label, '')
-            if (gp.uid != '') and (gp.uid not in self.proteins):
-                if gp.label in self.locus2rids:
-                    # using first reaction as reference for compartment
-                    rid = self.locus2rids[gp.label][0]
-                    compartment = self.reactions[rid].compartment
-                elif hasattr(gp, 'compartment'):
-                    compartment = gp.compartment
-                else:
-                    compartment = ''
-                self.proteins[gp.uid] = Protein(self.uniprot_data.proteins[gp.uid], gp.label, compartment)
+            # we only create proteins, if protein is used in reactions
+            if gp.label in self.locus2rids:
+                # using first reaction as reference for pseudo species compartment
+                any_rid = self.locus2rids[gp.label][0]
+                cid = self.reactions[any_rid].compartment
+                if gp.uid not in self.uniprot_data.proteins:
+                    gp.uid = self.uniprot_data.locus2uid.get(gp.label, '')
+                self.proteins[gp.uid] = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
                 gp.add_notes(self.proteins[gp.uid])
                 gp.add_notes(self.proteins[gp.uid])
                 n_created += 1
@@ -682,36 +693,32 @@ class XbaModel:
 
         E.g. required for ribosomal proteins
 
-        df_add_gps pandas DataFrame has the following structure:
+        df_add_gps pandas DataFrame has the pandas DataFrame structure of sbmlxdf:
             columns:
-                'locus': gene locus, e.g. 'b0015'
                 'gpid': gene product id, e.g. 'G_b0015'
+                'label': gene locus, e.g. 'b0015'
+                and other
+        optionally we add compartment info to support RBA machinery related gene products
                 'compartment': location of gene product, e.g. 'c'
 
         Uniprot ID is retrieved with Uniprot data
 
-        :param df_add_gps: configuration data for gene product
+        :param df_add_gps: configuration data for gene product, see sbmlxdf
         :type df_add_gps: pandas DataFrame
         :return: number of added gene products
         :rtype: int
         """
         n_added = 0
-        for _pm, row in df_add_gps.iterrows():
-            locus = row['locus']
-            gpid = row['gpid']
+        for gpid, gp_data in df_add_gps.iterrows():
             if gpid not in self.gps:
-                if locus in self.uniprot_data.locus2uid:
-                    uid = self.uniprot_data.locus2uid[locus]
-                    data = pd.Series({'id': gpid, 'metaid': gpid, 'label': locus,
-                                      'miriamAnnotation': f'bqbiol:is, uniprot/{uid}'}, name=gpid)
-                    gp = FbcGeneProduct(data)
-                    gp.compartment = row['compartment']
-                    self.gps[gpid] = gp
-                    n_added += 1
-                else:
-                    print(f'for {locus}, no corresponding Uniprot protein found. Update Uniprot data')
-        self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
-        self.locus2uid = {gp.label: gp.uid for gp in self.gps.values()}
+                self.gps[gpid] = FbcGeneProduct(gp_data)
+                n_added += 1
+                # support of RBA machinery proteins
+                if 'compartment' in gp_data:
+                    self.gps[gpid].compartment = gp_data['compartment']
+        # update mappings
+        self._update_gp_mappings()
+
         return n_added
 
     def map_cofactors(self):
@@ -806,7 +813,7 @@ class XbaModel:
         n_created = 0
         for rid, r in self.reactions.items():
             eids = []
-            if hasattr(r, 'gene_product_assoc'):
+            if r.gene_product_assoc:
                 gpa = re.sub(' and ', '_and_', r.gene_product_assoc)
                 gpa = re.sub(r'[()]', '', gpa)
                 gp_sets = [item.strip() for item in gpa.split('or')]
@@ -874,7 +881,7 @@ class XbaModel:
         """
         rxnkind2rids = {'reversible': set()}
         for rid, r in self.reactions.items():
-            if hasattr(r, 'gene_product_assoc') and len(r.gene_product_assoc) > 1:
+            if r.gene_product_assoc:
                 if r.reversible is True:
                     rxnkind2rids['reversible'].add(rid)
                 if r.kind not in rxnkind2rids:
@@ -889,18 +896,17 @@ class XbaModel:
     def create_default_kcats(self, default_kcats, subtypes=None):
         """Create a default mapping for reactions to default catalytic rates.
 
-        For each enzyme catalyzed reaction, determine default kcat values.
-        Reaction kind is a property of reaction object
-        If reaction is reversible, als set reversible kcat (same as forward).
+        Only set kcat values if default value for reaction type is finite.
+        Both forward and reverse kcat values are set to the same default kcat.
+        Default kcat values for reaction types 'metabolic' and 'transporter' may be provided,
+        as these are the reaction types configured by default.
 
-        Default kcat values for reaction kinds are provided in default_kcats.
-        Rates for 'metabolic' and 'transporter' kinds have to be provided.
-
-        Mapping of reaction id to specific subtypes can be provided in subtype
-        Mapping of rx_reaction provided information ind default_kcats and tx_reaction_type
+        Default kcat value for specific subtypes can be provided, e.g. for 'ABC transporter'.
+        Subtypes specific values will be used, if reaction id is assigned to
+        specified subtype in subtypes dict.
 
         :param default_kcats: default values for selected kinds
-        :type default_kcats: dict (key: reaction kind, val: default kcat value)
+        :type default_kcats: dict (key: reaction kind, val: default kcat value or np.nan.)
         :param subtypes: subtypes of specific reactions
         :type subtypes: dict (key: reaction id, val: subtype) or None
         """
@@ -908,13 +914,14 @@ class XbaModel:
             subtypes = {}
         for rid, r in self.reactions.items():
             if len(r.enzymes) > 0:
-                default_kcat = default_kcats[r.kind]
+                default_kcat = default_kcats.get(r.kind, np.nan)
                 if rid in subtypes:
                     if subtypes[rid] in default_kcats:
                         default_kcat = default_kcats[subtypes[rid]]
-                r.set_kcat('unspec', 1, default_kcat)
-                if r.reversible is True:
-                    r.set_kcat('unspec', -1, default_kcat)
+                if np.isfinite(default_kcat):
+                    r.set_kcat('unspec', 1, default_kcat)
+                    if r.reversible is True:
+                        r.set_kcat('unspec', -1, default_kcat)
 
     def set_reaction_kcats(self, fname):
         """Set kcat values with enzyme-reaction specific kcat values.
@@ -1013,37 +1020,6 @@ class XbaModel:
                 n_updates += r.scale_kcat(eid, row['dirxn'], row['scale'])
         return n_updates
 
-    def create_dummy_protein_old(self, dummy_gp, uniprot_data):
-        """Create a dummy protein with MW of 1 g/mol.
-
-        Inline with sybilccFBA.
-
-        :param dummy_gp: gene product id of dummy protein
-        :type dummy_gp: str
-        :param uniprot_data: data structure with uniprot protein information
-        :type uniprot_data: UniprotData
-
-        """
-        # create dummy protein entry in uniprot data
-        dummy_pid = 'dummy'
-        dummy_gene = self.gps[dummy_gp].label
-        dummy_prot_dict = {'Organism (ID)': uniprot_data.organism_id,
-                           'Gene Names (primary)': 'dummy',
-                           'Gene Names (ordered locus)': dummy_gene,
-                           'Protein names': dummy_pid,
-                           'EC number': np.nan, 'BioCyc': np.nan,
-                           'Subcellular location [CC]': np.nan,
-                           'Gene Ontology (cellular component)': np.nan,
-                           'Length': 0, 'Mass': 1.0,
-                           'Sequence': '', 'Signal peptide': np.nan}
-        uniprot_data.proteins[dummy_pid] = UniprotProtein(pd.Series(dummy_prot_dict, name=dummy_pid))
-
-        # link up dummy gene product with uniprot proteins
-        self.gps[dummy_gp].uid = dummy_pid
-        self.uid2gp[dummy_pid] = dummy_gp
-        self.locus2gp[dummy_gene] = dummy_gp
-        self.locus2uid[dummy_gene] = dummy_pid
-
     # MODEL CONVERSIONS
     def add_parameter(self, pid, value, units, constant=True, pname=None, sboterm=None):
         """add single parameter to the model.
@@ -1068,7 +1044,7 @@ class XbaModel:
             p_dict['sboterm'] = sboterm
         self.parameters[pid] = SbmlParameter(pd.Series(p_dict, name=pid))
 
-    def get_fbc_bnd_pid(self, val, uid, proposed_pid, reuse=True):
+    def get_fbc_bnd_pid(self, val, unit_id, proposed_pid, reuse=True):
         """Get parameter id for a given fbc bound value und unit type.
 
         Construct a new fbc bnd parameter, if the value is
@@ -1079,8 +1055,8 @@ class XbaModel:
         also extends uids:
         :param val:
         :type val: float
-        :param uid: unit id
-        :type uid: str
+        :param unit_id: unit id
+        :type unit_id: str
         :param proposed_pid: proposed parameter id that would be created
         :type proposed_pid: str
         :param reuse: Flag if existing parameter id with same value can be reused
@@ -1091,52 +1067,53 @@ class XbaModel:
         valstr = val
 
         # if parameter id does not exist, first create it
-        if uid not in self.fbc_shared_pids:
-            if uid == 'umol_per_gDW':
-                u_dict = {'id': uid, 'name': 'micromoles per gram (dry weight)', 'metaid': f'meta_{uid}',
+        if unit_id not in self.fbc_shared_pids:
+            if unit_id == 'umol_per_gDW':
+                u_dict = {'id': unit_id, 'name': 'micromoles per gram (dry weight)', 'metaid': f'meta_{unit_id}',
                           'units': ('kind=mole, exp=1.0, scale=-6, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0')}
-            elif uid == 'mmol_per_gDW':
-                u_dict = {'id': uid, 'name': 'millimoles per gram (dry weight)', 'metaid': f'meta_{uid}',
+            elif unit_id == 'mmol_per_gDW':
+                u_dict = {'id': unit_id, 'name': 'millimoles per gram (dry weight)', 'metaid': f'meta_{unit_id}',
                           'units': ('kind=mole, exp=1.0, scale=-3, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0')}
-            elif uid == 'umol_per_gDWh':
-                u_dict = {'id': uid, 'name': 'micromoles per gram (dry weight) per hour', 'metaid': f'meta_{uid}',
+            elif unit_id == 'umol_per_gDWh':
+                u_dict = {'id': unit_id,
+                          'name': 'micromoles per gram (dry weight) per hour', 'metaid': f'meta_{unit_id}',
                           'units': ('kind=mole, exp=1.0, scale=-6, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0; '
                                     'kind=second, exp=-1.0, scale=0, mult=3600.0')}
-            elif uid == 'kJ_per_mol':
-                u_dict = {'id': uid, 'name': 'kilo joule per mole', 'metaid': f'meta_{uid}',
+            elif unit_id == 'kJ_per_mol':
+                u_dict = {'id': unit_id, 'name': 'kilo joule per mole', 'metaid': f'meta_{unit_id}',
                           'units': ('kind=joule, exp=1.0, scale=3, mult=1.0; '
                                     'kind=mole, exp=-1.0, scale=0, mult=1.0')}
-            elif uid == 'mg_per_gDW':
-                u_dict = {'id': uid, 'name': 'milligram per gram (dry weight)', 'metaid': f'meta_{uid}',
+            elif unit_id == 'mg_per_gDW':
+                u_dict = {'id': unit_id, 'name': 'milligram per gram (dry weight)', 'metaid': f'meta_{unit_id}',
                           'units': ('kind=gram, exp=1.0, scale=-3, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0')}
-            elif uid == 'fbc_dimensionless':
-                u_dict = {'id': uid, 'name': 'dimensionless', 'metaid': f'meta_{uid}',
+            elif unit_id == 'fbc_dimensionless':
+                u_dict = {'id': unit_id, 'name': 'dimensionless', 'metaid': f'meta_{unit_id}',
                           'units': 'kind=dimensionless, exp=1.0, scale=0, mult=1.0'}
             else:
                 print('unsupported flux bound unit type, create unit in unit definition')
                 return None
-            self.unit_defs[uid] = SbmlUnitDef(pd.Series(u_dict, name=uid))
-            self.fbc_shared_pids[uid] = {}
+            self.unit_defs[unit_id] = SbmlUnitDef(pd.Series(u_dict, name=unit_id))
+            self.fbc_shared_pids[unit_id] = {}
 
         if reuse is False:
             p_dict = {'id': proposed_pid, 'name': proposed_pid, 'value': val, 'constant': True,
-                      'sboterm': 'SBO:0000626', 'units': uid}
+                      'sboterm': 'SBO:0000626', 'units': unit_id}
             self.parameters[proposed_pid] = SbmlParameter(pd.Series(p_dict, name=proposed_pid))
             self.parameters[proposed_pid].modify_attribute('reuse', False)
             return proposed_pid
 
-        elif valstr in self.fbc_shared_pids[uid]:
-            return self.fbc_shared_pids[uid][valstr]
+        elif valstr in self.fbc_shared_pids[unit_id]:
+            return self.fbc_shared_pids[unit_id][valstr]
 
         else:
             p_dict = {'id': proposed_pid, 'name': proposed_pid, 'value': val, 'constant': True,
-                      'sboterm': 'SBO:0000626', 'units': uid}
+                      'sboterm': 'SBO:0000626', 'units': unit_id}
             self.parameters[proposed_pid] = SbmlParameter(pd.Series(p_dict, name=proposed_pid))
-            self.fbc_shared_pids[uid][valstr] = proposed_pid
+            self.fbc_shared_pids[unit_id][valstr] = proposed_pid
             return proposed_pid
 
     def split_reversible_reaction(self, reaction):
@@ -1145,7 +1122,7 @@ class XbaModel:
         Original reaction becomes the forward reaction. Flux bounds
         are checked and reaction is made irreversible.
         Reverse reaction is newly created with original name + '_REV'.
-        reactants/products are swapped and fluxbounds inverted.
+        reactants/products are swapped and flux bounds inverted.
 
         Add newly created reverse reaction to the model reactions
 
@@ -1166,7 +1143,7 @@ class XbaModel:
 
         rev_r.reverse_substrates()
         rev_r.enzymes = reaction.enzymes
-        rev_r.kcatf = reaction.kcatr
+        rev_r.kcatsf = reaction.kcatsr
         rev_lb = -min(0.0, self.parameters[reaction.fbc_upper_bound].value)
         rev_ub = -min(0.0, self.parameters[reaction.fbc_lower_bound].value)
         lb_pid = self.get_fbc_bnd_pid(rev_lb, self.flux_uid, f'fbc_{rev_rid}_lb')
@@ -1181,7 +1158,7 @@ class XbaModel:
         if self.parameters[reaction.fbc_upper_bound].value < 0.0:
             reaction.modify_bounds({'ub': zero_flux_bnd_pid})
         reaction.reversible = False
-        reaction.kcatr = None
+        reaction.kcatsr = None
 
         return rev_r
 
@@ -1204,7 +1181,10 @@ class XbaModel:
                          if re.match('C_', sid) is None}
         cid = self.species[sorted(list(product_srefs))[0]].compartment
         ridx = re.sub('^R_', '', orig_r.orig_rid)
-        pmet_sid = f'M_pmet_{ridx}_{cid}'
+        # support reaction names having compartment id as postfix
+        pmet_sid = f'M_pmet_{ridx}'
+        if '_' not in ridx or ridx.rsplit('_', 1)[1] != cid:
+            pmet_sid += f'_{cid}'
         pmet_name = f'pseudo metabolite for arm reaction of {ridx}'
         pmet_dict = {'id': pmet_sid, 'name': pmet_name, 'compartment': cid,
                      'hasOnlySubstanceUnits': False, 'boundaryCondition': False, 'constant': False}
@@ -1226,7 +1206,7 @@ class XbaModel:
         # arm reaction is connected behind the enzyme reactions. It produces the original products
         arm_r.reactants = {pmet_sid: 1.0}
         arm_r.products = product_srefs
-        del arm_r.gene_product_assoc
+        arm_r.gene_product_assoc = None
 
         return arm_r
 
@@ -1234,6 +1214,7 @@ class XbaModel:
         """Add reactions catalyzed by isoenzymes.
 
         This will only affect reactions catalyzed by isoenzymes.
+        We only split a reaction into isoreactions, if kcat value are defined.
 
         Integration with Thermodynamic FBA (TFA):
             TFA splits TD related reations in fwd/rev (_REV)
@@ -1259,40 +1240,44 @@ class XbaModel:
         rids_to_del = []
         for rid, orig_r in self.reactions.items():
             if len(orig_r.enzymes) > 1:
-                orig_r_dict = orig_r.to_dict()
-                rids_to_del.append(rid)
-                iso_arm_products = None
-                if create_arm is True:
-                    arm_r = self._create_arm_reaction(orig_r)
-                    reactions_to_add[arm_r.id] = arm_r
-                    constraint_refs = {sid: stoic for sid, stoic in orig_r.products.items() if re.match('C_', sid)}
-                    iso_arm_products = arm_r.reactants | constraint_refs
-
-                # add iso reactions, one per isoenzyme
-                # support iso and arm reactions after reaction has been split (i.e. <base_rid>_REV)
-                for idx, eid in enumerate(orig_r.enzymes):
-                    if re.search('_REV$', rid):
-                        iso_rid = f"{re.sub('_REV$', '', rid)}_iso{idx+1}_REV"
-                    else:
-                        iso_rid = f"{rid}_iso{idx + 1}"
-                    iso_r = SbmlReaction(pd.Series(orig_r_dict, name=iso_rid), self.species)
-                    iso_r.orig_rid = rid
+                valid_kcatsf = sum([1 for kcat in orig_r.kcatsf if np.isfinite(kcat)])
+                valid_kcatsr = (sum([1 for kcat in orig_r.kcatsr if np.isfinite(kcat)])
+                                if orig_r.kcatsr is not None else 0)
+                if valid_kcatsf + valid_kcatsr > 0:
+                    orig_r_dict = orig_r.to_dict()
+                    rids_to_del.append(rid)
+                    iso_arm_products = None
                     if create_arm is True:
-                        iso_r.products = iso_arm_products
-                    if hasattr(iso_r, 'name'):
-                        iso_r.name += f' (iso{idx+1})'
-                    if hasattr(iso_r, 'metaid'):
-                        iso_r.metaid = f'meta_{iso_rid}'
-                    enz = self.enzymes[eid]
-                    gpa = ' and '.join(sorted([self.uid2gp[self.locus2uid[locus]] for locus in enz.composition]))
-                    if ' and ' in gpa:
-                        gpa = '(' + gpa + ')'
-                    iso_r.gene_product_assoc = gpa
-                    iso_r.enzymes = [eid]
-                    iso_r.kcatf = [orig_r.kcatf[idx]] if orig_r.kcatf is not None else None
-                    if orig_r.reversible:
-                        iso_r.kcatr = [orig_r.kcatr[idx]] if orig_r.kcatr is not None else None
-                    reactions_to_add[iso_rid] = iso_r
+                        arm_r = self._create_arm_reaction(orig_r)
+                        reactions_to_add[arm_r.id] = arm_r
+                        constraint_refs = {sid: stoic for sid, stoic in orig_r.products.items() if re.match('C_', sid)}
+                        iso_arm_products = arm_r.reactants | constraint_refs
+
+                    # add iso reactions, one per isoenzyme
+                    # support iso and arm reactions after reaction has been split (i.e. <base_rid>_REV)
+                    for idx, eid in enumerate(orig_r.enzymes):
+                        if re.search('_REV$', rid):
+                            iso_rid = f"{re.sub('_REV$', '', rid)}_iso{idx+1}_REV"
+                        else:
+                            iso_rid = f"{rid}_iso{idx + 1}"
+                        iso_r = SbmlReaction(pd.Series(orig_r_dict, name=iso_rid), self.species)
+                        iso_r.orig_rid = rid
+                        if create_arm is True:
+                            iso_r.products = iso_arm_products
+                        if hasattr(iso_r, 'name'):
+                            iso_r.name += f' (iso{idx+1})'
+                        if hasattr(iso_r, 'metaid'):
+                            iso_r.metaid = f'meta_{iso_rid}'
+                        enz = self.enzymes[eid]
+                        gpa = ' and '.join(sorted([self.uid2gp[self.locus2uid[locus]] for locus in enz.composition]))
+                        if ' and ' in gpa:
+                            gpa = '(' + gpa + ')'
+                        iso_r.gene_product_assoc = gpa
+                        iso_r.enzymes = [eid]
+                        iso_r.kcatsf = [orig_r.kcatsf[idx]] if orig_r.kcatsf is not None else None
+                        if orig_r.reversible:
+                            iso_r.kcatsr = [orig_r.kcatsr[idx]] if orig_r.kcatsr is not None else None
+                        reactions_to_add[iso_rid] = iso_r
 
         # add arm (optional) and iso reactions to the model
         for new_rid, new_r in reactions_to_add.items():
@@ -1310,7 +1295,7 @@ class XbaModel:
         kcatsf
 
         For enzyme catalzyed reversible reactions add a new reaction
-        with suffic '_REV', switch reactants/products and inverse flux
+        with postfix '_REV', switch reactants/products and inverse flux
         bounds (create new flux bound parameters if required).
 
         Result: all enzyme catalyzed reactions are made irreversible.
@@ -1323,21 +1308,26 @@ class XbaModel:
         rids = list(self.reactions)
         for rid in rids:
             r = self.reactions[rid]
-            if len(r.enzymes) > 0 or rid.endswith('arm'):
-                if r.reversible:
-                    assert(len(r.enzymes) <= 1)
+            if len(r.enzymes) > 0:
+                if r.reversible and r.kcatsf is not None and np.isfinite(r.kcatsf[0]):
                     rev_r = self.split_reversible_reaction(r)
-                    # arm reactions have no enzymes and no kcats
-                    r.kcat = r.kcatf[0] if r.kcatf is not None else None
-                    rev_r.kcat = rev_r.kcatf[0] if rev_r.kcatf is not None else None
+                    r.kcat = r.kcatsf[0] if r.kcatsf is not None and np.isfinite(r.kcatsf[0]) else None
+                    rev_r.kcat = rev_r.kcatsf[0] if rev_r.kcatsf is not None and np.isfinite(rev_r.kcatsf[0]) else None
                 else:
                     # ensure that the irreversible reaction has correct flux bounds
                     if self.parameters[r.fbc_lower_bound].value < 0.0:
                         r.modify_bounds({'lb': zero_flux_bnd_pid})
                     if self.parameters[r.fbc_upper_bound].value < 0.0:
                         r.modify_bounds({'ub': zero_flux_bnd_pid})
-                    assert (len(r.enzymes) <= 1)
-                    r.kcat = r.kcatf[0] if r.kcatf is not None else None
+                    r.kcat = None if r.kcatsf is None or not np.isfinite(r.kcatsf[0]) else r.kcatsf[0]
+            elif rid.endswith('arm'):
+                if r.reversible:
+                    self.split_reversible_reaction(r)
+                else:
+                    if self.parameters[r.fbc_lower_bound].value < 0.0:
+                        r.modify_bounds({'lb': zero_flux_bnd_pid})
+                    if self.parameters[r.fbc_upper_bound].value < 0.0:
+                        r.modify_bounds({'ub': zero_flux_bnd_pid})
 
     def remove_unused_gps(self):
         """Remove unused genes, proteins, enzymes from the model
@@ -1365,152 +1355,7 @@ class XbaModel:
         for uid in unused_uids:
             del self.proteins[uid]
 
-    def get_modelled_protein_mass_fraction(self, fname):
-        """Determine protein mass fraction based on Pax-db.org downlaod.
-
-        Determine which part of organism protein mass fraction is modelled.
-        Protein abundance file needs first to be downloaded from Pax-db.org
-
-        :param fname: file path/name of protein abundance data collected from Pax-db.org
-        :type fname: str
-        :return: relative pmf of model based
-        :rtype: float
-        """
-        # parse file
-        df_ppm = pd.read_table(fname, comment='#', header=None, usecols=[1, 2], index_col=0)
-        df_ppm.index = [locus.split('.')[1] for locus in df_ppm.index]
-        ppm_abundance = df_ppm.iloc[:, 0].to_dict()
-
-        p_rel_total = 0.0
-        p_rel_model = 0.0
-        for locus, ppm in ppm_abundance.items():
-            if locus in self.uniprot_data.locus2uid:
-                uid = self.uniprot_data.locus2uid[locus]
-                rel_mass = ppm / 1.0e6 * self.uniprot_data.proteins[uid].mass
-                p_rel_total += rel_mass
-                if uid in self.uid2gp:
-                    p_rel_model += rel_mass
-        return p_rel_model / p_rel_total
-
     # old / currently unused methods
-    def modify_gene_labels_old(self, modify_labels):
-        """modify selected gene labels in the model.
-
-        individual labels or patterns can be replaced.
-
-        E.g. Yeast7 uses gene label like Yof120W, which should be replaced by YOR120W
-
-        :param modify_labels:
-        :type modify_labels: dict (key: str_pattern, str, val: replacement, str)
-        """
-        for pattern, replacement in modify_labels.items():
-            for gp in self.gps.values():
-                gp.modify_gene_label(pattern, replacement)
-
-    def standardize_old(self):
-        """Standarize model as per Gecko MATLAB code.
-
-        cosmetics applicable to Yeast 7 and including:
-        - modify compartment ids (from numerical to initials of compartment name)
-            - modify compartments
-            - modify 'compartments' in species
-            - remove compartment info in 'name' species
-        - append compartment id to species ids
-            - modify species
-            - update 'reactants', 'products' in reactions
-        """
-        # update compartment using a new compartment id
-        old2newcid = {}
-        for oldcid in list(self.compartments):
-            c = self.compartments[oldcid]
-            c.name = c.name.lower()
-            c.id = ''.join([part[0] for part in c.name.split(' ')])
-            old2newcid[oldcid] = c.id
-            self.compartments[c.id] = c
-            del self.compartments[oldcid]
-
-        # update species, change compartment and postfix compartment id to name
-        old2newsid = {}
-        for oldsid in list(self.species):
-            s = self.species[oldsid]
-            s.compartment = old2newcid[s.compartment]
-            s.id = f'{oldsid}_{s.compartment}'
-            s.name = re.sub(r' \[.*]$', '', s.name)
-            old2newsid[oldsid] = s.id
-            self.species[s.id] = s
-            del self.species[oldsid]
-
-        for r in self.reactions.values():
-            r.replace_sids(old2newsid)
-
-    def match_kcats_old(self, brenda_kcats):
-        """Match enzyme catalyzed reactions to Brenda supplied kcat values.
-
-        brenda_kcats is a dict of dict
-        outed dict: key: ec number, e.g. '1.1.1.1)
-        inter dict: key: substrate name in lower case
-            val: list-like two floats with kcat values (in s-1) of
-                 organism and of other organisms
-
-        We collect on kcat. 'kcat' of organism if > 0.0, otherwise 'alt_kcat'
-
-        :param brenda_kcats: kcats derive from Brenda
-        :type brenda_kcats: dict (key: ec number, val: dict (key: substrate, val: list-like of 2 floats)
-        """
-        # add kcat value to reactions
-        rids = [rid for rid, r in self.reactions.items() if len(r.union_ecns) > 0]
-        for rid in rids:
-            r = self.reactions[rid]
-            lc_reactants = [self.species[sid].name.lower() for sid in r.reactants]
-
-            assert len(r.ecn_sets) == 1
-            ecn_set = r.ecn_sets[0]
-            kcat = 0.0
-
-            # iteratively we reduce the level of EC numbers, until we have a kcat
-            for level in range(4):
-                # if multiple kcats are found, we use their maximum
-                for gene_set_ecn in sorted(ecn_set):
-
-                    substrate_kcat = 0.0
-                    substrate_alt_kcat = 0.0
-                    any_kcat = 0.0
-                    any_alt_kcat = 0.0
-
-                    ecns = []
-                    if level == 0:
-                        if gene_set_ecn in brenda_kcats:
-                            ecns = [gene_set_ecn]
-                    else:
-                        ecn_wildcard = gene_set_ecn.rsplit('.', level)[0] + '.'
-                        ecns = [ecn for ecn in brenda_kcats if re.match(ecn_wildcard, ecn)]
-
-                    for ecn in sorted(ecns):
-                        for substrate, ecn_kcats in brenda_kcats[ecn].items():
-                            if substrate in lc_reactants:
-                                substrate_kcat = max(substrate_kcat, ecn_kcats[0])
-                                substrate_alt_kcat = max(substrate_alt_kcat, ecn_kcats[1])
-                            else:
-                                any_kcat = max(any_kcat, ecn_kcats[0])
-                                any_alt_kcat = max(any_alt_kcat, ecn_kcats[1])
-
-                    if substrate_kcat > 0.0:
-                        kcat = substrate_kcat
-                        break
-                    if substrate_alt_kcat > 0.0:
-                        kcat = substrate_alt_kcat
-                        break
-                    if any_kcat > 0.0:
-                        kcat = any_kcat
-                        break
-                    if any_alt_kcat > 0.0:
-                        kcat = any_alt_kcat
-                        break
-                if kcat > 0.0:
-                    break
-            # reduce level of EC number classification (using wild cards)
-            assert kcat > 0.0
-            r.set_kcat(kcat)
 
     def rescale_biomass_old(self, biomass):
         """rescale biomass
@@ -1550,21 +1395,3 @@ class XbaModel:
                     for sid in rescale['products']:
                         modify_stoic[sid] = value
         biomass_r.modify_stoic(modify_stoic)
-
-    def add_ngam_old(self, ngam_stoic, ngam_flux):
-        """Add non-growth associated maintenance reaction with fixed flux
-
-        E.g. constraint NGAM for aerobic growth to 0.7 mmol/gDWh (0.0 for anaerobic)
-
-        :param ngam_stoic:
-        :type ngam_stoic: dict (key: species id, val: stoichiometry, float)
-        :param ngam_flux: flux level of NGAM
-        :type ngam_flux: float
-        """
-        ngam_rid = 'NGAM'
-        bnd_pid = self.get_fbc_bnd_pid(ngam_flux, self.flux_uid, 'fbc_NGAM_flux')
-        r_dict = {'name': f'non-growth associated maintenance (NGAM)', 'reversible': False,
-                  'reactants': '', 'products': '', 'fbcGeneProdAssoc': None,
-                  'fbcLowerFluxBound': bnd_pid, 'fbcUpperFluxBound': bnd_pid}
-        self.reactions[ngam_rid] = SbmlReaction(pd.Series(r_dict, name=ngam_rid), self.species)
-        self.reactions[ngam_rid].modify_stoic(ngam_stoic)

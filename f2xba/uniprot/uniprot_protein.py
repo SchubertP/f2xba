@@ -158,6 +158,7 @@ class UniprotProtein:
         self.length = s_data['Length']
         self.mass = s_data['Mass']
         # self.sequence = s_data['Sequence']
+        # TODO: add Interaction - Substructure information (e.g. for Yeast)
         self.aa_composition = get_aa_composition(s_data['Sequence'])
         self.signal_peptide = s_data['Signal peptide']
         self.cofactors, self.cofactor2chebi = get_cofactors(s_data['Cofactor'])

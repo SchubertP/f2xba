@@ -46,19 +46,14 @@ class SbmlReaction(SbmlSBase):
         :type species_dict: dict (key: sid, val: Class SBMLspecies)
         """
         super().__init__(s_reaction)
+
         self.reversible = s_reaction['reversible']
-        if type(s_reaction['reactants']) is dict:
-            self.reactants = s_reaction['reactants'].copy()
-        else:
-            self.reactants = self.get_srefs(s_reaction['reactants'])
-        if type(s_reaction['products']) is dict:
-            self.products = s_reaction['products'].copy()
-        else:
-            self.products = self.get_srefs(s_reaction['products'])
+        self.reactants = s_reaction['reactants']
+        self.products = s_reaction['products']
+
         self.fbc_lower_bound = s_reaction['fbcLowerFluxBound']
         self.fbc_upper_bound = s_reaction['fbcUpperFluxBound']
-        if ('fbcGeneProdAssoc' in s_reaction) and (type(s_reaction['fbcGeneProdAssoc']) == str):
-            self.gene_product_assoc = re.sub(r'^assoc=', '', s_reaction['fbcGeneProdAssoc'])
+        self.gene_product_assoc = s_reaction.get('fbcGeneProdAssoc')
 
         self.rp_counts = [len(self.reactants), len(self.products)]
         self.rp_compartments = [self.get_compartments(self.reactants, species_dict),
@@ -66,12 +61,49 @@ class SbmlReaction(SbmlSBase):
         self.compartment = '-'.join(sorted(self.rp_compartments[0].union(self.rp_compartments[1])))
         self.kind = s_reaction.get('kind', self.get_reaction_kind())
         self.enzymes = []
-        self.kcatf = None
-        self.kcatr = None
+        self.kcatsf = None
+        self.kcatsr = None
         self.orig_rid = self.id
+
+    @property
+    def reactants(self):
+        return self._reactants
+
+    @reactants.setter
+    def reactants(self, value):
+        if type(value) is dict:
+            self._reactants = value.copy()
+        else:
+            self._reactants = self.get_srefs(value)
+
+    @property
+    def products(self):
+        return self._products
+
+    @products.setter
+    def products(self, value):
+        if type(value) is dict:
+            self._products = value.copy()
+        else:
+            self._products = self.get_srefs(value)
+
+    @property
+    def gene_product_assoc(self):
+        return self._gene_product_assoc
+
+    @gene_product_assoc.setter
+    def gene_product_assoc(self, value):
+        if type(value) is str and len(value) > 1:
+            self._gene_product_assoc = re.sub(r'^assoc=', '', value)
+        else:
+            self._gene_product_assoc = None
 
     def modify_attribute(self, attribute, value):
         """modify attribute value.
+
+        Special case for reactants and products, where individual
+        species reference can be deleted or updated individually using
+        'reactant', 'product' attributes.
 
         :param attribute: attribute name
         :type attribute: str
@@ -156,7 +188,7 @@ class SbmlReaction(SbmlSBase):
                                        for sid, stoic in self.reactants.items()])
         data['products'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
                                       for sid, stoic in self.products.items()])
-        if hasattr(self, 'gene_product_assoc'):
+        if self.gene_product_assoc:
             data['fbcGeneProdAssoc'] = f'assoc={self.gene_product_assoc}'
         return data
 
@@ -170,7 +202,7 @@ class SbmlReaction(SbmlSBase):
         :param del_gps: coenzyme gene products
         :type del_gps: set or list of str
         """
-        if hasattr(self, 'gene_product_assoc'):
+        if self.gene_product_assoc:
             gpa = self.gene_product_assoc
             for gp in del_gps:
                 if gp in self.gene_product_assoc:
@@ -183,7 +215,7 @@ class SbmlReaction(SbmlSBase):
             if len(set(re.findall(r"\w+", gpa)).difference({'or', 'and'})) > 0:
                 self.gene_product_assoc = gpa
             else:
-                del self.gene_product_assoc
+                self.gene_product_assoc = None
 
     def set_enzymes(self, eids):
         """Add enzymes to the reaction, also kcat arrays.
@@ -193,14 +225,14 @@ class SbmlReaction(SbmlSBase):
         """
         self.enzymes = sorted(eids)
         if len(self.enzymes) > 0:
-            self.kcatf = np.zeros(len(self.enzymes))
+            self.kcatsf = np.full(len(self.enzymes), np.nan)
             if self.reversible is True:
-                self.kcatr = np.zeros(len(self.enzymes))
+                self.kcatsr = np.full(len(self.enzymes), np.nan)
 
     def set_kcat(self, eid, dirxn, kcat):
         """Set kcat value for specified enzyme and reaction direction.
 
-        We only add kcat values for enzymes and direaction that are valid.
+        We only add kcat values for enzymes and direction that are valid.
 
         in case enzyme id is set to 'unspec', configure kcats value for given
          direction on all isoenzymes
@@ -218,16 +250,16 @@ class SbmlReaction(SbmlSBase):
         assert(kcat >= 0.0)
 
         n_updates = 0
-        kcat_dir = 'kcatf' if dirxn == 1 else 'kcatr'
-        if getattr(self, kcat_dir) is not None:
+        kcats_dir = 'kcatsf' if dirxn == 1 else 'kcatsr'
+        if getattr(self, kcats_dir) is not None:
             if eid in self.enzymes:
                 idx = self.enzymes.index(eid)
-                getattr(self, kcat_dir)[idx] = kcat
+                getattr(self, kcats_dir)[idx] = kcat
                 n_updates = 1
             else:
                 if eid == 'unspec':
                     for idx in range(len(self.enzymes)):
-                        getattr(self, kcat_dir)[idx] = kcat
+                        getattr(self, kcats_dir)[idx] = kcat
                         n_updates += 1
         return n_updates
 
@@ -251,18 +283,18 @@ class SbmlReaction(SbmlSBase):
         assert(scale > 0.0)
 
         n_updates = 0
-        kcat_dir = 'kcatf' if dirxn == 1 else 'kcatr'
-        if getattr(self, kcat_dir) is not None:
+        kcats_dir = 'kcatsf' if dirxn == 1 else 'kcatsr'
+        if getattr(self, kcats_dir) is not None:
             if eid in self.enzymes:
                 idx = self.enzymes.index(eid)
-                ref_kcat = getattr(self, kcat_dir)[idx]
-                getattr(self, kcat_dir)[idx] = ref_kcat / scale
+                ref_kcat = getattr(self, kcats_dir)[idx]
+                getattr(self, kcats_dir)[idx] = ref_kcat / scale
                 n_updates = 1
             else:
                 if eid == 'unspec':
                     for idx in range(len(self.enzymes)):
-                        ref_kcat = getattr(self, kcat_dir)[idx]
-                        getattr(self, kcat_dir)[idx] = ref_kcat / scale
+                        ref_kcat = getattr(self, kcats_dir)[idx]
+                        getattr(self, kcats_dir)[idx] = ref_kcat / scale
                         n_updates += 1
         return n_updates
 
@@ -348,7 +380,7 @@ class SbmlReaction(SbmlSBase):
         """
         self.gene_product_assoc = gpa
         if gpa == '':
-            del self.gene_product_assoc
+            self.gene_product_assoc = None
 
     def is_blocked_old(self, parameters):
         """Check if reaction is blocked due to zero value flux bounds.
@@ -364,13 +396,13 @@ class SbmlReaction(SbmlSBase):
         else:
             return False
 
-    def correct_reversibility_old(self, parameters, exclude_ex_reactions=False):
-        """Correct reversibility based on flux bou ds.
+    def correct_reversibility(self, parameters, exclude_ex_reactions=False):
+        """Correct reversibility based on flux bounds.
 
         reversible is set to True if flux range is either positive or negative.
         exchange reactions can be exluded
 
-        :param parameters: flux bound paramters
+        :param parameters: flux bound parameters
         :type parameters: SbmlParameters
         :param exclude_ex_reactions: flag if exchange reactions should be excluded
         :type exclude_ex_reactions: bool, (default: False)

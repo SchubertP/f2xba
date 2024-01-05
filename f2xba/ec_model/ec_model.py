@@ -41,7 +41,7 @@ class EcModel:
         """
         self.model = xba_model
 
-    def configure(self, ecm_params_fname):
+    def configure(self, fname):
         """Convert the xba model to an enzyme constraint model using parameters in fname.
 
         to be executed after xba model has been configured
@@ -64,30 +64,26 @@ class EcModel:
           catalyzed by same promiscuous enzyme have no added protein cost.
           Protein species have to be added, before making reactions irreversible
 
-        :param ecm_params_fname: file name for configuration parameters
-        :type ecm_params_fname: str
+        :param fname: file name for ECM configuration parameters
+        :type fname: str
         :return: success/failure of model configuration
         :rtype: bool
         """
-        sheet = 'general'
-        with pd.ExcelFile(ecm_params_fname) as xlsx:
-            ecm_params = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)['value'].to_dict()
-            print(f'EC model configuration parameters loaded from {ecm_params_fname}')
+        sheets = ['general', 'rescale_reactions']
+        ecm_params = {}
+        with pd.ExcelFile(fname) as xlsx:
+            for sheet in sheets:
+                if sheet in xlsx.sheet_names:
+                    ecm_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+            print(f'{len(ecm_params)} tables with EC model configuration parameters loaded from {fname}')
 
-        ecm_type = ecm_params['ecm_type']
-        p_total = ecm_params['p_total']
-        avg_enz_sat = ecm_params['avg_enz_sat']
+        general_params = ecm_params['general']['value'].to_dict()
+        ecm_type = general_params.get('ecm_type', 'GECKO')
+        p_total = general_params.get('p_total', 0.5)
+        avg_enz_sat = general_params.get('avg_enz_sat', 0.5)
 
-        if 'p_abundance_fname' in ecm_params:
-            pax_db_fname = ecm_params['p_abundance_fname']
-            pm2totpm = self.model.get_modelled_protein_mass_fraction(pax_db_fname)
-            print(f'{pm2totpm:.3f} g_protein_in_model / g_total_protein, based on {pax_db_fname}')
-        else:
-            assert('pm2totpm' in ecm_params)
-            pm2totpm = ecm_params['pm2totpm']
-
-        protein_pool = p_total * pm2totpm * avg_enz_sat
-        print(f'{protein_pool:.3f} g_protein/gDW, assuming avg enzyme saturation of {avg_enz_sat:.2f}')
+        if 'rescale_reactions' in ecm_params:
+            self._rescale_reactions(ecm_params['rescale_reactions'])
 
         # create enzyme constraint model
         if ecm_type in ['GECKO', 'MOMENTmr']:
@@ -107,6 +103,18 @@ class EcModel:
             print(f'model not constructed, invalid ecm_type {ecm_type}')
             return False
 
+        if 'p_abundance_fname' in general_params:
+            pax_db_fname = general_params['p_abundance_fname']
+            pm2totpm = self.get_modelled_protein_mass_fraction(pax_db_fname)
+            print(f'modeled protein fraction {pm2totpm:.4f} g/g, based on {pax_db_fname}')
+        else:
+            assert('pm2totpm' in general_params)
+            pm2totpm = general_params['pm2totpm']
+
+        protein_pool = p_total * pm2totpm * avg_enz_sat
+        print(f'protein constraint: {protein_pool*1000.0:.2f} mg/gDW, '
+              f'assuming avg enzyme saturation of {avg_enz_sat:.2f}')
+
         self._add_total_protein_constraint(protein_pool)
         self._reaction_enzyme_coupling()
 
@@ -120,15 +128,37 @@ class EcModel:
 
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_{ecm_type}'
-        self.model.model_attrs['name'] = f'{ecm_type} model of ' + self.model.model_attrs['name']
+        if 'name' in self.model.model_attrs:
+            self.model.model_attrs['name'] = f'{ecm_type} model of ' + self.model.model_attrs['name']
         self.model.sbml_container['level'] = 3
         self.model.sbml_container['version'] = 2
 
         self.model.print_size()
         return True
 
+    def _get_enzyme_gene_products(self):
+        """Determine used genes products for enzymes.
+
+        Note: Model can contain additional gene products for
+        gene product associations where enzyme kcat have not
+        been provided. Useful for gene deletion studies.
+
+        :return: gene product ids used by the enzymes in the model
+        :rtype: set of str
+        """
+        used_enzymes = set()
+        for rid, r in self.model.reactions.items():
+            for eid in r.enzymes:
+                used_enzymes.add(eid)
+        used_enz_gps = set()
+        for eid in used_enzymes:
+            e = self.model.enzymes[eid]
+            for gene_id in e.composition:
+                used_enz_gps.add(self.model.locus2gp[gene_id])
+        return used_enz_gps
+
     def _add_gecko_protein_species(self):
-        """add protein species to the GECKO/ccFBA/MOMENTmr model.
+        """Add protein species to the GECKO/ccFBA/MOMENTmr model.
 
         Note: Protein compartments in XBA model are derived from
         reaction compartments, which in turn is a concatenation of
@@ -136,11 +166,18 @@ class EcModel:
 
         Here we only need one of the species compartments.
 
+        We only create proteins when gene product is used by any of the
+        enzymes
+
         add protein species to the model
         add protein drain reactions to the model
         """
+        used_enz_gps = self._get_enzyme_gene_products()
+
         protein_sids = {}
-        for uid, p in self.model.proteins.items():
+        for gpid in used_enz_gps:
+            uid = self.model.gps[gpid].uid
+            p = self.model.proteins[uid]
             prot_sid = f'M_prot_{uid}_{p.cid}'
             p.link_sid(prot_sid)
             prot_metaid = f'meta_prot_{uid}'
@@ -202,10 +239,11 @@ class EcModel:
         Therefore, reversible reactions with isoenzymes get split in fwd/bwd reaction.
         """
         # Note model.reactions get updated within the loop, therefore fix rids initially
+
         rids = list(self.model.reactions)
         for rid in rids:
             r = self.model.reactions[rid]
-            if len(r.enzymes) >= 2:
+            if len(r.enzymes) >= 2 and r.kcatsf is not None and np.isfinite(r.kcatsf[0]):
                 directional_rs = [r]
                 if r.reversible:
                     # split reaction, i.e. create a new irreversible reverse reaction
@@ -213,21 +251,24 @@ class EcModel:
                     directional_rs.append(rev_r)
 
                 for dir_r in directional_rs:
+                    valid_kcatsf = (sum([1 for kcat in dir_r.kcatsf if np.isfinite(kcat)])
+                                    if dir_r.kcatsf is not None else 0)
                     # consider reactions with undefined kcatf (due to TD integration)
-                    if dir_r.kcatf is not None:
+                    if len(r.enzymes) == valid_kcatsf:
                         idx = np.argmin([self.model.enzymes[e].mw / kcat
-                                         for e, kcat in zip(dir_r.enzymes, dir_r.kcatf)])
+                                         for e, kcat in zip(dir_r.enzymes, dir_r.kcatsf)])
                         eid = dir_r.enzymes[idx]
                         gpa = ' and '.join(sorted([self.model.uid2gp[self.model.locus2uid[locus]]
                                                    for locus in self.model.enzymes[eid].composition]))
                         if ' and ' in gpa:
                             gpa = '(' + gpa + ')'
                         dir_r.enzymes = [dir_r.enzymes[idx]]
-                        dir_r.kcatf = [dir_r.kcatf[idx]]
+                        dir_r.kcatsf = [dir_r.kcatsf[idx]]
                         dir_r.gene_product_assoc = gpa
                     else:
                         dir_r.enzymes = []
-                        dir_r.set_gpa('')
+                        dir_r.kcatsf = None
+                        dir_r.kcatsr = None
 
     def _add_total_protein_constraint(self, total_protein):
         """add total protein constraint to the enzyme constraint model.
@@ -260,7 +301,12 @@ class EcModel:
 
         # add protein drain reactions - supporting MOMENT with specific protein split in protein species per reaction
         max_conc_mg_pid = self.model.get_fbc_bnd_pid(MAX_CONC_PROT, 'mg_per_gDW', 'max_conc_prot_mg')
-        for uid, p in self.model.proteins.items():
+
+        # create only for used proteins
+        used_enz_gps = self._get_enzyme_gene_products()
+        for gpid in used_enz_gps:
+            uid = self.model.gps[gpid].uid
+            p = self.model.proteins[uid]
             draw_rid = f'V_PC_{uid}'
             draw_name = f'conc_prot_{uid}'
             products = ' + '.join([sid for sid in p.linked_sids])
@@ -273,6 +319,36 @@ class EcModel:
         print(f'{len(df_add_rids):4d} protein variables to add')
         self.model.add_reactions(df_add_rids)
 
+    def get_modelled_protein_mass_fraction(self, fname):
+        """Determine protein mass fraction based on Pax-db.org downlaod.
+
+        Determine which part of organism protein mass fraction is modelled.
+        Protein abundance file needs first to be downloaded from Pax-db.org
+
+        :param fname: file path/name of protein abundance data collected from Pax-db.org
+        :type fname: str
+        :return: relative pmf of model based
+        :rtype: float
+        """
+        # parse file
+        df_ppm = pd.read_table(fname, comment='#', header=None, usecols=[1, 2], index_col=0)
+        df_ppm.index = [locus.split('.')[1] for locus in df_ppm.index]
+        ppm_abundance = df_ppm.iloc[:, 0].to_dict()
+
+        used_enz_gps = self._get_enzyme_gene_products()
+        used_uids = {self.model.gps[gpid].uid for gpid in used_enz_gps}
+
+        p_rel_total = 0.0
+        p_rel_model = 0.0
+        for locus, ppm in ppm_abundance.items():
+            if locus in self.model.uniprot_data.locus2uid:
+                uid = self.model.uniprot_data.locus2uid[locus]
+                rel_mass = ppm / 1.0e6 * self.model.uniprot_data.proteins[uid].mass
+                p_rel_total += rel_mass
+                if uid in used_uids:
+                    p_rel_model += rel_mass
+        return p_rel_model / p_rel_total
+
     def _reaction_enzyme_coupling(self):
         """Couple reactions with enzyme/protein requirement via kcats.
 
@@ -284,6 +360,7 @@ class EcModel:
         from enzyme get proteins and their stoichiometry in the enzyme complex
         add to reaction reactants the proteins with 1/kcat_per_h scaled by stoic.
         """
+        scale = 1e3
         for r in self.model.reactions.values():
             assert (len(r.enzymes) <= 1)
             if len(r.enzymes) == 1 and r.kcat is not None:
@@ -301,7 +378,71 @@ class EcModel:
                             if rev_rid in linked_sid:
                                 prot_sid = linked_sid
                                 break
-                    r.reactants[prot_sid] = stoic / kcat_per_h * 1e3
+                    r.reactants[prot_sid] = stoic / kcat_per_h * scale
+
+    def _rescale_reactions(self, df_rescale):
+        """rescale reactions (e.g. Biomass) as per ecYeast7 (Sanchez, 2017)
+
+        biomass dict contains
+        - biomass reaction id 'rid'
+        - rescale tasks 'rescale' a list of dict, each with
+            - either rescale factor 'factor' or an absolute value 'value', flaat
+            - 'rectants' and/or 'products', consisting of list of species ids
+
+        amino acids get scaled by parameter f_p
+        carbohydrates get scaled by parameter f_c
+        GAM related species get set to gam level
+
+        :param df_rescale: biomass rescaling parameters
+        :type df_rescale: pandas DataFrame
+        :return:
+        """
+        modify_reactants = {}
+        modify_products = {}
+        for rid, row in df_rescale.iterrows():
+            r = self.model.reactions[rid]
+            if type(row['reactants']) is str:
+                scale_reacs = {sid.strip() for sid in row['reactants'].split(',')}
+                if rid not in modify_reactants:
+                    modify_reactants[rid] = r.reactants.copy()
+                new_srefs = {}
+                if np.isfinite(row['factor']):
+                    factor = row['factor']
+                    for sid, stoic in modify_reactants[rid].items():
+                        new_srefs[sid] = factor * stoic if sid in scale_reacs else stoic
+                elif np.isfinite(row['value']):
+                    value = row['value']
+                    for sid, stoic in modify_reactants[rid].items():
+                        new_srefs[sid] = value if sid in scale_reacs else stoic
+                modify_reactants[rid] = new_srefs
+
+            if type(row['products']) is str:
+                scale_prods = {sid.strip() for sid in row['products'].split(',')}
+                if rid not in modify_products:
+                    modify_products[rid] = r.products.copy()
+                new_srefs = {}
+                if np.isfinite(row['factor']):
+                    factor = row['factor']
+                    for sid, stoic in modify_products[rid].items():
+                        new_srefs[sid] = factor * stoic if sid in scale_prods else stoic
+                elif np.isfinite(row['value']):
+                    value = row['value']
+                    for sid, stoic in modify_products[rid].items():
+                        new_srefs[sid] = value if sid in scale_prods else stoic
+                modify_products[rid] = new_srefs
+
+        modify_attrs = []
+        for rid, srefs in modify_reactants.items():
+            reactants = '; '.join([f'species={sid}, stoic={stoic}' for sid, stoic in srefs.items()])
+            modify_attrs.append([rid, 'reaction', 'reactants', reactants])
+        for rid, srefs in modify_products.items():
+            products = '; '.join([f'species={sid}, stoic={stoic}' for sid, stoic in srefs.items()])
+            modify_attrs.append([rid, 'reaction', 'products', products])
+        cols = ['id', 'component', 'attribute', 'value']
+        df_modify_attrs = pd.DataFrame(modify_attrs, columns=cols)
+        df_modify_attrs.set_index('id', inplace=True)
+        print(f'reaction rescaling')
+        self.model.modify_attributes(df_modify_attrs, 'reaction')
 
     def query_kcats(self):
         """Query enzyme-reaction kcat values.
@@ -319,7 +460,7 @@ class EcModel:
             if len(r.enzymes) == 1:
                 dirxn = -1 if re.search('_REV$', sub_rid) else 1
                 enzyme = ', '.join([locus.strip() for locus in r.enzymes[0].split('_')[1:]])
-                rid_kcats.append([rid, sub_rid, dirxn, enzyme, r.kcatf, notes])
+                rid_kcats.append([rid, sub_rid, dirxn, enzyme, r.kcatsf, notes])
         df_rid_kcats = pd.DataFrame(rid_kcats, columns=['rid', 'sub_rid', 'dirxn', 'enzyme', 'kcat', 'notes'])
         df_rid_kcats.sort_values(by=['sub_rid', 'dirxn'], inplace=True)
         df_rid_kcats.set_index('rid', inplace=True)

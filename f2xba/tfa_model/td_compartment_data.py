@@ -17,9 +17,9 @@ class TdCompartmentData:
 
         c_data expected to have the keys:
           'ph': compartment pH
-          'ionic_strenght_M': ionic strength
-          'c_min_M': minimum metabolite concentrations
-          'c_max_M': maximum metabolite concentrations
+          'ionic_strenght_M': ionic strength in mol/l
+          'c_min_M': minimum metabolite concentrationsd in mol/l
+          'c_max_M': maximum metabolite concentrations in mol/l
           '<cid>_mV': membrane potential vs. given cid
 
         :param cid: compartment id (as in the model)
