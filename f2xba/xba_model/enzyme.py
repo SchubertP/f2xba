@@ -49,9 +49,8 @@ class Enzyme:
         self.name = name
         self.model = model
         self.composition = composition
-        # self.cofactors = cofactors
-        # self.mw = mw
         self.compartment = compartment
+        self.active_sites = 1
         self.rids = []
 
     @property

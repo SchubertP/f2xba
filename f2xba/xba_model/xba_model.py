@@ -23,7 +23,8 @@ from .protein import Protein
 from .enzyme import Enzyme
 from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
-from ..utils.mapping_utils import get_srefs, parse_reaction_string
+from ..utils.mapping_utils import get_srefs, parse_reaction_string, get_miriam_refs
+from ..biocyc.biocyc_data import BiocycData
 
 FBC_BOUND_TOL = '.10e'
 
@@ -225,9 +226,14 @@ class XbaModel:
             print(f'{count:4d} enzymes added with default stoichiometry')
 
             # set specific enzyme composition
+            org_prefix = general_params.get('biocyc_org_prefix')
+            biocyc_dir = os.path.join(general_params.get('organism_dir', ''), 'biocyc')
             if 'enzyme_comp_fname' in general_params:
-                count = self.set_enzyme_composition(general_params['enzyme_comp_fname'])
+                count = self.set_enzyme_composition_from_file(general_params['enzyme_comp_fname'])
                 print(f'{count:4d} enzyme compositions updated from {fname}')
+            elif type(org_prefix) is str:
+                count = self.set_enzyme_composition_from_biocyc(biocyc_dir, org_prefix)
+                print(f'{count:4d} enzyme compositions updated from Biocyc Enzyme data')
 
             # modify enzyme composition, e.g. ABC transporters
             if 'modify_attributes' in xba_params:
@@ -446,6 +452,68 @@ class XbaModel:
             model.to_excel(fname)
             print(f'model exported to Excel Spreadsheet: {fname}')
         return True
+
+    def export_kcats(self, fname):
+        """Export kcat values to Excel spreadsheet.
+
+        File could be used as a template to modify reaction kcat values
+        specific to isoenzymes, e.g. after configuring xba model with dummy kcat values.
+
+        Information data ('info_xxxx' columns) is provided for reference
+
+        :param fname: the export file name with extension '.xlsx'
+        :type fname: string
+        """
+        rid_kcats = []
+        for rid, r in self.reactions.items():
+            if len(r.enzymes) > 0:
+                name = getattr(r, 'name', '')
+                ecns = ', '.join(get_miriam_refs(r.miriam_annotation, 'ec-code', 'bqbiol:is'))
+                for idx, enz in enumerate(r.enzymes):
+                    e = self.enzymes[enz]
+                    genes = ', '.join(sorted(list(e.composition)))
+                    fwd_rs = r.get_reaction_string()
+                    parts = re.split(r'[-=]>', fwd_rs)
+                    arrow = ' -> ' if '->' in fwd_rs else ' => '
+                    rev_rs = parts[1].strip() + arrow + parts[0].strip()
+                    if r.kcatsf is not None:
+                        kcatf = r.kcatsf[idx]
+                        rid_kcats.append([rid, 1, genes, kcatf, ecns, r.kind, name, fwd_rs])
+                    if r.kcatsr is not None:
+                        kcatr = r.kcatsr[idx]
+                        rid_kcats.append([rid, -1, genes, kcatr, ecns, r.kind, name, rev_rs])
+
+        cols = ['rid', 'dirxn', 'genes', 'kcat_per_s', 'info ecns', 'info_type', 'info_name', 'info_reaction']
+        df_rid_kcats = pd.DataFrame(rid_kcats, columns=cols)
+        df_rid_kcats.set_index('rid', inplace=True)
+
+        with pd.ExcelWriter(fname) as writer:
+            df_rid_kcats.to_excel(writer, sheet_name='kcats')
+            print(f'{len(df_rid_kcats)} reaction kcat values exported to', fname)
+
+    def export_enz_composition(self, fname):
+        """Export enzyme composition to Excel spreadsheet.
+
+        File could be used as a template to modify enzyme compositions
+
+        Information data ('info_xxxx' columns) is provided for reference
+
+        :param fname: the export file name with extension '.xlsx'
+        :type fname: string
+        """
+        enz_comp = []
+        for eid, e in self.enzymes.items():
+            genes = sorted(list(e.composition))
+            composition = '; '.join([f'gene={gene}, stoic={e.composition[gene]}' for gene in genes])
+            enz_comp.append([eid, composition, e.active_sites, e.mw / 1000.0, len(e.rids), e.rids[0]])
+
+        cols = ['eid', 'composition', 'active_sites', 'info_mw_kDa', 'info_n_reactions', 'info_sample_rid']
+        df_enz_comp = pd.DataFrame(enz_comp, columns=cols)
+        df_enz_comp.set_index('eid', inplace=True)
+
+        with pd.ExcelWriter(fname) as writer:
+            df_enz_comp.to_excel(writer, sheet_name='kcats')
+            print(f'{len(df_enz_comp)} enzyme compositions exported to', fname)
 
     def _add_ncbi_data(self, chromosome2accid, ncbi_dir):
         """Add relevant NCBI data to the model
@@ -829,12 +897,73 @@ class XbaModel:
             r.set_enzymes(eids)
         return n_created
 
-    def set_enzyme_composition(self, fname):
-        """Configure enzyme composition.
+    def set_enzyme_composition_from_biocyc(self, biocyc_dir, org_prefix):
+        """Configure enzyme composition from biocyc
 
-        Excel document requires an index column (not used) and column 'genes'
-        Only column 'genes' is processed.
-            'genes' contains a sref presentation of enzyme composition,
+        Biocyc enzyme related data is read from files in directory biocyc_dir, if files exist,
+        alternatively Biocyc data is downloaded from Biocyc (assuming access for given
+        database is available)
+
+        Enzyme active site number is configured based on heuristics.
+        - for transporters we assume number of active sites = 1.0
+        - for metabolic enzymes we assume we take the minimum of the composition stoichiometry
+          as number of active sites.
+
+        :param biocyc_dir: directory where to retrieve/store biocyc organism data
+        :type biocyc_dir: str
+        :param org_prefix:Biocyc organism prefix (when using Biocyc Enzyme composition)
+        :type org_prefix: str
+        :return: number of updates
+        :rtype: int
+        """
+        biocyc = BiocycData(biocyc_dir, org_prefix=org_prefix)
+        biocyc.set_enzyme_composition()
+        enz_comp = {}
+        for enz_id, enz in biocyc.proteins.items():
+            if len(enz.gene_composition) > 0 and len(enz.enzrxns) > 0:
+                gene_comp = '; '.join([f'gene={gene}, stoic={stoic}'
+                                       for gene, stoic in enz.gene_composition.items()])
+                enz_comp[enz_id] = [enz.name, enz.synonyms, gene_comp]
+        df = pd.DataFrame(enz_comp.values(), index=list(enz_comp), columns=['name', 'synonyms', 'composition'])
+        print(f'{len(df)} enzymes extracted from Biocyc')
+
+        biocyc_enz_comp = [get_srefs(re.sub('gene', 'species', srefs)) for srefs in df['composition'].values]
+        biocyc_eid2comp = {'enz_' + '_'.join(sorted(comp.keys())): comp for comp in biocyc_enz_comp}
+
+        # update model enzymes with biocyc composition data
+        # enzyme in the model are based on reaction gene product associations.
+        #  These enzymes might be composesd of one or several Biocyc enzyme sub-complexes.
+        #  We try to identify such sub-complexes and update that part of the enzyme compositoin.
+        count = 0
+        for eid, e in self.enzymes.items():
+            if eid in biocyc_eid2comp:
+                e.composition = biocyc_eid2comp[eid]
+                count += 1
+            else:
+                updates = False
+                gpa_genes = set(e.composition)
+                if len(gpa_genes) > 1:
+                    updates = False
+                    for genes_stoic in biocyc_eid2comp.values():
+                        if set(genes_stoic).intersection(gpa_genes) == set(genes_stoic):
+                            e.composition.update(genes_stoic)
+                            updates = True
+                if updates is True:
+                    count += 1
+            # set active sites (based on heuristics) - for metabolic enzymes (not transporters)
+            e.active_sites = 1.0
+            min_stoic = min(e.composition.values())
+            any_rkind = self.reactions[e.rids[0]].kind
+            if min_stoic > 1.0 and any_rkind == 'metabolic':
+                e.active_sites = min_stoic
+        return count
+
+    def set_enzyme_composition_from_file(self, fname):
+        """Configure enzyme composition from file
+
+        Excel document requires an index column (not used) and column 'composition'
+        Only column 'composition' is processed.
+            'composition' contains a sref presentation of enzyme composition,
         e.g. 'gene=b2222, stoic=2.0; gene=b2221, stoic=2.0'
 
         Model enzyme id is determined by concatenating the locus ids (after sorting)
@@ -848,7 +977,38 @@ class XbaModel:
         # load enzyme composition data from file
         with pd.ExcelFile(fname) as xlsx:
             df = pd.read_excel(xlsx, index_col=0)
-        enz_composition = [get_srefs(re.sub('gene', 'species', srefs)) for srefs in df['genes'].values]
+
+        count = 0
+        for _, row in df.iterrows():
+            enz_comp = get_srefs(re.sub('gene', 'species', row['composition']))
+            eid = 'enz_' + '_'.join(sorted(enz_comp.keys()))
+            if eid in self.enzymes.items():
+                e = self.enzymes[eid]
+                e.composition = enz_comp
+                e.active_sites = row.get('active_sites', 1)
+                count += 1
+        return count
+
+    def set_enzyme_composition_old(self, fname):
+        """Configure enzyme composition.
+
+        Excel document requires an index column (not used) and column 'composition'
+        Only column 'composition' is processed.
+            'composition' contains a sref presentation of enzyme composition,
+        e.g. 'gene=b2222, stoic=2.0; gene=b2221, stoic=2.0'
+
+        Model enzyme id is determined by concatenating the locus ids (after sorting)
+        e.g. 'gene=b2222, stoic=2.0; gene=b2221, stoic=2.0' - > 'enz_b2221_b2222'
+
+        :param fname: name of Excel document specifying enzyme composition
+        :type fname: str
+        :return: number of updates
+        :rtype: int
+        """
+        # load enzyme composition data from file
+        with pd.ExcelFile(fname) as xlsx:
+            df = pd.read_excel(xlsx, index_col=0)
+        enz_composition = [get_srefs(re.sub('gene', 'species', srefs)) for srefs in df['composition'].values]
 
         # determining enzyme id from enzyme composition
         eid2comp = {'enz_' + '_'.join(sorted(comp.keys())): comp for comp in enz_composition}
@@ -947,13 +1107,13 @@ class XbaModel:
 
         n_updates = 0
         for rid, row in df_reaction_kcats.iterrows():
-            if type(row['enzyme']) is str and len(row['enzyme']) > 1:
-                eid = 'enz_' + '_'.join(sorted([locus.strip() for locus in row['enzyme'].split(',')]))
+            if type(row['genes']) is str and len(row['genes']) > 1:
+                eid = 'enz_' + '_'.join(sorted([locus.strip() for locus in row['genes'].split(',')]))
             else:
                 eid = 'unspec'
             if rid in self.reactions:
                 r = self.reactions[rid]
-                n_updates += r.set_kcat(eid, row['dirxn'], row['kcat'])
+                n_updates += r.set_kcat(eid, row['dirxn'], row['kcat_per_s'])
         return n_updates
 
     def set_enzyme_kcats(self, df_enz_kcats):
