@@ -114,13 +114,13 @@ class RbaMacromolecules:
             # add tRNAs
             for trna_id, row in df_trna_data.iterrows():
                 cid = rcid2cid[row['compartment']]
-                record = xba_model.ncbi_data.locus2record[row['locus']]
+                record = xba_model.ncbi_data.locus2record[row['label']]
                 self.macromolecules[trna_id] = RbaMacromolecule(trna_id, compartment=cid,
                                                                 composition=record.composition)
             # add rRNAs
             for _pm, row in df_mach_data[df_mach_data['macromolecules'] == 'rnas'].iterrows():
                 cid = rcid2cid[row['compartment']]
-                record = xba_model.ncbi_data.locus2record[row['locus']]
+                record = xba_model.ncbi_data.locus2record[row['label']]
                 rrna_id = row['id']
                 self.macromolecules[rrna_id] = RbaMacromolecule(rrna_id, compartment=cid,
                                                                 composition=record.composition)

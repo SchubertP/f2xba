@@ -225,6 +225,7 @@ class EcModel:
     def _select_ccfba_isoenzyme(self):
         """Select least cost enzyme for reactions catalyzed by several isoenzymes.
 
+        Consider number of active sites when determining enzyme kcat value
         Other isoenzymes get deleted and gpa updated.
 
         Integration with Thermodynamic FBA (TFA):
@@ -255,8 +256,8 @@ class EcModel:
                                     if dir_r.kcatsf is not None else 0)
                     # consider reactions with undefined kcatf (due to TD integration)
                     if len(r.enzymes) == valid_kcatsf:
-                        idx = np.argmin([self.model.enzymes[e].mw / kcat
-                                         for e, kcat in zip(dir_r.enzymes, dir_r.kcatsf)])
+                        idx = np.argmin([self.model.enzymes[eid].mw / (kcat * self.model.enzymes[eid].active_sites)
+                                         for eid, kcat in zip(dir_r.enzymes, dir_r.kcatsf)])
                         eid = dir_r.enzymes[idx]
                         gpa = ' and '.join(sorted([self.model.uid2gp[self.model.locus2uid[locus]]
                                                    for locus in self.model.enzymes[eid].composition]))
@@ -355,6 +356,7 @@ class EcModel:
         applicable to enzyme catalyzed reactions.
         from reaction get enzyme and corresponding kcat
         convert kcat from s-1 to h-1
+        scaled total enzyme kcat by number of active sites
         also consider enzymes/proteins in mg/mgDW
 
         from enzyme get proteins and their stoichiometry in the enzyme complex
@@ -364,9 +366,9 @@ class EcModel:
         for r in self.model.reactions.values():
             assert (len(r.enzymes) <= 1)
             if len(r.enzymes) == 1 and r.kcat is not None:
-                kcat_per_h = r.kcat * 3600.0
-                enz = self.model.enzymes[r.enzymes[0]]
-                for locus, stoic in enz.composition.items():
+                e = self.model.enzymes[r.enzymes[0]]
+                enz_kcat_per_h = r.kcat * 3600.0 * e.active_sites
+                for locus, stoic in e.composition.items():
                     uid = self.model.locus2uid[locus]
                     linked_sids = self.model.proteins[uid].linked_sids
                     prot_sid = None
@@ -378,7 +380,7 @@ class EcModel:
                             if rev_rid in linked_sid:
                                 prot_sid = linked_sid
                                 break
-                    r.reactants[prot_sid] = stoic / kcat_per_h * scale
+                    r.reactants[prot_sid] = stoic / enz_kcat_per_h * scale
 
     def _rescale_reactions(self, df_rescale):
         """rescale reactions (e.g. Biomass) as per ecYeast7 (Sanchez, 2017)
@@ -459,9 +461,12 @@ class EcModel:
             rid = re.sub(r'_iso\d$', '', tmp_rid)
             if len(r.enzymes) == 1:
                 dirxn = -1 if re.search('_REV$', sub_rid) else 1
-                enzyme = ', '.join([locus.strip() for locus in r.enzymes[0].split('_')[1:]])
-                rid_kcats.append([rid, sub_rid, dirxn, enzyme, r.kcatsf, notes])
-        df_rid_kcats = pd.DataFrame(rid_kcats, columns=['rid', 'sub_rid', 'dirxn', 'enzyme', 'kcat', 'notes'])
+                eid = r.enzymes[0]
+                genes = ', '.join([locus.strip() for locus in eid.split('_')[1:]])
+                active_sites = self.model.enzymes[eid].active_sites,
+                rid_kcats.append([rid, sub_rid, dirxn, genes, r.kcatsf, active_sites, notes])
+        cols = ['rid', 'sub_rid', 'dirxn', 'genes', 'kcat_per_s', 'active_sites', 'notes']
+        df_rid_kcats = pd.DataFrame(rid_kcats, columns=cols)
         df_rid_kcats.sort_values(by=['sub_rid', 'dirxn'], inplace=True)
         df_rid_kcats.set_index('rid', inplace=True)
         return df_rid_kcats

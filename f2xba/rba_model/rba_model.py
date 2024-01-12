@@ -204,13 +204,14 @@ class RbaModel:
 
         # add gene products required for RBA machineries
         df_mach_data = rba_params['machineries']
-        count = self.model.add_gps(df_mach_data[df_mach_data['macromolecules'] == 'proteins'])
+        df_add_gps = df_mach_data[df_mach_data['macromolecules'] == 'proteins'].set_index('gpid')
+        count = self.model.add_gps(df_add_gps)
         print(f'{count:4d} proteins added for process machineries')
 
         # create model proteins for newly added gene products
         count = self.model.create_proteins()
         print(f'{count:4d} proteins created with UniProt information')
-        count = self.model.map_cofactors()
+        count = self.model.map_protein_cofactors()
         print(f'{count:4d} cofactors mapped to species ids for added protein')
 
         # split reactions into (reversible) isoreactions

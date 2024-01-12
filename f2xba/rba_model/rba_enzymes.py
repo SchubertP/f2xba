@@ -59,13 +59,13 @@ class RbaEnzymes:
         kcat_counts = {}
         for r in xba_model.reactions.values():
             if len(r.enzymes) == 1:
-                if r.kcatf is not None:
-                    kcat = r.kcatf[0]
+                if r.kcatsf is not None:
+                    kcat = r.kcatsf[0]
                     if kcat not in kcat_counts:
                         kcat_counts[kcat] = 0
                     kcat_counts[kcat] += 1
                 if r.reversible is True:
-                    kcat = r.kcatr[0]
+                    kcat = r.kcatsr[0]
                     if kcat not in kcat_counts:
                         kcat_counts[kcat] = 0
                     kcat_counts[kcat] += 1
@@ -79,11 +79,13 @@ class RbaEnzymes:
             parameters.add_function(p_name, f_params)
         return default_kcats
 
-    def create_efficiencies(self, r, xba_model, parameters):
+    def create_efficiencies(self, r, active_sites, xba_model, parameters):
         """Create enzyme fwd/rev efficiencies based on isoreaction kcats.
 
+        kcat is per active site. Enzymes may have multiple active sites.
+
         Efficiencies have units of h-1. Average enzyme saturation is considered.
-          eff = kcat * avg_enz_sat * 3600
+          eff = kcat * avg_enz_sat * 3600 * active_sites
 
         Support of RBA and TRBA.
           RBA: reversible isoreaction are not split in fwd/rev
@@ -97,6 +99,8 @@ class RbaEnzymes:
 
         :param r: reaction object
         :type r: f2xba.xba_model.sbml_reaction.SbmlReaction
+        :param active_sites: number of active sites in the enzyme
+        :type active_sites: float
         :param xba_model: xba model based on genome scale metabolic model
         :type xba_model: Class XbaModel
         :param parameters: RBA model parameters
@@ -107,20 +111,21 @@ class RbaEnzymes:
         ridx = re.sub('^R_', '', r.id)
 
         # determine reverse catalyic rates and reverse reactants with support of both RBA and TRBA
+        kcatf = r.kcatsf[0]
         kcatr = None
         rev_reactants = {}
-        if r.kcatr is not None:
+        if r.kcatsr is not None:
             # RBA: standard case of enzyme catalyzed reversible reaction
             # TRBA: special case of enzyme catalyzed reversible reaction, if there is no complete TD data
-            kcatr = r.kcatr[0]
+            kcatr = r.kcatsr[0]
             rev_reactants = r.products
         elif f'{r.id}_REV' in xba_model.reactions:
             rev_r = xba_model.reactions[f'{r.id}_REV']
-            if rev_r.kcatf is not None:
+            if rev_r.kcatsf is not None:
                 # TRBA: normal case with reversible enzyme catalyzed reaction having complete TD data
-                kcatr = rev_r.kcatf[0]
+                kcatr = rev_r.kcatsf[0]
                 rev_reactants = rev_r.reactants
-        kcats = {'fwd': r.kcatf[0], 'rev': kcatr}
+        kcats = {'fwd': kcatf, 'rev': kcatr}
         srefs = {'fwd': r.reactants, 'rev': rev_reactants}
 
         # automatically create parameters for fwd/rev enzyme efficiencies based on fwd/rev kcats
@@ -133,7 +138,7 @@ class RbaEnzymes:
                 else:
                     fid = f'{ridx}_{r_dir}_eff'
                     f_params = {'type': 'constant', 'variable': 'growth_rate',
-                                'params': {'CONSTANT': kcat * self.avg_enz_sat * 3600.0}}
+                                'params': {'CONSTANT': kcat * self.avg_enz_sat * 3600.0 * active_sites}}
                     parameters.add_function(fid, f_params)
 
             # for transporters create an aggregate with michaelisMenten saturation terms
@@ -216,8 +221,9 @@ class RbaEnzymes:
 
             if len(r.enzymes) > 0:
                 assert (len(r.enzymes) == 1)
-                composition = xba_model.enzymes[r.enzymes[0]].composition
-                fids = self.create_efficiencies(r, xba_model, parameters)
+                e = xba_model.enzymes[r.enzymes[0]]
+                composition = e.composition
+                fids = self.create_efficiencies(r, e.active_sites, xba_model, parameters)
 
             # case of spontaneous reactions: add enzymes 1.0 to suppress warning messages in RBApy 1.0
             elif r.kind != 'exchange' and r.kind != 'biomass':

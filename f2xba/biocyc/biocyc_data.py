@@ -4,7 +4,6 @@ Peter Schubert, CCB, HHU Duesseldorf, November 2022
 """
 
 import os
-import re
 import pandas as pd
 import urllib.parse
 import urllib.request
@@ -56,8 +55,8 @@ class BiocycData:
             self.retrieve_biocyc_data()
 
         self.genes = BiocycGene.get_genes(self.biocyc_data_fname('Gene'))
-        self.locus2gene = {gene.locus: bc_id for bc_id, gene in self.genes.items()
-                           if re.match(r'b\d{4}', gene.locus)}
+        self.locus2gene = {gene.locus: bc_id for bc_id, gene in self.genes.items()}
+        # if re.match(r'b\d{4}', gene.locus)}
         self.proteins = BiocycProtein.get_proteins(self.biocyc_data_fname('Protein'))
         self.rnas = BiocycRNA.get_rnas(self.biocyc_data_fname('RNA'))
 

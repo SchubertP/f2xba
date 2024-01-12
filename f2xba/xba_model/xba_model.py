@@ -85,13 +85,13 @@ class XbaModel:
             self.fbc_flux_range[0] = min(self.fbc_flux_range[0], self.parameters[r.fbc_lower_bound].value)
             self.fbc_flux_range[1] = max(self.fbc_flux_range[1], self.parameters[r.fbc_upper_bound].value)
 
-        self.user_chebi2sid = {}
         self.enzymes = {}
         self.proteins = {}
+        self.user_chebi2sid = {}
         self.ncbi_data = None
         self.uniprot_data = None
 
-        # determin external compartment and identify drain reactions
+        # determine external compartment and identify drain reactions
         self.external_compartment = self._get_external_compartment()
         for rid, r in self.reactions.items():
             if r.kind == 'exchange':
@@ -170,6 +170,7 @@ class XbaModel:
         #############################
         # modify/correct components #
         #############################
+        protect_ids = []
         if 'modify_attributes' in xba_params:
             self.modify_attributes(xba_params['modify_attributes'], 'species')
             self.modify_attributes(xba_params['modify_attributes'], 'reaction')
@@ -178,10 +179,13 @@ class XbaModel:
             self.gpa_remove_gps(remove_gps)
         if 'add_gps' in xba_params:
             self.add_gps(xba_params['add_gps'])
+            protect_ids.extend(xba_params['add_gps'].index)
         if 'add_species' in xba_params:
             self.add_species(xba_params['add_species'])
+            protect_ids.extend(xba_params['add_species'].index)
         if 'add_reactions' in xba_params:
             self.add_reactions(xba_params['add_reactions'])
+            protect_ids.extend(xba_params['add_reactions'].index)
         for r in self.reactions.values():
             r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
 
@@ -214,7 +218,7 @@ class XbaModel:
             self.user_chebi2sid = {str(chebi): sid for chebi, sid in xba_params['chebi2sid']['sid'].items()
                                    if sid in self.species}
         if general_params.get('cofactor_flag', False) is True:
-            count = self.map_cofactors()
+            count = self.map_protein_cofactors()
             print(f'{count:4d} cofactors mapped to species ids')
 
         #####################
@@ -276,9 +280,9 @@ class XbaModel:
                         count += 1
             print(f'{count:4d} enzymes removed due to missing kcat values')
 
-        self.clean()
+        self.clean(protect_ids)
         self.print_size()
-        print('baseline XBA model configured!')
+        print('>>> BASELINE XBA model configured!\n')
 
     def get_compartments(self, component_type):
         """Get lists of component ids per compartment.
@@ -350,7 +354,7 @@ class XbaModel:
                         used_gpids.add(gp)
         return used_sids, used_pids, used_gpids
 
-    def clean(self):
+    def clean(self, protect_ids=None):
         """Remove unused components from the model and update groups
 
         I.e. species, parameters, gene products not used by reactions.
@@ -358,21 +362,30 @@ class XbaModel:
 
         :return:
         """
+        if protect_ids is None:
+            protect_ids = set()
+        else:
+            protect_ids = set(protect_ids)
+
         used_sids, used_pids, used_gpids = self.get_used_sids_pids_gpids()
         unused_pids = set(self.parameters).difference(used_pids)
         unused_sids = set(self.species).difference(used_sids)
         unused_gpids = set(self.gps).difference(used_gpids)
         for pid in unused_pids:
-            del self.parameters[pid]
+            if pid not in protect_ids:
+                del self.parameters[pid]
         for sid in unused_sids:
-            del self.species[sid]
+            if sid not in protect_ids:
+                del self.species[sid]
         for gpid in unused_gpids:
-            del self.gps[gpid]
+            if gpid not in protect_ids:
+                del self.gps[gpid]
 
         used_cids = set(self.get_used_cids())
         unused_cids = set(self.compartments).difference(used_cids)
         for cid in unused_cids:
-            del self.compartments[cid]
+            if cid not in protect_ids:
+                del self.compartments[cid]
 
         # update reactions in groups component
         orig2rids = defaultdict(set)
@@ -471,6 +484,7 @@ class XbaModel:
                 ecns = ', '.join(get_miriam_refs(r.miriam_annotation, 'ec-code', 'bqbiol:is'))
                 for idx, enz in enumerate(r.enzymes):
                     e = self.enzymes[enz]
+                    active_sites = e.active_sites
                     genes = ', '.join(sorted(list(e.composition)))
                     fwd_rs = r.get_reaction_string()
                     parts = re.split(r'[-=]>', fwd_rs)
@@ -478,12 +492,13 @@ class XbaModel:
                     rev_rs = parts[1].strip() + arrow + parts[0].strip()
                     if r.kcatsf is not None:
                         kcatf = r.kcatsf[idx]
-                        rid_kcats.append([rid, 1, genes, kcatf, ecns, r.kind, name, fwd_rs])
+                        rid_kcats.append([rid, 1, genes, kcatf, active_sites, ecns, r.kind, name, fwd_rs])
                     if r.kcatsr is not None:
                         kcatr = r.kcatsr[idx]
-                        rid_kcats.append([rid, -1, genes, kcatr, ecns, r.kind, name, rev_rs])
+                        rid_kcats.append([rid, -1, genes, kcatr, active_sites, ecns, r.kind, name, rev_rs])
 
-        cols = ['rid', 'dirxn', 'genes', 'kcat_per_s', 'info ecns', 'info_type', 'info_name', 'info_reaction']
+        cols = ['rid', 'dirxn', 'genes', 'kcat_per_s',
+                'info_active_sites', 'info ecns', 'info_type', 'info_name', 'info_reaction']
         df_rid_kcats = pd.DataFrame(rid_kcats, columns=cols)
         df_rid_kcats.set_index('rid', inplace=True)
 
@@ -725,29 +740,27 @@ class XbaModel:
     def create_proteins(self):
         """Create proteins used in the model.
 
-        Assumed: fbc_gene_product contains uniprot MIRIAM annotations
+        After gene products have been created, e.g. based on fbcGeneProducts components in GEM
 
-        First we try getting a valid uniprot id from gp annotation.
-        Alternatively we check if gene locus is found in uniprot ids.
-
-        We only create proteins, if they are used
-        protein compartment is defined by reaction compartment of a reaction that
-        is catalyzed by gene product. We use one of the reactions as reference.
+        First we try getting a valid uniprot id from gp Miriam annotation.
+        Alternatively we check if gene locus is found in Uniprot proteins
 
         We also configure gene id and gene name 'notes'-field of gene product
         """
         n_created = 0
         for gp in self.gps.values():
-            # we only create proteins, if protein is used in reactions
-            if gp.label in self.locus2rids:
-                # using first reaction as reference for pseudo species compartment
-                any_rid = self.locus2rids[gp.label][0]
-                cid = self.reactions[any_rid].compartment
-                if gp.uid not in self.uniprot_data.proteins:
-                    gp.uid = self.uniprot_data.locus2uid.get(gp.label, '')
-                self.proteins[gp.uid] = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
-                gp.add_notes(self.proteins[gp.uid])
-                gp.add_notes(self.proteins[gp.uid])
+            if gp.uid not in self.uniprot_data.proteins:
+                gp.uid = self.uniprot_data.locus2uid.get(gp.label, '')
+            if gp.uid not in self.proteins:
+                if gp.label in self.locus2rids:
+                    # using first reaction as reference for pseudo species compartment
+                    any_rid = self.locus2rids[gp.label][0]
+                    cid = self.reactions[any_rid].compartment
+                else:
+                    cid = gp.compartment
+                p = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
+                self.proteins[gp.uid] = p
+                gp.add_notes(f'[{p.gene_name}], {p.name}')
                 n_created += 1
 
         # update mapping, in case we modified uniprot information
@@ -765,7 +778,7 @@ class XbaModel:
             columns:
                 'gpid': gene product id, e.g. 'G_b0015'
                 'label': gene locus, e.g. 'b0015'
-                and other
+                'compartment': optional compartment id of protein
         optionally we add compartment info to support RBA machinery related gene products
                 'compartment': location of gene product, e.g. 'c'
 
@@ -781,15 +794,12 @@ class XbaModel:
             if gpid not in self.gps:
                 self.gps[gpid] = FbcGeneProduct(gp_data)
                 n_added += 1
-                # support of RBA machinery proteins
-                if 'compartment' in gp_data:
-                    self.gps[gpid].compartment = gp_data['compartment']
         # update mappings
         self._update_gp_mappings()
 
         return n_added
 
-    def map_cofactors(self):
+    def map_protein_cofactors(self):
         """Map protein cofactors to species ids.
 
         Cofactors are retrieved from Uniprot.
@@ -982,7 +992,7 @@ class XbaModel:
         for _, row in df.iterrows():
             enz_comp = get_srefs(re.sub('gene', 'species', row['composition']))
             eid = 'enz_' + '_'.join(sorted(enz_comp.keys()))
-            if eid in self.enzymes.items():
+            if eid in self.enzymes:
                 e = self.enzymes[eid]
                 e.composition = enz_comp
                 e.active_sites = row.get('active_sites', 1)
