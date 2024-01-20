@@ -39,7 +39,7 @@ class RbaEnzymes:
             print(f'enzymes not imported!')
 
     @staticmethod
-    def add_default_kcats(xba_model, parameters, avg_enz_sat, min_count=50):
+    def add_default_kcats_old(xba_model, parameters, avg_enz_sat, min_count=50):
         """Define some default kcat functions for most frequent kcats in the model
 
         Note: with TD integration irreversible enzyme catalzyed reactions also get split
@@ -80,22 +80,22 @@ class RbaEnzymes:
         return default_kcats
 
     def create_efficiencies(self, r, active_sites, xba_model, parameters):
-        """Create enzyme fwd/rev efficiencies based on isoreaction kcats.
+        """Create enzyme fwd/rev efficiencies based on iso-reaction kcats.
 
         kcat is per active site. Enzymes may have multiple active sites.
 
-        Efficiencies have units of h-1. Average enzyme saturation is considered.
+        Efficiencies have units of h-1. Reaction kcats are in s-1, therefore we multiply with 3600 s/h
+        Number of active sites in the enzyme are considered
+        For transporters taking up medium, automatically Michaelis Menten saturation functions are added
+        with default Km (0.8 mmol/l) value.
+        For all other enzymes, assume an average enzyme saturation ('avg_enz_sat' in 'general' sheet.
+
+        E.g. Average enzyme saturation of a metabolic enzyme.
           eff = kcat * avg_enz_sat * 3600 * active_sites
 
         Support of RBA and TRBA.
           RBA: reversible isoreaction are not split in fwd/rev
           TRBA: reversible isoreaction are split in irreversible fwd/rev reactions
-
-        Support metabolic enzymes and transport
-          Metabolic enzymes: create constant RBA functions based on kcats
-          Transorters: create RBA aggregate consisting of constant RBA efficiency
-            and Michaelis Menten saturation functions with default KM parameters
-            for all external reactants
 
         :param r: reaction object
         :type r: f2xba.xba_model.sbml_reaction.SbmlReaction
@@ -132,39 +132,44 @@ class RbaEnzymes:
         fids = {}
         for r_dir, kcat in kcats.items():
             fid = parameters.f_name_zero
-            if kcat is not None:
-                if kcat in self.default_kcats:
-                    fid = self.default_kcats[kcat]
-                else:
+
+            if r.compartment not in self.uptake_rcids:
+                # metabolic enzymes and transporters not part of medium uptake reactions
+                if kcat is not None:
                     fid = f'{ridx}_{r_dir}_eff'
                     f_params = {'type': 'constant', 'variable': 'growth_rate',
                                 'params': {'CONSTANT': kcat * self.avg_enz_sat * 3600.0 * active_sites}}
                     parameters.add_function(fid, f_params)
 
-            # for transporters create an aggregate with michaelisMenten saturation terms
-            if r.compartment in self.uptake_rcids:
-                f_names = []
-                for sid in srefs[r_dir]:
-                    if sid in self.saturation_sids:
-                        f_name = f'saturation_{sid}'
-                        if f_name not in parameters.functions:
-                            f_params = {'type': 'michaelisMenten', 'variable': sid,
-                                        'params': {'kmax': 1.0, 'Km': 0.8}}
-                            parameters.add_function(f_name, f_params)
-                        f_names.append(f_name)
-                if len(f_names) > 0:
-                    # f_names.append('desaturate')
-                    f_names.append(fid)
-                    agg_name = f'{ridx}_{r_dir}_eff_agg'
-                    parameters.add_aggregate(agg_name, f_names)
-                    fid = agg_name
+            else:
+                # for transporters taking up medium, the enzyme saturation is based on michaelisMenten saturation terms
+                if kcat is not None:
+                    fid = f'{ridx}_{r_dir}_eff'
+                    f_params = {'type': 'constant', 'variable': 'growth_rate',
+                                'params': {'CONSTANT': kcat * 3600.0 * active_sites}}
+                    parameters.add_function(fid, f_params)
+
+                    f_names = []
+                    for sid in srefs[r_dir]:
+                        if sid in self.saturation_sids:
+                            f_name = f'saturation_{sid}'
+                            if f_name not in parameters.functions:
+                                f_params = {'type': 'michaelisMenten', 'variable': sid,
+                                            'params': {'kmax': 1.0, 'Km': 0.8}}
+                                parameters.add_function(f_name, f_params)
+                            f_names.append(f_name)
+                    if len(f_names) > 0:
+                        f_names.append(fid)
+                        agg_name = f'{ridx}_{r_dir}_eff_agg'
+                        parameters.add_aggregate(agg_name, f_names)
+                        fid = agg_name
             fids[r_dir] = fid
         return fids
 
     def from_xba(self, general_params, xba_model, parameters, cid_mappings, medium):
         """Configure Enzymes based on RBA sepecific parameters.
 
-        isoreaction kcats (s-1) are converted enzyme efficiencies (h-1) considering and
+        iso-reaction kcats (s-1) are converted to enzyme efficiencies (h-1) considering and
         average enzyme saturation, and michaelis menten saturation terms for transporters
 
         RBA and TRBA (Thermodynamic RBA) support:
@@ -190,14 +195,9 @@ class RbaEnzymes:
         :type medium: class RbaMedium
         """
         self.avg_enz_sat = general_params.get('avg_enz_sat', DEFAULT_ENZ_SATURATION)
-        self.default_kcats = self.add_default_kcats(xba_model, parameters, self.avg_enz_sat)
+        # self.default_kcats = self.add_default_kcats(xba_model, parameters, self.avg_enz_sat)
         self.uptake_rcids = cid_mappings['uptake_rcids']
         medium_cid = cid_mappings['medium_cid']
-
-        # create a `desaturate` constant function to be used with transporters
-        # fid = f'desaturate'
-        # f_params = {'type': 'constant', 'variable': 'growth_rate', 'params': {'CONSTANT': 1.0/self.avg_enz_sat}}
-        # parameters.add_function(fid, f_params)
 
         # identify medium related species for saturation terms (once medium is set)
         self.saturation_sids = set()
@@ -220,19 +220,21 @@ class RbaEnzymes:
             composition = {}
 
             if len(r.enzymes) > 0:
+                # create efficiencies for enzyme catalyzed reactions
                 assert (len(r.enzymes) == 1)
                 e = xba_model.enzymes[r.enzymes[0]]
                 composition = e.composition
                 fids = self.create_efficiencies(r, e.active_sites, xba_model, parameters)
-
-            # case of spontaneous reactions: add enzymes 1.0 to suppress warning messages in RBApy 1.0
-            elif r.kind != 'exchange' and r.kind != 'biomass':
+            else:
+                # case of spontaneous reactions: add enzymes 1.0 to suppress warning messages in RBApy 1.0
                 ub = xba_model.parameters[r.fbc_upper_bound].value
                 fids['fwd'] = parameters.f_name_spontaneous if ub > 0.0 else parameters.f_name_zero
                 fids['rev'] = parameters.f_name_zero
                 if r.reversible is True and xba_model.parameters[r.fbc_lower_bound].value < 0.0:
                     fids['rev'] = parameters.f_name_spontaneous
                 elif f'{rid}_REV' in xba_model.reactions:
+                    # in case reaction has alredy been split in forward/reverse,
+                    # we collect the reverse enzyme efficiency from corresponding reverse reaction
                     rev_r = xba_model.reactions[f'{rid}_REV']
                     if xba_model.parameters[rev_r.fbc_upper_bound].value > 0.0:
                         fids['rev'] = parameters.f_name_spontaneous
@@ -303,8 +305,8 @@ class RbaEnzyme:
         self.zero_cost = zero_cost
         self.mach_reactants = m_reac if type(m_reac) is dict else {}
         self.mach_products = m_prod if type(m_prod) is dict else {}
-        self.sid_fwd = None
-        self.sid_rev = None
+        self.constr_id_fwd = None
+        self.constr_id_rev = None
 
     @staticmethod
     def import_xml(enzymes):

@@ -129,22 +129,26 @@ class RbaProcesses:
                 component = row['component']
                 reactants, products = translate_reaction_string(row['reaction_string'])
 
-                # constant processing data
+                # constant processing data for macromolecule
                 if component == 'constantProcessing':
                     const_proc['reactants'] = reactants
                     const_proc['products'] = products
 
-                # default configuration for type of components using similar reactions
-                elif component not in set2components[proc_set]:
+                # comonent processing costs
+                elif component in set2components[proc_set]:
+                    # processing of a main component, e.g. a specific amino acid during translation
+                    comp_proc[component] = {'cost': mach_cost, 'reactants': reactants, 'products': products}
+                else:
+                    # automatic creation of a set of component processings of specific type, e.g. folding of amino acids
                     for comp_id, comp in set2components[proc_set].items():
                         if comp.type == component:
                             if comp.type == 'cofactor':
+                                # cofactor processing is based on cofactor consumption
                                 comp_proc[comp_id] = {'cost': mach_cost, 'reactants': {comp_id: 1.0}, 'products': {}}
                             else:
+                                # e.g. amino acid processing with same reaction string (e.g. folding, secretion)
                                 comp_proc[comp_id] = {'cost': mach_cost, 'reactants': reactants, 'products': products}
                 # configuration if individual reaction
-                else:
-                    comp_proc[component] = {'cost': mach_cost, 'reactants': reactants, 'products': products}
 
             self.processing_maps[pmapid] = RbaProcessingMap(pmapid, const_processing=const_proc,
                                                             comp_processing=comp_proc)
@@ -265,7 +269,7 @@ class RbaProcess:
         self.machinery = machinery if type(machinery) is dict else {}
         self.productions = productions if type(productions) is dict else {}
         self.degradations = degradations if type(degradations) is dict else {}
-        self.sid = None
+        self.constr_id = None
 
     @staticmethod
     def import_xml(processes):

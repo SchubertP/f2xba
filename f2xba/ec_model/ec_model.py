@@ -122,9 +122,15 @@ class EcModel:
         self.model.clean()
 
         # add some parameter values for reference (after model.clean() so they are not removed)
-        self.model.add_parameter('frac_prot_totprot', pm2totpm, 'dimensionless')
-        self.model.add_parameter('frac_totprot_cdw', p_total, 'dimensionless')
-        self.model.add_parameter('frac_enzyme_sat', avg_enz_sat, 'dimensionless')
+        p1_dict = {'id': 'frac_prot_totprot', 'value': pm2totpm, 'units': 'dimensionless', 'constant': True,
+                   'name': 'protein mass fraction modelled'}
+        p2_dict = {'id': 'frac_totprot_cdw', 'value': p_total, 'units': 'dimensionless', 'constant': True,
+                   'name': 'protein mass fraction of total dry mass'}
+        p3_dict = {'id': 'frac_enzyme_sat', 'value': avg_enz_sat, 'units': 'dimensionless', 'constant': True,
+                   'name': 'average enzyme saturation level'}
+        self.model.add_parameter(p1_dict)
+        self.model.add_parameter(p2_dict)
+        self.model.add_parameter(p3_dict)
 
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_{ecm_type}'

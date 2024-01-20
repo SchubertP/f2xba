@@ -25,6 +25,7 @@ class SbmlCompartment(SbmlSBase):
             - 'sboterm': str - handled in parent class
             - 'metaid': str - handled in parent class
             - 'miriamAnnotation': str - handled in parent class
+            - 'xmlAnnotation': str - handled in parent class
             - 'notes': str - handled in parent class
             - 'size': float
             - 'spatialDimension': float
@@ -54,3 +55,13 @@ class SbmlCompartment(SbmlSBase):
         if hasattr(self, 'dimension'):
             data['spatialDimension'] = self.dimension
         return data
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        setattr(self, attribute, value)

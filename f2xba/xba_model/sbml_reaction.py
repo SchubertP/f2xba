@@ -50,10 +50,12 @@ class SbmlReaction(SbmlSBase):
         self.reversible = s_reaction['reversible']
         self.reactants = s_reaction['reactants']
         self.products = s_reaction['products']
+        self.sref2id = s_reaction.get('sref2id', {})
 
         self.fbc_lower_bound = s_reaction['fbcLowerFluxBound']
         self.fbc_upper_bound = s_reaction['fbcUpperFluxBound']
         self.gene_product_assoc = s_reaction.get('fbcGeneProdAssoc')
+        self.scale = s_reaction.get('scale', 1.0)
 
         self.rp_counts = [len(self.reactants), len(self.products)]
         self.rp_compartments = [self.get_compartments(self.reactants, species_dict),
@@ -184,10 +186,18 @@ class SbmlReaction(SbmlSBase):
         data['reversible'] = self.reversible
         data['fbcLowerFluxBound'] = self.fbc_lower_bound
         data['fbcUpperFluxBound'] = self.fbc_upper_bound
-        data['reactants'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
-                                       for sid, stoic in self.reactants.items()])
-        data['products'] = '; '.join([f'species={sid}, stoic={stoic}, const=True'
-                                      for sid, stoic in self.products.items()])
+
+        srefs = []
+        for sid, stoic in self.reactants.items():
+            sref_id_str = f'id={self.sref2id[sid]}, ' if sid in self.sref2id else ''
+            srefs.append(f'{sref_id_str}species={sid}, stoic={stoic}, const=True')
+        data['reactants'] = '; '.join(srefs)
+        srefs = []
+        for sid, stoic in self.products.items():
+            sref_id_str = f'id={self.sref2id[sid]}, ' if sid in self.sref2id else ''
+            srefs.append(f'{sref_id_str}species={sid}, stoic={stoic}, const=True')
+        data['products'] = '; '.join(srefs)
+
         if self.gene_product_assoc:
             data['fbcGeneProdAssoc'] = f'assoc={self.gene_product_assoc}'
         return data

@@ -12,7 +12,7 @@ class RbaTargetValue:
         self.upper_bound = ub
 
     @staticmethod
-    def get_target_value(value_type, f_name):
+    def get_target_value(value_type, p_name):
         """Return a RbaTargetValue object instantiated
 
         value_type can contain either 'value', 'upperBound' or 'lowerBound'
@@ -20,8 +20,8 @@ class RbaTargetValue:
 
         :param value_type: value type
         :type value_type: str
-        :param f_name: function / aggretate name to assign
-        :type f_name: str
+        :param p_name: parameter name (function / aggretate)
+        :type p_name: str
         :return: Target Value object
         :rType: RbaTargetValue
         """
@@ -29,12 +29,12 @@ class RbaTargetValue:
         lb = None
         ub = None
         if 'value' in value_type:
-            value = f_name
+            value = p_name
         else:
             if 'upperBound' in value_type:
-                ub = f_name
+                ub = p_name
             if 'lowerBound' in value_type:
-                lb = f_name
+                lb = p_name
         return RbaTargetValue(value=value, lb=lb, ub=ub)
 
     @staticmethod

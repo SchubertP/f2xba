@@ -1,26 +1,22 @@
-"""Implementation of SbmlParameter class.
+"""Implementation of SbmlFunctionDef class.
 
-based on XBAparameter from xbanalysis package
-
-Peter Schubert, HHU Duesseldorf, February 2023
+Peter Schubert, HHU Duesseldorf, January 2024
 """
 
 from .sbml_sbase import SbmlSBase
 
 
-class SbmlParameter(SbmlSBase):
+class SbmlFunctionDef(SbmlSBase):
 
-    def __init__(self, s_parameter):
-        """Instantiate SbmlParameter instance with data from s_parameter
+    def __init__(self, s_func_defs):
+        """Instantiate SbmlFunctionDefs instance with data from s_func_defs
 
-        s_parameter is pandas Series with Series.name attribute set parameter id and
+        s_func_defs is pandas Series with Series.name attribute set function id and
         several mandatory and optional attributes based on SBML specifications.
 
         - mandatory attributes:
-            - Series.name: str - parameter id
-            - 'value': float
-            - 'constant': bool
-            - 'units': str - unit definition id
+            - Series.name: str - function definition id
+            - 'math': str - math element
 
         - optional attributes:
             - 'name': str - handled in parent class
@@ -29,20 +25,15 @@ class SbmlParameter(SbmlSBase):
             - 'miriamAnnotation': str - handled in parent class
             - 'notes': str - handled in parent class
 
-        :param s_parameter: parameter data from SBML import
-        :type s_parameter: pandas Series
+        :param s_func_defs: function definition data
+        :type s_func_defs: pandas Series
         """
-        super().__init__(s_parameter)
-        self.value = s_parameter['value']
-        self.constant = s_parameter['constant']
-        self.units = s_parameter['units']
-        self.reuse = True
+        super().__init__(s_func_defs)
+        self.math = s_func_defs['math']
 
     def to_dict(self):
         data = super().to_dict()
-        data['value'] = self.value
-        data['constant'] = self.constant
-        data['units'] = self.units
+        data['math'] = self.math
         return data
 
     def modify_attribute(self, attribute, value):

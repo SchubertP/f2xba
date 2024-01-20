@@ -93,7 +93,7 @@ class RbaDensity:
     def __init__(self, cid, target_value=None):
         self.id = cid
         self.target_value = target_value
-        self.sid = None
+        self.constr_id = None
 
     def import_xml(target_densities):
         data = {}

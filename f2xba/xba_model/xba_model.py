@@ -16,6 +16,8 @@ from .sbml_compartment import SbmlCompartment
 from .sbml_parameter import SbmlParameter
 from .sbml_species import SbmlSpecies
 from .sbml_group import SbmlGroup
+from .sbml_function_def import SbmlFunctionDef
+from .sbml_init_assign import SbmlInitialAssignment
 from .fbc_objective import FbcObjective
 from .fbc_gene_product import FbcGeneProduct
 from .sbml_reaction import SbmlReaction
@@ -61,6 +63,11 @@ class XbaModel:
                     for gp_id, row in model_dict['fbcGeneProducts'].iterrows()}
         self.groups = {gid: SbmlGroup(row)
                        for gid, row in model_dict['groups'].iterrows()} if 'groups' in model_dict else None
+        self.func_defs = {fd_id: SbmlFunctionDef(row)
+                          for fd_id, row in model_dict['funcDefs'].iterrows()} if 'funcDefs' in model_dict else None
+        self.init_assigns = ({symbol_id: SbmlInitialAssignment(row)
+                             for symbol_id, row in model_dict['initAssign'].iterrows()}
+                             if 'initAssign' in model_dict else None)
 
         self.uid2gp = {}
         self.locus2gp = {}
@@ -450,6 +457,11 @@ class XbaModel:
         }
         if self.groups:
             m_dict['groups'] = pd.DataFrame([data.to_dict() for data in self.groups.values()])
+        if self.func_defs:
+            m_dict['funcDefs'] = pd.DataFrame([data.to_dict() for data in self.func_defs.values()]).set_index('id')
+        if self.init_assigns:
+            m_dict['initAssign'] = pd.DataFrame([data.to_dict()
+                                                 for data in self.init_assigns.values()]).set_index('symbol')
 
         extension = fname.split('.')[-1]
         if extension not in ['xml', 'xlsx']:
@@ -550,6 +562,47 @@ class XbaModel:
     #############################
     # MODIFY GENOME SCALE MODEL #
     #############################
+
+    def add_unit_def(self, u_dict):
+        """Add a single unit definition to the model.
+
+        :param u_dict: unit definition
+        :type u_dict: dict
+        """
+        unit_id = u_dict['id']
+        self.unit_defs[unit_id] = SbmlUnitDef(pd.Series(u_dict, name=unit_id))
+
+    def add_parameter(self, p_dict):
+        """Add a single parameter to the model.
+
+        :param p_dict: parameter definition
+        :type p_dict: dict
+        """
+        pid = p_dict['id']
+        self.parameters[pid] = SbmlParameter(pd.Series(p_dict, name=pid))
+
+    def add_function_def(self, fd_dict):
+        """Add a single function definition to the model.
+
+        :param fd_dict: function definition
+        :type fd_dict: dict
+        """
+        if self.func_defs is None:
+            self.func_defs = {}
+        fd_id = fd_dict['id']
+        self.func_defs[fd_id] = SbmlFunctionDef(pd.Series(fd_dict, name=fd_id))
+
+    def add_initial_assignment(self, ia_dict):
+        """Add a single initial assignmentto the model.
+
+        :param ia_dict: initial assignment definition
+        :type ia_dict: dict
+        """
+        if self.init_assigns is None:
+            self.init_assigns = {}
+        ia_id = ia_dict['symbol']
+        self.init_assigns[ia_id] = SbmlInitialAssignment(pd.Series(ia_dict))
+
 
     def add_species(self, df_species):
         """Add species to the model according to species configuration
@@ -668,7 +721,7 @@ class XbaModel:
         """
         component_mapping = {'species': self.species, 'reaction': self.reactions,
                              'protein': self.proteins, 'enzyme': self.enzymes,
-                             'parameter': self.parameters}
+                             'parameter': self.parameters, 'compartment': self.compartments}
         n_count = 0
         for _id, row in df_modify[df_modify['component'] == component_type].iterrows():
             n_count += 1
@@ -1191,7 +1244,7 @@ class XbaModel:
         return n_updates
 
     # MODEL CONVERSIONS
-    def add_parameter(self, pid, value, units, constant=True, pname=None, sboterm=None):
+    def add_parameter_old(self, pid, value, units, constant=True, pname=None, sboterm=None):
         """add single parameter to the model.
 
         :param pid: parameter id (compliant to SBML ids)
@@ -1239,34 +1292,34 @@ class XbaModel:
         # if parameter id does not exist, first create it
         if unit_id not in self.fbc_shared_pids:
             if unit_id == 'umol_per_gDW':
-                u_dict = {'id': unit_id, 'name': 'micromoles per gram (dry weight)', 'metaid': f'meta_{unit_id}',
+                u_dict = {'id': unit_id, 'name': 'micromole per gram (dry weight)',
                           'units': ('kind=mole, exp=1.0, scale=-6, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0')}
             elif unit_id == 'mmol_per_gDW':
-                u_dict = {'id': unit_id, 'name': 'millimoles per gram (dry weight)', 'metaid': f'meta_{unit_id}',
+                u_dict = {'id': unit_id, 'name': 'millimole per gram (dry weight)',
                           'units': ('kind=mole, exp=1.0, scale=-3, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0')}
             elif unit_id == 'umol_per_gDWh':
                 u_dict = {'id': unit_id,
-                          'name': 'micromoles per gram (dry weight) per hour', 'metaid': f'meta_{unit_id}',
+                          'name': 'micromole per gram (dry weight) per hour',
                           'units': ('kind=mole, exp=1.0, scale=-6, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0; '
                                     'kind=second, exp=-1.0, scale=0, mult=3600.0')}
             elif unit_id == 'kJ_per_mol':
-                u_dict = {'id': unit_id, 'name': 'kilo joule per mole', 'metaid': f'meta_{unit_id}',
+                u_dict = {'id': unit_id, 'name': 'kilo joule per mole',
                           'units': ('kind=joule, exp=1.0, scale=3, mult=1.0; '
                                     'kind=mole, exp=-1.0, scale=0, mult=1.0')}
             elif unit_id == 'mg_per_gDW':
-                u_dict = {'id': unit_id, 'name': 'milligram per gram (dry weight)', 'metaid': f'meta_{unit_id}',
+                u_dict = {'id': unit_id, 'name': 'milligram per gram (dry weight)',
                           'units': ('kind=gram, exp=1.0, scale=-3, mult=1.0; '
                                     'kind=gram, exp=-1.0, scale=0, mult=1.0')}
             elif unit_id == 'fbc_dimensionless':
-                u_dict = {'id': unit_id, 'name': 'dimensionless', 'metaid': f'meta_{unit_id}',
+                u_dict = {'id': unit_id, 'name': 'dimensionless',
                           'units': 'kind=dimensionless, exp=1.0, scale=0, mult=1.0'}
             else:
                 print('unsupported flux bound unit type, create unit in unit definition')
                 return None
-            self.unit_defs[unit_id] = SbmlUnitDef(pd.Series(u_dict, name=unit_id))
+            self.add_unit_def(u_dict)
             self.fbc_shared_pids[unit_id] = {}
 
         if reuse is False:
