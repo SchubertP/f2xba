@@ -9,10 +9,11 @@ Peter Schubert, CCB, HHU Duesseldorf, January 2023
 """
 
 import os
+import re
 import urllib.parse
 import urllib.request
 
-from .ncbi_feature_record import NcbiFeatureRecord
+from .ncbi_feature import NcbiFeature
 
 
 e_utils_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/'
@@ -23,11 +24,10 @@ class NcbiChromosome:
     def __init__(self, chrom_id, accession_id, ncbi_dir):
         """Initialize
 
-        Downloads ncbi nucleotide information for given accession id.
-        Use stored file, if found in uniprot_dir.
+        Download NCBI nucleotide information for given accession id.
+        Use stored files, if found in ncbi_dir.
 
-        Processed uniprot export to extract protein information
-        We do not save nucleotide information (for now)
+        Extract genome and feature information
 
         :param chrom_id: chromosome id
         :type chrom_id: str
@@ -39,127 +39,96 @@ class NcbiChromosome:
         self.chromosome_id = chrom_id
         self.accession_id = accession_id
 
-        self.seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta.txt')
-        self.ft_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_features.txt')
+        seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta.txt')
+        ft_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_features.txt')
 
-        for rettype, fname in [('fasta', self.seq_fname), ('ft', self.ft_fname)]:
-            if not os.path.exists(fname):
-                self.download_data(rettype)
-            else:
-                print(f'using information from {fname}')
+        # download data from NCBI, unless data exists locally
+        if not os.path.exists(seq_fname) or not os.path.exists(ft_fname):
+            self.download_data('fasta', seq_fname)
+            self.download_data('ft', ft_fname)
+        else:
+            print(f'using information from {seq_fname}')
 
-        with open(self.seq_fname, 'r') as fh:
+        # retrieve genome data from local file
+        with open(seq_fname, 'r') as fh:
             self.header = fh.readline().strip()
-            nu_sequence = ''.join([line.strip() for line in fh])
+            chrom_nt_sequence = ''.join([line.strip() for line in fh])
 
-        nucleotides = sorted(set(nu_sequence))
-        self.composition = {nucleotide: nu_sequence.count(nucleotide) for nucleotide in nucleotides}
-        self.gc_content = (self.composition['G'] + self.composition['C']) / sum(self.composition.values())
+        # collect chromosome data
+        nts = sorted(set(chrom_nt_sequence))
+        self.nt_composition = {nt: chrom_nt_sequence.count(nt) for nt in nts}
+        self.gc_content = (self.nt_composition['G'] + self.nt_composition['C']) / sum(self.nt_composition.values())
 
-        self.rrnas = self.get_gene_data('rRNA', nu_sequence)
-        self.trnas = self.get_gene_data('tRNA', nu_sequence)
-        self.mrnas = self.get_gene_data('CDS', nu_sequence)
+        # collect feature data
+        self.features = self.extract_features(ft_fname, chrom_nt_sequence)
+        self.rrnas = {locus: gp for locus, gp in self.features.items() if gp.gp_type == 'rRNA'}
+        self.trnas = {locus: gp for locus, gp in self.features.items() if gp.gp_type == 'tRNA'}
+        self.mrnas = {locus: gp for locus, gp in self.features.items() if gp.gp_type == 'CDS'}
 
-        self.mrna_avg_composition = self.get_avg_composition(self.mrnas)
-
-    def download_data(self, rettype):
+    def download_data(self, rettype, fname):
         """Download data for retrival type from NCBI nucleotide database to file.
 
         :param rettype: retrival type ('fasta' or 'ft')
         :type rettype: str
+        :param fname: file name for fasta/feature download
+        :type fname: str
         """
         ncbi_fetch_url = (e_utils_url + 'efetch.fcgi?' +
                           f'db=nuccore&id={self.accession_id}&rettype={rettype}&retmode="text"')
-        fname = self.seq_fname if rettype == 'fasta' else self.ft_fname
         with urllib.request.urlopen(ncbi_fetch_url) as response, open(fname, 'wb') as fh:
             fh.write(response.read())
             print(f'Ncbi {rettype} records downloaded {self.accession_id} to: {fname}')
 
-    def get_gene_data(self, gp_type, chromosome_seq):
-        """Retrieve information for specified gene product types.
+    @staticmethod
+    def extract_features(ft_fname, chrom_nt_seq):
+        """Extract features from NCBI features file.
 
-        Using information from NCBI features record
+        A Feature contains 'gene' records and
+        'tRNA', 'rRNA' or 'CDS' records
 
-        Gene types can be 'rRNA', 'tRNA', 'CDS'
-        Data is collected from two subsequent FEATURE records.
-            - first record contains gene related information (feature = 'gene')
-                - gene id (e.g: rrsH), locus (e.g. b0201), and database references
-            - subsequent record contains gene product related information
-                - type of gene product (e.g. feature = 'rRNA')
-                - gene product name (e.g. '16S ribosomal RNA')
-            - both records have identical start and end sequence numbers
-            - nucleotide sequence data is extracted from sequence
+        A new Feature starts with a 'gene' start record.
+        A start record contains start, stop and record type information.
+        Subsequent lines can contain start/stop information related to spliced products
+        Subsequent lines can contrain record attributes that will be collected.
 
-        :param gp_type: genen element to get info
-        :type gp_type: str
-        :param chromosome_seq: nucleotide sequence of composome
-        :type chromosome_seq: str based on {'A', 'T', 'G', 'C'}
-        :return: dict with NCBI feature records related to RNA
-        :rtype: dict (key: gene locus, val: NCBIFeatureRecord)
+        :param ft_fname: file name with gene feature information
+        :type ft_fname: str
+        :param chrom_nt_seq: nucleotide sequence of chromosome
+        :type chrom_nt_seq:
+        :return: dict with gene locus and related NCBI feature record
+        :rtype: dict (key: gstr; val: class NCBIFeatureRecord)
         """
-        param2attr = {'gene': 'gene', 'locus_tag': 'locus', 'product': 'product', 'note': 'note'}
+        skipped_types = {'repeat_region', 'mobile_element', 'rep_origin'}
 
-        gps = {}
-        with open(self.ft_fname, 'r') as fh:
-            fh.readline().strip()  # throw away file header
-            record = {'type': 'invalid'}
+        features = {}
+        with open(ft_fname, 'r') as fh:
+            fh.readline().strip()  # drop file header
+
+            gene_data = None
             for line in fh:
                 fields = line.rstrip().split('\t')
                 if len(fields) == 3:
-                    start = int(fields[0])
-                    stop = int(fields[1])
                     record_type = fields[2]
-
-                    if record['type'] == gp_type:
-                        # safe record information for selected gene product type
-                        gene_features = NcbiFeatureRecord(record, chromosome_seq)
-                        gps[gene_features.locus] = gene_features
-                        record['type'] = 'invalid'
-
                     if record_type == 'gene':
-                        # new gene record clears record information
-                        record = {'type': record_type, 'start': start, 'stop': stop}
+                        # this starts a new feature
+                        if gene_data is not None:
+                            locus = gene_data.collect_info(chrom_nt_seq)
+                            features[re.sub(r'\W', '_', locus)] = gene_data
+                        gene_data = NcbiFeature(record_type, int(fields[0]), int(fields[1]))
+                    elif gene_data is not None and record_type not in skipped_types:
+                        # this adds a new record
+                        gene_data.add_record(record_type, int(fields[0]), int(fields[1]))
+                elif gene_data is not None:
+                    if len(fields) == 2:
+                        # this adds splicing information
+                        gene_data.add_region(record_type, int(fields[0]), int(fields[1]))
+                    elif len(fields) == 5:
+                        # this adds attributes
+                        gene_data.add_attribute(record_type, fields[3], fields[4])
 
-                    elif record_type == gp_type:
-                        # selected gene product type detected
-                        if (record['type'] == 'gene' and
-                                record['start'] == start and
-                                record['stop'] == stop):
-                            # HERE we only selecte gene products with same length as gene
-                            record['type'] = record_type
-                        else:
-                            record['type'] = 'invalid'
+        if gene_data is not None:
+            # final feature processing
+            locus = gene_data.collect_info(chrom_nt_seq)
+            features[re.sub(r'\W', '_', locus)] = gene_data
 
-                elif len(fields) == 5 and record['type'] != 'invalid':
-                    param = fields[3]
-                    value = fields[4]
-                    if param in param2attr:
-                        record[param2attr[param]] = value
-                    if param == 'db_xref':
-                        if 'xref' not in record:
-                            record['xref'] = []
-                        record['xref'].append(value)
-
-        if record['type'] == gp_type:
-            gene_features = NcbiFeatureRecord(record, chromosome_seq)
-            gps[gene_features.locus] = gene_features
-
-        return gps
-
-    @staticmethod
-    def get_avg_composition(genes):
-        """For list of genes determine average nucleotide composition.
-
-        :param genes:
-        :type genes: dict (key: gene locus id, val: NcbiFeatureRecord)
-        :return: relative compsition of each nucleotide
-        :rtype: dict (key: nucleotide id, val: relative composition/float)
-        """
-        nt_comp = {}
-        for locus, data in genes.items():
-            for nt, count in data.composition.items():
-                if nt not in nt_comp:
-                    nt_comp[nt] = 0
-                nt_comp[nt] += count
-        total = sum(nt_comp.values())
-        return {nt: count/total for nt, count in nt_comp.items()}
+        return features

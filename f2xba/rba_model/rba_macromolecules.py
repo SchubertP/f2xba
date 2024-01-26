@@ -116,14 +116,14 @@ class RbaMacromolecules:
                 cid = rcid2cid[row['compartment']]
                 record = xba_model.ncbi_data.locus2record[row['label']]
                 self.macromolecules[trna_id] = RbaMacromolecule(trna_id, compartment=cid,
-                                                                composition=record.composition)
+                                                                composition=record.spliced_nt_composition)
             # add rRNAs
             for _pm, row in df_mach_data[df_mach_data['macromolecules'] == 'rnas'].iterrows():
                 cid = rcid2cid[row['compartment']]
                 record = xba_model.ncbi_data.locus2record[row['label']]
                 rrna_id = row['id']
                 self.macromolecules[rrna_id] = RbaMacromolecule(rrna_id, compartment=cid,
-                                                                composition=record.composition)
+                                                                composition=record.spliced_nt_composition)
         if self.type == 'proteins':
             for p in xba_model.proteins.values():
                 locus = p.locus

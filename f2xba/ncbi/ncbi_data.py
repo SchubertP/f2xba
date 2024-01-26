@@ -8,6 +8,8 @@ NCBI's Disclaimer and Copyright notice
 Peter Schubert, CCB, HHU Duesseldorf, January 2023
 """
 
+from collections import defaultdict
+
 from .ncbi_chromosome import NcbiChromosome
 
 
@@ -16,10 +18,10 @@ class NcbiData:
     def __init__(self, chromosome2accid, ncbi_dir):
         """Initialize
 
-        Downloads ncbi nucleotide information for given accession ids.
-        Use stored file, if found in uniprot_dir.
+        Download NCBI nucleotide information for given accession ids.
+        Use stored file, if found in ncbi_dir.
 
-        :param chromosome2accid: Mapping chromosome to GeneBank accession_id
+        :param chromosome2accid: Mapping chromosome id to GeneBank accession_id
         :type chromosome2accid: dict (key: chromosome id, str; value: Genbank accession_id, str)
         :param ncbi_dir: directory where ncbi exports are stored
         :type ncbi_dir: str
@@ -51,30 +53,25 @@ class NcbiData:
         total_gc = 0
         for chrom_id in chrom_ids:
             chromosome = self.chromosomes[chrom_id]
-            total_nts += sum(chromosome.composition.values())
-            total_gc += chromosome.composition['G'] + chromosome.composition['C']
+            total_nts += sum(chromosome.nt_composition.values())
+            total_gc += chromosome.nt_composition['G'] + chromosome.nt_composition['C']
         return total_gc / total_nts
 
     def get_mrna_avg_composition(self, chromosome_id=None):
-        """retrieve average mrna composition accross all or a specifiec chromosome
+        """retrieve average mrna composition accross all or a chromosome
 
         :param chromosome_id: specific chromosome id
         :type chromosome_id: str or None (optional: default: None)
         :return: relative mrna nucleotide composition
         :rtype: dict (key: nucleotide id, val: fequency/float)
         """
-        if chromosome_id is not None:
-            chrom_ids = [chromosome_id]
-        else:
-            chrom_ids = self.chromosomes.keys()
+        chrom_ids = [chromosome_id] if chromosome_id is not None else self.chromosomes.keys()
 
-        nt_comp = {}
+        nt_comp = defaultdict(int)
         for chrom_id in chrom_ids:
-            chromosome = self.chromosomes[chrom_id]
-            for locus, feature in chromosome.mrnas.items():
-                for nt, count in feature.composition.items():
-                    if nt not in nt_comp:
-                        nt_comp[nt] = 0
+            chrom = self.chromosomes[chrom_id]
+            for locus, feature in chrom.mrnas.items():
+                for nt, count in feature.spliced_nt_composition.items():
                     nt_comp[nt] += count
         total = sum(nt_comp.values())
         return {nt: count / total for nt, count in nt_comp.items()}

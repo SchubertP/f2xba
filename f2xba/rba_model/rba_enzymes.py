@@ -10,14 +10,14 @@ from xml.etree.ElementTree import parse, ElementTree, Element, SubElement, inden
 
 from ..utils.rba_utils import get_species_refs_from_xml, get_species_refs_from_str
 
-DEFAULT_ENZ_SATURATION = .55
+DEFAULT_ENZ_SATURATION = 1.0
 
 
 class RbaEnzymes:
 
     def __init__(self):
         self.enzymes = {}
-        self.avg_enz_sat = DEFAULT_ENZ_SATURATION
+        self.avg_enz_sat = None
         self.default_kcats = {}
         self.uptake_rcids = []
         self.saturation_sids = set()
@@ -37,47 +37,6 @@ class RbaEnzymes:
             self.enzymes = RbaEnzyme.from_df(m_dict['enzymes'])
         else:
             print(f'enzymes not imported!')
-
-    @staticmethod
-    def add_default_kcats_old(xba_model, parameters, avg_enz_sat, min_count=50):
-        """Define some default kcat functions for most frequent kcats in the model
-
-        Note: with TD integration irreversible enzyme catalzyed reactions also get split
-         in fwd/rev. However, rev reaction '<rid>_REV' has no assigne kcat value
-
-        :param xba_model: xba model based on genome scale metabolic model
-        :type xba_model: Class XbaModel
-        :param parameters: RBA model parameters
-        :type parameters: Class RbaParameters
-        :param avg_enz_sat: average enzyme saturation to consider
-        :type avg_enz_sat: float
-        :param min_count: minimum occurance of a specific kcat
-        :type min_count: int, optional (Default: 50)
-        :return: default_kcats
-        :rtype: dict (key: kcat in s / float, val: function name)
-        """
-        kcat_counts = {}
-        for r in xba_model.reactions.values():
-            if len(r.enzymes) == 1:
-                if r.kcatsf is not None:
-                    kcat = r.kcatsf[0]
-                    if kcat not in kcat_counts:
-                        kcat_counts[kcat] = 0
-                    kcat_counts[kcat] += 1
-                if r.reversible is True:
-                    kcat = r.kcatsr[0]
-                    if kcat not in kcat_counts:
-                        kcat_counts[kcat] = 0
-                    kcat_counts[kcat] += 1
-
-        default_kcats = {kcat: f'default_kcat_{round(kcat, 1)}' for kcat, count in kcat_counts.items()
-                         if count >= min_count}
-
-        for kcat, p_name in default_kcats.items():
-            f_params = {'type': 'constant', 'variable': 'growth_rate',
-                        'params': {'CONSTANT': kcat * avg_enz_sat * 3600.0}}
-            parameters.add_function(p_name, f_params)
-        return default_kcats
 
     def create_efficiencies(self, r, active_sites, xba_model, parameters):
         """Create enzyme fwd/rev efficiencies based on iso-reaction kcats.
@@ -131,38 +90,37 @@ class RbaEnzymes:
         # automatically create parameters for fwd/rev enzyme efficiencies based on fwd/rev kcats
         fids = {}
         for r_dir, kcat in kcats.items():
-            fid = parameters.f_name_zero
+            fid = None
+            if r.compartment in self.uptake_rcids and kcat is not None:
+                # for transporters taking up medium, the enzyme saturation is based on Michaelis Menten kinetics
+                agg_fids = []
+                for sid in srefs[r_dir]:
+                    if sid in self.saturation_sids:
+                        agg_fid = f'saturation_{sid}'
+                        if agg_fid not in parameters.functions:
+                            f_params = {'type': 'michaelisMenten', 'variable': sid, 'params': {'kmax': 1.0, 'Km': 0.8}}
+                            parameters.add_function(agg_fid, f_params)
+                        agg_fids.append(agg_fid)
+                if len(agg_fids) > 0:
+                    # in case of saturation terms, create an RBA aggregate parameter
+                    max_eff_fid = f'{ridx}_{r_dir}_eff'
+                    f_params = {'type': 'constant', 'variable': 'growth_rate',
+                                'params': {'CONSTANT': kcat * 3600.0 * active_sites}}
+                    parameters.add_function(max_eff_fid, f_params)
+                    agg_fids.append(max_eff_fid)
+                    agg_id = f'{ridx}_{r_dir}_eff_agg'
+                    parameters.add_aggregate(agg_id, agg_fids)
+                    fid = agg_id
 
-            if r.compartment not in self.uptake_rcids:
-                # metabolic enzymes and transporters not part of medium uptake reactions
+            if fid is None:
                 if kcat is not None:
+                    # metabolic enzymes and transporters not part of medium uptake reactions
                     fid = f'{ridx}_{r_dir}_eff'
                     f_params = {'type': 'constant', 'variable': 'growth_rate',
                                 'params': {'CONSTANT': kcat * self.avg_enz_sat * 3600.0 * active_sites}}
                     parameters.add_function(fid, f_params)
-
-            else:
-                # for transporters taking up medium, the enzyme saturation is based on michaelisMenten saturation terms
-                if kcat is not None:
-                    fid = f'{ridx}_{r_dir}_eff'
-                    f_params = {'type': 'constant', 'variable': 'growth_rate',
-                                'params': {'CONSTANT': kcat * 3600.0 * active_sites}}
-                    parameters.add_function(fid, f_params)
-
-                    f_names = []
-                    for sid in srefs[r_dir]:
-                        if sid in self.saturation_sids:
-                            f_name = f'saturation_{sid}'
-                            if f_name not in parameters.functions:
-                                f_params = {'type': 'michaelisMenten', 'variable': sid,
-                                            'params': {'kmax': 1.0, 'Km': 0.8}}
-                                parameters.add_function(f_name, f_params)
-                            f_names.append(f_name)
-                    if len(f_names) > 0:
-                        f_names.append(fid)
-                        agg_name = f'{ridx}_{r_dir}_eff_agg'
-                        parameters.add_aggregate(agg_name, f_names)
-                        fid = agg_name
+                else:
+                    fid = parameters.f_name_zero
             fids[r_dir] = fid
         return fids
 
@@ -195,7 +153,6 @@ class RbaEnzymes:
         :type medium: class RbaMedium
         """
         self.avg_enz_sat = general_params.get('avg_enz_sat', DEFAULT_ENZ_SATURATION)
-        # self.default_kcats = self.add_default_kcats(xba_model, parameters, self.avg_enz_sat)
         self.uptake_rcids = cid_mappings['uptake_rcids']
         medium_cid = cid_mappings['medium_cid']
 

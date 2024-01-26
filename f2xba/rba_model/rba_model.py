@@ -73,11 +73,7 @@ class RbaModel:
         self.cid_mappings = {}
         self.mmid2mm = {}
         self.initial_assignments = InitialAssignments(self.parameters)
-
-        # TODO remove self.unscaled_mmids
-        self.unscaled_mmids = []
         self.parameter_values = {}
-        self.nonconst_fids = {}
 
     def get_dummy_translation_targets(self, rba_params):
         """get translation targets for dummy proteins
@@ -349,7 +345,8 @@ class RbaModel:
 
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_RBA'
-        self.model.model_attrs['name'] = f'RBA model of ' + self.model.model_attrs['name']
+        if 'name' in self.model.model_attrs:
+            self.model.model_attrs['name'] = f'RBA model of ' + self.model.model_attrs['name']
         self.model.sbml_container['level'] = 3
         self.model.sbml_container['version'] = 2
 
@@ -385,8 +382,6 @@ class RbaModel:
             mm_species[sid] = [f'macromolecule {mm_id}{uid_info}', mm.compartment, False, False, False,
                                f'meta_{sid}', miriam_annot, xml_annot]
             mm.sid = sid
-
-        self.unscaled_mmids = [mmid for mmid, mm in self.mmid2mm.items() if mm.scale == 1.0]
 
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant',
                 'meta_id', 'miriamAnnotation', 'xmlAnnotation']
@@ -675,7 +670,6 @@ class RbaModel:
         ub_pid = self.model.get_fbc_bnd_pid(MAX_ENZ_CONC, 'umol_per_gDW', 'max_enzyme_umol_conc')
         scale = 1000.0
 
-        nonconst_fids = defaultdict(dict)
         conc_vars = {}
         for eid, e in self.enzymes.enzymes.items():
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
@@ -695,23 +689,16 @@ class RbaModel:
                     reactants[e.constr_id_fwd] = self.parameter_values[e.forward_eff] / scale
                     self.initial_assignments.add_sref_ia(var_id, e.constr_id_fwd, rba_pid=e.forward_eff,
                                                          math_const=f'{1.0/scale} dimensionless')
-                    fid = e.forward_eff
-                    if not(fid in self.parameters.functions and self.parameters.functions[fid].type == 'constant'):
-                        nonconst_fids[var_id].update({e.constr_id_fwd: fid})
                 if e.constr_id_rev:
                     reactants[e.constr_id_rev] = self.parameter_values[e.backward_eff] / scale
                     self.initial_assignments.add_sref_ia(var_id, e.constr_id_rev, rba_pid=e.backward_eff,
                                                          math_const=f'{1.0/scale} dimensionless')
-                    fid = e.backward_eff
-                    if not(fid in self.parameters.functions and self.parameters.functions[fid].type == 'constant'):
-                        nonconst_fids[var_id].update({e.constr_id_rev: fid})
 
                 # couple weights of enzyme composition to density constraints
                 products.update(self._couple_weights(e.mach_reactants))
 
                 conc_vars[var_id] = [f'{eid} concentration (µmol)', False, reactants, products, scale, gpa,
                                      lb_pid, ub_pid, 'RBA_enz_conc']
-        self.nonconst_fids.update(dict(nonconst_fids))
 
         cols = ['name', 'reversible', 'reactants', 'products', 'scale', 'fbcGeneProdAssoc',
                 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind']
@@ -756,9 +743,6 @@ class RbaModel:
                 reactants[pm.constr_id] = self.parameter_values[pm.machinery['capacity'].value] / scale
                 self.initial_assignments.add_sref_ia(var_id, pm.constr_id, rba_pid=pm.machinery['capacity'].value,
                                                      math_const=f'{1.0 / scale} dimensionless')
-                fid = pm.machinery['capacity'].value
-                if not (fid in self.parameters.functions and self.parameters.functions[fid].type == 'constant'):
-                    self.nonconst_fids[var_id] = {pm.constr_id: fid}
 
                 # couple weights of process machine composition to density constraints
                 products.update(self._couple_weights(pm.machinery['reactants']))
@@ -810,10 +794,6 @@ class RbaModel:
                                             mm.scale, var_bnd_pid, var_bnd_pid, 'RBA_mm_conc']
                     self.initial_assignments.add_var_bnd_ia(var_bnd_pid, rba_pid=t.value,
                                                             math_const=f'{mm.scale} dimensionless')
-
-                    fid = t.value
-                    if not(fid in self.parameters.functions and self.parameters.functions[fid].type == 'constant'):
-                        self.nonconst_fids[var_id] = {mm.sid: fid}
 
         cols = ['name', 'reversible', 'reactants', 'products', 'scale',
                 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind']
@@ -885,7 +865,6 @@ class RbaModel:
                 reactants_vars[d.constr_id] = fid
         density_vars[var_id] = [f'max compartment density target (mmol AA)', False, reactants, {},
                                 one_mmol_pid, one_mmol_pid, 'RBA_max_density']
-        self.nonconst_fids[var_id] = reactants_vars
 
         # add slack variables for density constraints
         lb_pid = self.model.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'density_slack_min', reuse=False)
@@ -961,7 +940,6 @@ class RbaModel:
                             fid = t.upper_bound
                             if self.parameters.functions[fid].type != 'constant':
                                 non_const_fids[rid]['ub'] = fid
-        self.nonconst_fids.update(dict(non_const_fids))
 
         df_modify_attrs = pd.DataFrame(modify_attrs, columns=['id', 'component', 'attribute', 'value'])
         df_modify_attrs.set_index('id', inplace=True)
@@ -1112,46 +1090,6 @@ class RbaModel:
         else:
             return valid
 
-    def _export_rba_data(self, fname):
-        """Export RBA related data required for analysis under cobra py.
-
-        Plan, such parameters should be added to SBML model file
-
-        :param fname: file name of parameter file
-        :type fname: str
-        """
-        records = []
-        for var_id, data in self.nonconst_fids.items():
-            for constr_id, fid in data.items():
-                records.append([var_id, constr_id, fid])
-        df_nonconst_fids = pd.DataFrame(records, columns=['variable', 'constraint', 'function'])
-        df_nonconst_fids.set_index('variable', inplace=True)
-        df_unscaled_mmids = pd.DataFrame(self.unscaled_mmids, columns=['mmid'])
-
-        # collect RBA functions and aggregates
-        parameters = self.parameters.to_df()
-
-        # collect protein molecular weights
-        protein_mw = {}
-        for pid, p in self.proteins.macromolecules.items():
-            if pid in self.model.locus2uid:
-                uid = self.model.locus2uid[pid]
-                mw = self.model.uniprot_data.proteins[uid].mass
-            else:
-                uid = None
-                mw = self.proteins.macromolecules[pid].weight * 108.3
-            protein_mw[pid] = [mw, uid]
-        df_protein_mw = pd.DataFrame(protein_mw.values(), index=list(protein_mw), columns=['mw', 'uniprot'])
-
-        df_protein_mw.head()
-        with pd.ExcelWriter(fname) as writer:
-            df_nonconst_fids.to_excel(writer, sheet_name='non_const_fids')
-            df_unscaled_mmids.to_excel(writer, sheet_name='unscaled_mms')
-            parameters['functions'].to_excel(writer, sheet_name='functions')
-            parameters['aggregates'].to_excel(writer, sheet_name='aggregates')
-            df_protein_mw.to_excel(writer, sheet_name='protein_mw')
-            print(fname, 'created')
-
     def export(self, fname):
         """Export RBA model to directory in RBA format, Excel spreadsheet or SBML.
 
@@ -1164,11 +1102,8 @@ class RbaModel:
         :rtype: bool
         """
         if fname.endswith('.xml'):
-            self._export_rba_data(re.sub('.xml$', '_data.xlsx', fname))
             return self.model.export(fname)
-
         elif fname.endswith('.xlsx'):
-            # export RBA model in xlsx format
             return self.to_excel(fname)
         else:
             # export RBA model in RBA proprietary format

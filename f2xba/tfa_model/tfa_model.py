@@ -169,7 +169,8 @@ class TfaModel:
 
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_TFA'
-        self.model.model_attrs['name'] = f'TFA model of ' + self.model.model_attrs['name']
+        if 'name' in self.model.model_attrs:
+            self.model.model_attrs['name'] = f'TFA model of ' + self.model.model_attrs['name']
         self.model.sbml_container['level'] = 3
         self.model.sbml_container['version'] = 2
 
@@ -294,10 +295,12 @@ class TfaModel:
         """
         return self.model.export(fname)
 
-    def check_compatible_thermo_data(self, sid, thermo_data):
+    def check_compatible_thermo_data(self, sid, metabolite_td_data):
         """Check compatibility between species and thermo data record.
 
         Metbolic model assumed to carry formula and electrical charge.
+        If metabolic model does not carry a chemical formula, the formula check is positive
+
         These data values are compared with the selected thermo_data record.
 
         Check is passed successfully in the following cases:
@@ -309,25 +312,27 @@ class TfaModel:
             - if there are differences in chemical structure beyond different protonation level
             - if there are differences in charges beyond different protonation levels
 
+
         :param sid: species id in the model
         :type sid: str
-        :param thermo_data:
-        :type thermo_data: dict, extracted from all thermo data
+        :param metabolite_td_data:
+        :type metabolite_td_data: dict, extracted from all thermo data
         :return: success/failure of test
         :rtype: bool
         """
         valid = False
-        if thermo_data['deltaGf_std'] < 1e6 and thermo_data['error'] == 'Nil':
+        if metabolite_td_data['deltaGf_std'] < 1e6 and metabolite_td_data['error'] == 'Nil':
             s = self.model.species[sid]
             s_atoms = {atom: count for atom, count in extract_atoms(s.formula)}
-            td_atoms = {atom: count for atom, count in extract_atoms(thermo_data['formula'])}
+            # Note: strings loaded via pickle from thermo db have type numpy.str_
+            td_atoms = {atom: count for atom, count in extract_atoms(str(metabolite_td_data['formula']))}
             atoms = set(s_atoms.keys()).union(set(td_atoms.keys()))
             td_atom_delta = {}
             for atom in atoms:
                 delta = td_atoms.get(atom, 0) - s_atoms.get(atom, 0)
                 if delta != 0:
                     td_atom_delta[atom] = delta
-            td_charge_delta = thermo_data['charge_std'] - s.charge
+            td_charge_delta = metabolite_td_data['charge_std'] - s.charge
 
             if len(td_atom_delta) == 0 and td_charge_delta == 0:
                 valid = True
@@ -454,6 +459,10 @@ class TfaModel:
         all_td_data = all_thermo_data['metabolites']
         td_sids = self._select_td_species(all_td_data, modify_td_ids)
         self.td_species = {td_sid: TdSpeciesData(td_sid, all_td_data[td_sid], conv_factor) for td_sid in td_sids}
+        n_td_sids = sum([1 for s in self.model.species.values() if s.td_sid is not None])
+        not_supported = len(self.model.species) - n_td_sids
+        print(f'{len(self.td_species):4d} metabolites with TD data covering {n_td_sids} model species; '
+              f'({not_supported} not supported)')
 
         # create td_cues - selecting required cues only
         all_td_cues = all_thermo_data['cues']

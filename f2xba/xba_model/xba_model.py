@@ -204,7 +204,10 @@ class XbaModel:
             for kv in general_params['chromosome2accids'].split(','):
                 k, v = kv.split('=')
                 chromosome2accids[k.strip()] = v.strip()
-            self._add_ncbi_data(chromosome2accids, general_params['ncbi_dir'])
+            self.ncbi_data = NcbiData(chromosome2accids, general_params['ncbi_dir'])
+            for chromosome, data in self.ncbi_data.chromosomes.items():
+                print(f'{chromosome:15s}: {sum(data.nt_composition.values()):7d} nucleotides, '
+                      f'{len(data.mrnas):4d} mRNAs,', f'{len(data.rrnas):2d} rRNAs, {len(data.trnas):2d} tRNAs', )
 
         ####################################
         # create proteins based on Uniprot #
@@ -231,7 +234,6 @@ class XbaModel:
         #####################
         # configure enzymes #
         #####################
-
         if len(self.proteins) > 0:
             count = self.create_enzymes()
             print(f'{count:4d} enzymes added with default stoichiometry')
@@ -272,7 +274,7 @@ class XbaModel:
             # configure reaction/enzyme specific kcat values
             if 'kcats_fname' in general_params:
                 count = self.set_reaction_kcats(general_params['kcats_fname'])
-                print(f'{count:4d} kcat values updated from {fname}')
+                print(f'{count:4d} kcat values updated from {general_params["kcats_fname"]}')
 
             # remove enzyme from reactions if kcat values have not been provided
             count = 0
@@ -541,23 +543,6 @@ class XbaModel:
         with pd.ExcelWriter(fname) as writer:
             df_enz_comp.to_excel(writer, sheet_name='kcats')
             print(f'{len(df_enz_comp)} enzyme compositions exported to', fname)
-
-    def _add_ncbi_data(self, chromosome2accid, ncbi_dir):
-        """Add relevant NCBI data to the model
-
-        Downloads ncbi nucleotide information for given accession ids.
-        Use stored file, if found in ncbi_dir.
-
-        :param chromosome2accid: Mapping chromosome to GeneBank accession_id
-        :type chromosome2accid: dict (key: chromosome id, str; value: Genbank accession_id, str)
-        :param ncbi_dir: directory where ncbi exports are stored
-        :type ncbi_dir: str
-        """
-        # load NCBI data and retrieve gc ratio and mrnas
-        self.ncbi_data = NcbiData(chromosome2accid, ncbi_dir)
-        for chromosome, data in self.ncbi_data.chromosomes.items():
-            print(f'{chromosome}: {sum(data.composition.values())} nucleotides, {len(data.mrnas)} mRNAs,',
-                  f'{len(data.rrnas)} rRNAs, {len(data.trnas)} tRNAs', )
 
     #############################
     # MODIFY GENOME SCALE MODEL #
@@ -853,7 +838,7 @@ class XbaModel:
         return n_added
 
     def map_protein_cofactors(self):
-        """Map protein cofactors to species ids.
+        """Map cofactors to species ids and add to protein data.
 
         Cofactors are retrieved from Uniprot.
         CHEBI ids are used for mapping to model species.
@@ -875,9 +860,9 @@ class XbaModel:
                     chebi2sid[chebi] = []
                 chebi2sid[chebi].append(sid)
 
-        cf_not_mapped = {}
-        n_cf_not_mapped = 0
-        n_cf_mapped = 0
+        cof_not_mapped = {}
+        n_cof_not_mapped = 0
+        n_cof_mapped = 0
         for pid, p in self.proteins.items():
             if len(p.up_cofactors) > 0:
                 for up_cf, stoic in p.up_cofactors.items():
@@ -886,7 +871,7 @@ class XbaModel:
                         selected_sid = self.user_chebi2sid[chebi]
                         if selected_sid not in p.cofactors:
                             p.cofactors[selected_sid] = stoic
-                            n_cf_mapped += 1
+                            n_cof_mapped += 1
                     elif chebi in chebi2sid:
                         sids = chebi2sid[chebi]
                         cid2sids = {self.species[sid].compartment: sid for sid in sids}
@@ -897,16 +882,17 @@ class XbaModel:
                                 break
                         if selected_sid not in p.cofactors:
                             p.cofactors[selected_sid] = stoic
-                            n_cf_mapped += 1
+                            n_cof_mapped += 1
                     else:
-                        cf_not_mapped[chebi] = up_cf
-                        n_cf_not_mapped += 1
+                        cof_not_mapped[chebi] = up_cf
+                        n_cof_not_mapped += 1
 
-        if n_cf_not_mapped > 0:
-            print(f'{n_cf_not_mapped} cofactors could not be mapped.',
-                  f'{len(cf_not_mapped)} CHEBI ids need to be mapped to species:')
-            print(cf_not_mapped)
-        return n_cf_mapped
+        if n_cof_not_mapped > 0:
+            print(f'{n_cof_not_mapped} cofactors used in proteins could not be mapped (are not considered). ' 
+                  f'These correspond to {len(cof_not_mapped)} CHEBI ids, which could be added '
+                  f'to the parameter spreadsheet (chebi2sid):')
+            print(cof_not_mapped)
+        return n_cof_mapped
 
     def get_protein_compartments(self):
         """Get the compartments where proteins are located with their count.
