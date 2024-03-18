@@ -104,7 +104,8 @@ class RbaTargets:
                 rna_nt_stoic[sid] = stoic
             elif sid in aa2trna:
                 aa_stoic[sid] = stoic
-            elif sid not in other_sids and sid.split('_')[-1] != xba_model.external_compartment:
+            # elif sid not in other_sids and sid.split('_')[-1] != xba_model.external_compartment:
+            elif sid not in other_sids:
                 metabolite_stoic[sid] = stoic
 
         srefs = {}

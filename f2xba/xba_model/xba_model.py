@@ -491,12 +491,13 @@ class XbaModel:
         :param fname: the export file name with extension '.xlsx'
         :type fname: string
         """
-        rid_kcats = []
+        kcats = {}
         for rid, r in self.reactions.items():
             if len(r.enzymes) > 0:
                 name = getattr(r, 'name', '')
                 ecns = ', '.join(get_miriam_refs(r.miriam_annotation, 'ec-code', 'bqbiol:is'))
-                for idx, enz in enumerate(r.enzymes):
+                for idx, enz in enumerate(sorted(r.enzymes)):
+                    key = f'{rid}_iso{idx + 1}' if len(r.enzymes) > 1 else rid
                     e = self.enzymes[enz]
                     active_sites = e.active_sites
                     genes = ', '.join(sorted(list(e.composition)))
@@ -506,15 +507,15 @@ class XbaModel:
                     rev_rs = parts[1].strip() + arrow + parts[0].strip()
                     if r.kcatsf is not None:
                         kcatf = r.kcatsf[idx]
-                        rid_kcats.append([rid, 1, genes, kcatf, active_sites, ecns, r.kind, name, fwd_rs])
+                        kcats[key] = [rid, 1, genes, kcatf, active_sites, ecns, r.kind, name, fwd_rs]
                     if r.kcatsr is not None:
                         kcatr = r.kcatsr[idx]
-                        rid_kcats.append([rid, -1, genes, kcatr, active_sites, ecns, r.kind, name, rev_rs])
+                        kcats[f'{key}_REV'] = [rid, -1, genes, kcatr, active_sites, ecns, r.kind, name, rev_rs]
 
         cols = ['rid', 'dirxn', 'genes', 'kcat_per_s',
                 'info_active_sites', 'info ecns', 'info_type', 'info_name', 'info_reaction']
-        df_rid_kcats = pd.DataFrame(rid_kcats, columns=cols)
-        df_rid_kcats.set_index('rid', inplace=True)
+        df_rid_kcats = pd.DataFrame(kcats.values(), columns=cols, index=list(kcats))
+        df_rid_kcats.index.name = 'key'
 
         with pd.ExcelWriter(fname) as writer:
             df_rid_kcats.to_excel(writer, sheet_name='kcats')
@@ -587,7 +588,6 @@ class XbaModel:
             self.init_assigns = {}
         ia_id = ia_dict['symbol']
         self.init_assigns[ia_id] = SbmlInitialAssignment(pd.Series(ia_dict))
-
 
     def add_species(self, df_species):
         """Add species to the model according to species configuration
@@ -1136,10 +1136,11 @@ class XbaModel:
         """Set kcat values with enzyme-reaction specific kcat values.
 
         We only update kcats, if respective reaction exists in given direction
-        Spread sheet contains following columns:
-            'rid', model reaction id (str), e.g. 'R_ANS' - used as index
+        Spreadsheet contains following columns:
+            'key': a unique key used as index, e.g. R_ANS_iso1_REV (first column)
+            'rid', model reaction id (str), e.g. 'R_ANS'
             'dirxn': (1, -1) reaction direction forward/reverse
-            'enzyme': enzyme composition in terms of gene loci, comma separated
+            'genes': enzyme composition in terms of gene loci, comma separated
                 e.g. 'b1263, b1264', or np.nan/empty, if kcat is not isoenzyme specific
             'kcat': kcat value in per second (float)
 
@@ -1155,7 +1156,8 @@ class XbaModel:
             df_reaction_kcats = pd.read_csv(fname, index_col=0)
 
         n_updates = 0
-        for rid, row in df_reaction_kcats.iterrows():
+        for idx, row in df_reaction_kcats.iterrows():
+            rid = row['rid']
             if type(row['genes']) is str and len(row['genes']) > 1:
                 eid = 'enz_' + '_'.join(sorted([locus.strip() for locus in row['genes'].split(',')]))
             else:

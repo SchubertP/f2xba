@@ -26,7 +26,7 @@ class RbaDensities:
         else:
             print(f'{file_name} not found!')
 
-    def from_df(self, m_dict):
+    def from_df_old(self, m_dict):
         if 'densities' in m_dict:
             self.densities = RbaDensity.from_df(m_dict['densities'])
         else:
@@ -95,6 +95,7 @@ class RbaDensity:
         self.target_value = target_value
         self.constr_id = None
 
+    @staticmethod
     def import_xml(target_densities):
         data = {}
         for target_density in target_densities.findall('targetDensity'):

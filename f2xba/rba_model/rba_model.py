@@ -138,18 +138,33 @@ class RbaModel:
     def get_cid_mappings(rba_params):
         """get mapping of compartment ids.
 
-        For this specific 'type' values have to be in sheet 'compartments'
+        Depending on 'type' column in sheet 'compartments'
         - 'cytoplasm': default compartment for unassigned gene products, e.g. rRNA proteins
-        - 'uptake': compartment with transporters for medium uptake, e.g. 'inner_membrane'
-        - 'medium': compartment in which species for uptake are located, e.g. 'periplasm'
+        - 'uptake': compartment with transporters for medium uptake, e.g. 'outer_membrane'
+        - 'medium': compartment in which species for uptake are located, e.g. 'external'
 
         Mapping of xba model compartment ids to RBA compartment names
         Each reaction is connected to a compartment (based on its substrates)
         Transport reactions are connected to a compartment composed of a sorted concatenation
         of substrate cids, e.g. 'c-p'.
 
-        :param rba_params:
-        :return:
+        returns model specific compartment id mappings required for RBA model. A dict with keywords
+        - rcid2cid: mapping of reaction CIDs to CIDs, dict
+        - uptake_rcids: reaction CIDs for transport reactions involved in medium uptake, set of str
+        - medium_cid: CID where medium is located, str
+        - dummy_proteins: name of dummy proteins and their CID location, dict
+
+        e.g.  {'rcid2cid': {'c': 'c', 'e': 'e', 'p': 'p', 'c-p': 'im', 'c-e-p': 'im', 'c-e': 'im', 'e-p': 'om'},
+               'uptake_rcids': {'e-p'},
+               'cytoplasm_cid': 'c',
+               'medium_cid': 'e',
+               'dummy_proteins': {'dummy_protein_c': 'c', 'dummy_protein_e': 'e', 'dummy_protein_p': 'p',
+               'dummy_protein_im': 'im', 'dummy_protein_om': 'om'}}
+
+        :param rba_params: RBA specific parameters loaded from parameter Excel spreadsheet
+        :type rba_params: dict of pandas DataFrames
+        :return: model specific compartment id mappings
+        :rtype: dict
         """
         df_c_data = rba_params['compartments']
 
@@ -196,7 +211,7 @@ class RbaModel:
         Create relevant proteins in the XBA model and map cofactors
         Split reactions into (reversible) iso-reactions, each catalyzed by a single enzyme
 
-        :param rba_params: RBA model specific parametrization
+        :param rba_params: RBA specific parameters loaded from parameter Excel spreadsheet
         :type rba_params: dict of pandas DataFrames
         """
         # add (membrane) compartments to the xba model
