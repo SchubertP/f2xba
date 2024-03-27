@@ -220,19 +220,24 @@ class RbaModel:
             if cid not in self.model.compartments:
                 cs_config[cid] = {'name': row['name']}
         self.model.add_compartments(cs_config)
-        print(f'{len(cs_config):4d} compartments added')
+        if len(cs_config) > 0:
+            print(f'{len(cs_config):4d} compartments added')
 
         # add gene products required for RBA machineries
         df_mach_data = rba_params['machineries']
         df_add_gps = df_mach_data[df_mach_data['macromolecules'] == 'proteins'].set_index('gpid')
         count = self.model.add_gps(df_add_gps)
-        print(f'{count:4d} gene proteins added for process machineries')
+        if count > 0:
+            print(f'{count:4d} gene proteins added for process machineries')
+            self.model.update_gp_mappings()
 
         # create model proteins for newly added gene products
         count = self.model.create_proteins()
-        print(f'{count:4d} proteins created with UniProt information')
+        if count > 0:
+            print(f'{count:4d} proteins created with UniProt information')
         count = self.model.map_protein_cofactors()
-        print(f'{count:4d} cofactors mapped to species ids for added protein')
+        if count > 0:
+            print(f'{count:4d} cofactors mapped to species ids for added protein')
 
         # split reactions into (reversible) isoreactions
         n_r = len(self.model.reactions)
@@ -290,7 +295,7 @@ class RbaModel:
         self.processes.from_xba(rba_params, self.model, self)
 
         print(f'{len(self.parameters.functions):4d} functions, {len(self.parameters.aggregates):4d} aggregates')
-        print(f'RBA created from xba_model with data from {rba_params_fname}')
+        print(f'>>> RBA model created from xba_model with parameters from {rba_params_fname}')
 
         growth_rate = general_params.get('growth_rate', DEFAULT_GROWTH_RATE)
         self.update_xba_model(growth_rate)
@@ -823,7 +828,7 @@ class RbaModel:
         Unit: µmol/gDW
         The variable is fixed at the growth rate (lower/upper bound)
         Reactant coefficients are the target concentrations (these can be functions of growth rate by itself)
-        Growth rate dependent coefficients and variable bounds need to be updated during bisection optimiztion.
+        Growth rate dependent coefficients and variable bounds need to be updated during bisection optimization.
            NOTE: THIS will be changed to target = 1 and dilution terms for molecules
 
         :param growth_rate: growth rate (h-1) required for macromolecule dilution
@@ -839,6 +844,7 @@ class RbaModel:
         for tg_id, tg in self.targets.target_groups.items():
             for sid, t in tg.concentrations.items():
                 if sid not in self.mmid2mm:
+                    assert sid in self.model.species, f'targets: metabolite {sid} is not included in model species'
                     reactants_tsmc[sid] = growth_rate * self.parameter_values[t.value] * scale
                     self.initial_assignments.add_sref_ia(var_id, sid, rba_pid=t.value,
                                                          math_var=f'growth_rate * {scale} dimensionless')

@@ -73,7 +73,7 @@ class XbaModel:
         self.locus2gp = {}
         self.locus2uid = {}
         self.locus2rids = {}
-        self._update_gp_mappings()
+        self.update_gp_mappings()
 
         self.gem_size = {'n_sids': len(self.species), 'n_rids': len(self.reactions),
                          'n_gps': len(self.gps), 'n_pids': len(self.parameters)}
@@ -105,7 +105,7 @@ class XbaModel:
                 if r.compartment != self.external_compartment:
                     r.kind = 'drain'
 
-    def _update_gp_mappings(self):
+    def update_gp_mappings(self):
         self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items()}
         self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
         self.locus2uid = {gp.label: gp.id for gp in self.gps.values()}
@@ -195,6 +195,8 @@ class XbaModel:
             protect_ids.extend(xba_params['add_reactions'].index)
         for r in self.reactions.values():
             r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
+        # update mappings (just in case)
+        self.update_gp_mappings()
 
         #################
         # add NCBI data #
@@ -491,14 +493,15 @@ class XbaModel:
         :param fname: the export file name with extension '.xlsx'
         :type fname: string
         """
+        notes = 'XBA model export'
         kcats = {}
         for rid, r in self.reactions.items():
             if len(r.enzymes) > 0:
                 name = getattr(r, 'name', '')
                 ecns = ', '.join(get_miriam_refs(r.miriam_annotation, 'ec-code', 'bqbiol:is'))
-                for idx, enz in enumerate(sorted(r.enzymes)):
+                for idx, enzid in enumerate(sorted(r.enzymes)):
                     key = f'{rid}_iso{idx + 1}' if len(r.enzymes) > 1 else rid
-                    e = self.enzymes[enz]
+                    e = self.enzymes[enzid]
                     active_sites = e.active_sites
                     genes = ', '.join(sorted(list(e.composition)))
                     fwd_rs = r.get_reaction_string()
@@ -507,13 +510,14 @@ class XbaModel:
                     rev_rs = parts[1].strip() + arrow + parts[0].strip()
                     if r.kcatsf is not None:
                         kcatf = r.kcatsf[idx]
-                        kcats[key] = [rid, 1, genes, kcatf, active_sites, ecns, r.kind, name, fwd_rs]
+                        kcats[key] = [rid, 1, enzid, kcatf, notes, active_sites, ecns, r.kind, genes, name, fwd_rs]
                     if r.kcatsr is not None:
                         kcatr = r.kcatsr[idx]
-                        kcats[f'{key}_REV'] = [rid, -1, genes, kcatr, active_sites, ecns, r.kind, name, rev_rs]
+                        kcats[f'{key}_REV'] = [rid, -1, enzid, kcatr, notes, active_sites, ecns, r.kind,
+                                               genes, name, rev_rs]
 
-        cols = ['rid', 'dirxn', 'genes', 'kcat_per_s',
-                'info_active_sites', 'info ecns', 'info_type', 'info_name', 'info_reaction']
+        cols = ['rid', 'dirxn', 'enzyme', 'kcat_per_s', 'notes',
+                'info_active_sites', 'info ecns', 'info_type', 'info_genes', 'info_name', 'info_reaction']
         df_rid_kcats = pd.DataFrame(kcats.values(), columns=cols, index=list(kcats))
         df_rid_kcats.index.name = 'key'
 
@@ -612,7 +616,7 @@ class XbaModel:
                 if 'metaid' not in s_data:
                     s_data['metaid'] = f'meta_{sid}'
             self.species[sid] = SbmlSpecies(s_data)
-        print(f'{n_count:4d} species added to the model ({len(self.species)} total species)')
+        print(f'{n_count:4d} constraint ids added to the model ({len(self.species)} total constraints)')
 
     def add_reactions(self, df_reactions):
         """Add reactions based on supplied definition
@@ -650,7 +654,7 @@ class XbaModel:
                 r_data['fbcLowerFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcLb'], unit_id, f'fbc_{rid}_lb')
                 r_data['fbcUpperFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcUb'], unit_id, f'fbc_{rid}_ub')
             self.reactions[rid] = SbmlReaction(r_data, self.species)
-        print(f'{n_count:4d} reactions added to the model ({len(self.reactions)} total reactions)')
+        print(f'{n_count:4d} variable ids added to the model ({len(self.reactions)} total variables)')
 
     def add_compartments(self, compartments_config):
         """Add compartments to the model according to compartments configuration
@@ -736,8 +740,6 @@ class XbaModel:
             if gp in self.gps:
                 n_count += 1
                 del self.gps[gp]
-        # update mapping tables
-        self._update_gp_mappings()
         print(f'{n_count:4d} gene product(s) removed from reactions ({len(self.gps)} gene products remaining)')
 
     def remove_blocked_reactions_old(self):
@@ -820,6 +822,7 @@ class XbaModel:
         optionally we add compartment info to support RBA machinery related gene products
                 'compartment': location of gene product, e.g. 'c'
 
+        Add miriamAnnotation with Uniprot id, if not mirimaAnnotation has been provided
         Uniprot ID is retrieved with Uniprot data
 
         :param df_add_gps: configuration data for gene product, see sbmlxdf
@@ -827,15 +830,19 @@ class XbaModel:
         :return: number of added gene products
         :rtype: int
         """
-        n_added = 0
+        count = 0
         for gpid, gp_data in df_add_gps.iterrows():
             if gpid not in self.gps:
+                if type(gp_data.get('miriamAnnotation')) is not str:
+                    gene_id = gp_data['label']
+                    if gene_id in self.uniprot_data.locus2uid:
+                        uid = self.uniprot_data.locus2uid[gene_id]
+                        gp_data['metaid'] = f'meta_{gpid}'
+                        gp_data['miriamAnnotation'] = f'bqbiol:is, uniprot/{uid}'
                 self.gps[gpid] = FbcGeneProduct(gp_data)
-                n_added += 1
-        # update mappings
-        self._update_gp_mappings()
-
-        return n_added
+                count += 1
+        print(f'{count:4d} gene products added to the model ({len(self.gps)} total gene products)')
+        return count
 
     def map_protein_cofactors(self):
         """Map cofactors to species ids and add to protein data.
@@ -1158,10 +1165,11 @@ class XbaModel:
         n_updates = 0
         for idx, row in df_reaction_kcats.iterrows():
             rid = row['rid']
-            if type(row['genes']) is str and len(row['genes']) > 1:
-                eid = 'enz_' + '_'.join(sorted([locus.strip() for locus in row['genes'].split(',')]))
-            else:
-                eid = 'unspec'
+            eid = row.get('enzyme', 'unspec')
+            # if type(row['genes']) is str and len(row['genes']) > 1:
+            #     eid = 'enz_' + '_'.join(sorted([locus.strip() for locus in row['genes'].split(',')]))
+            # else:
+            #     eid = 'unspec'
             if rid in self.reactions:
                 r = self.reactions[rid]
                 n_updates += r.set_kcat(eid, row['dirxn'], row['kcat_per_s'])

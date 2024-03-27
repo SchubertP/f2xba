@@ -79,8 +79,7 @@ class UniprotData:
         if not os.path.exists(self.fname):
             self.download_data()
         else:
-            print(f'using information from {self.fname}, '
-                  f'dated: {time.ctime(os.path.getmtime(self.fname))}')
+            print(f'extracting UniProt protein data from {self.fname}')
 
         df_uniprot = pd.read_csv(self.fname, sep='\t', index_col=0)
         self.proteins = {}

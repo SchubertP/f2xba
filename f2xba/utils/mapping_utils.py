@@ -3,6 +3,10 @@
 Peter Schubert, HHU Duesseldorf, December 2022
 """
 import re
+import os
+import numpy as np
+import pandas as pd
+from collections import defaultdict
 import sbmlxdf
 
 
@@ -124,3 +128,85 @@ def stoicstr2srefs(stoichometric_str):
             stoic = 1.0
         srefs[sid] = stoic
     return srefs
+
+
+def update_master_kcats(df_master_kcats, fname):
+    """Iterative creation of kcats table.
+
+    Master table of kcats for enzyme catalyzed reactions is getting updated
+    with information from kcats table stored in fname.
+    Updated master table is returned.
+    Initial master table can be created using XbaModel.export_kcats(fname).
+
+    f2xba kcats Excel Spreadsheet format:
+        - sheet name: 'kcats'
+        - first column is header
+        - first row is the index (not required)
+
+    f2xba kcats table format:
+    index: unique record index, e.g 'R_GLUDy_iso2_REV' proposed rid, isoenzyme number, '_REV' for reverse dir.
+    mandatory columns:
+        - rid: reaction id, extracted from metabolic model, e.g. 'R_GLUDy'
+        - dirxn: reaction direction 1 (forward) or -1 (reverse) int
+        - enzyme: enzyme id, concatenation of sorted gene loci, str, e.g. 'enz_b3212_b3213'
+        - kcat_per_s: kcat per second for one active site (IUPAC), float
+        - notes: notes related to the entry, str or None
+    optional columns:
+        - info_active sites: number of active sites of enzyme (int or float)
+        - info_ecns: EX numbers, comma separated, str or None, e.g. '1.4.1.13, 1.4.1.3, 1.4.1.4'
+        - info_type: type of reaction, e.g. 'metabolic' or 'transporter'
+        - info_genes: comma separated, e.g. 'b3212, b3213'
+        - info_name: reaction name, str
+        - info_reaction: reaction string in given direction, str, e.g.
+            'M_akg_c + M_h_c + M_nadph_c + M_nh4_c -> M_glu__L_c + M_h2o_c + M_nadp_c'
+
+    :param df_master_kcats: master kcats table in f2xba kcats format
+    :type df_master_kcats: pandas DataFrame
+    :param fname: relative or absolute pathname of a kcats file in f2xba kcats format
+    :type fname: str
+    :return: return modified master kcats table
+    :rtype: pandas DataFrame
+    """
+    # load data with kcats records to be updated from file.
+    if os.path.exists(fname) is False:
+        print(f'{fname} does not exist')
+        raise FileNotFoundError
+    with pd.ExcelFile(fname) as xlsx:
+        df_upd_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
+        print(f'{len(df_upd_kcats)} kcat records for master table updated loaded from {fname}')
+
+    # create a mapping into the master table
+    rid2isorids = defaultdict(dict)
+    for iso_rid, row in df_master_kcats.iterrows():
+        rid2isorids[row['rid']].update({iso_rid: [row['dirxn'], row['enzyme']]})
+
+    not_found = {}
+    updated = []
+    for rkey, row in df_upd_kcats.iterrows():
+        kcat = row['kcat_per_s']
+        if np.isfinite(kcat) and kcat > 0.0:
+            rid = row['rid']
+            dirxn = row['dirxn']
+            enz_id = row['enzyme']
+            if rid in rid2isorids:
+                idx = None
+                for iso_rid, data in rid2isorids[rid].items():
+                    if data[0] == dirxn:
+                        if data[1] == enz_id:
+                            idx = iso_rid
+                            break
+                if idx is None:
+                    not_found[rkey] = [rid, dirxn, enz_id, kcat, row['notes']]
+                else:
+                    df_master_kcats.at[idx, 'kcat_per_s'] = kcat
+                    if row.get('notes'):
+                        df_master_kcats.at[idx, 'notes'] = row['notes']
+                    if row.get('info_type'):
+                        df_master_kcats.at[idx, 'info_type'] = row['info_type']
+                    updated.append(idx)
+            else:
+                not_found[rkey] = [rid, dirxn, enz_id, kcat, row['notes']]
+
+    print(f'{len(updated)} kcats updated, {len(df_master_kcats) - len(updated)} not updated in master; '
+          f'{len(not_found)} not found in master')
+    return df_master_kcats

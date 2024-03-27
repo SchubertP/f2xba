@@ -47,7 +47,7 @@ class NcbiChromosome:
             self.download_data('fasta', seq_fname)
             self.download_data('ft', ft_fname)
         else:
-            print(f'using information from {seq_fname}')
+            print(f'extracting nucleotide sequence from {seq_fname}')
 
         # retrieve genome data from local file
         with open(seq_fname, 'r') as fh:

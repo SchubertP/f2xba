@@ -22,7 +22,7 @@ class RbaTargets:
         file_name = os.path.join(model_dir, 'targets.xml')
         if os.path.exists(file_name) is True:
             root = parse(file_name).getroot()
-            assert root.tag == 'RBATargets'
+            assert root.tag == 'RBATargets', 'RBATargets tag expected during import'
             self.target_groups = RbaTargetGroup.import_xml(root.find('listOfTargetGroups'))
         else:
             print(f'{file_name} not found!')
@@ -152,7 +152,7 @@ class RbaTargets:
                 # special treatment of biomass related concentration targets
                 if (',' in target) and (np.isfinite(constant)):
                     biomass_rid, component_type = [item.strip() for item in target.split(',')]
-                    assert(biomass_rid in xba_model.reactions)
+                    assert biomass_rid in xba_model.reactions, f'Biomass reaction {biomass_rid} not found in model'
                     srefs = self.get_biomass_composition(biomass_rid, component_type, rba_params, xba_model)
                     for sid, stoic in srefs.items():
                         p_name = parameters.create_parameter(f'{sid}_{target_type}_auto_target', stoic * constant,

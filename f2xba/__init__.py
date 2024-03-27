@@ -11,6 +11,7 @@ from .xba_model import *
 from .ec_model import EcModel
 from .rba_model import RbaModel
 from .tfa_model import TfaModel
+from .utils.mapping_utils import update_master_kcats
 
 from . import utils
 from .biocyc import BiocycData

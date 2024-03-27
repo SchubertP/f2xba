@@ -713,7 +713,6 @@ class TfaModel:
         print(f'{len(df_add_species):4d} constraints to add')
 
         self.model.add_species(df_add_species)
-        print(f'{len(self.model.species):4d} species')
 
     def _add_gibbs_reaction_variables(self):
         """Add ∆rG' and ∆rG'˚ variables to the model as pseudo reactions.
