@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 import sbmlxdf
+from sbmlxdf.misc import get_miriam_refs
 
 from .sbml_unit_def import SbmlUnitDef
 from .sbml_compartment import SbmlCompartment
@@ -25,7 +26,7 @@ from .protein import Protein
 from .enzyme import Enzyme
 from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
-from ..utils.mapping_utils import get_srefs, parse_reaction_string, get_miriam_refs
+from ..utils.mapping_utils import get_srefs, parse_reaction_string
 from ..biocyc.biocyc_data import BiocycData
 
 FBC_BOUND_TOL = '.10e'
@@ -179,6 +180,7 @@ class XbaModel:
         #############################
         protect_ids = []
         if 'modify_attributes' in xba_params:
+            self.modify_attributes(xba_params['modify_attributes'], 'gp')
             self.modify_attributes(xba_params['modify_attributes'], 'species')
             self.modify_attributes(xba_params['modify_attributes'], 'reaction')
         if 'remove_gps' in xba_params:
@@ -546,7 +548,7 @@ class XbaModel:
         df_enz_comp.set_index('eid', inplace=True)
 
         with pd.ExcelWriter(fname) as writer:
-            df_enz_comp.to_excel(writer, sheet_name='kcats')
+            df_enz_comp.to_excel(writer, sheet_name='enzymes')
             print(f'{len(df_enz_comp)} enzyme compositions exported to', fname)
 
     #############################
@@ -695,7 +697,8 @@ class XbaModel:
             index: component id to modify
             columns:
                 'component': one of the supported model components
-                    'reaction', 'species', 'protein', 'enzyme', 'uniprot'
+                    'gp', 'reaction', 'species', 'protein', 'enzyme',
+                    'uniprot'
                 'attribute': the attribute name to modify
                 'value': value to configure for the attribute
         for species refs it is also possible to modify a single sref,
@@ -708,7 +711,7 @@ class XbaModel:
         :type component_type: str
         :return:
         """
-        component_mapping = {'species': self.species, 'reaction': self.reactions,
+        component_mapping = {'gp': self.gps, 'species': self.species, 'reaction': self.reactions,
                              'protein': self.proteins, 'enzyme': self.enzymes,
                              'parameter': self.parameters, 'compartment': self.compartments}
         n_count = 0

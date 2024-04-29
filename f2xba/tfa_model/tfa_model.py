@@ -174,6 +174,7 @@ class TfaModel:
         self.model.sbml_container['level'] = 3
         self.model.sbml_container['version'] = 2
 
+        self.print_td_stats()
         self.model.print_size()
         return True
 
@@ -219,6 +220,36 @@ class TfaModel:
         self._add_slack_variables()
         self._add_slack_objective()
         self.export(fname)
+
+    def print_td_stats(self):
+        """Print TD statistics on species/reactions
+        """
+        var_ids = set(self.model.reactions)
+        sids = []
+        td_sids = []
+        mids = set()
+        td_mids = set()
+        for constr_id in self.model.species:
+            if re.match('M_', constr_id):
+                sidx = re.sub(r'^M_', '', constr_id)
+                midx = sidx.rsplit('_', 1)[0]
+                sids.append(sidx)
+                mids.add(midx)
+                if f'V_LC_{sidx}' in var_ids:
+                    td_sids.append(sidx)
+                    td_mids.add(midx)
+
+        orig_rids = set()
+        td_rids = set()
+        for var_id, r in self.model.reactions.items():
+            if re.match('R_', var_id):
+                if r.kind in ['transporter', 'metabolic']:
+                    ridx = re.sub(r'^R_', '', r.orig_rid)
+                    orig_rids.add(ridx)
+                    if f'V_DRG_{ridx}' in var_ids:
+                        td_rids.add(ridx)
+        print(f'{len(td_sids)} species ({len(td_mids)} metabolites) with TD data from total {len(sids)} ({len(mids)})')
+        print(f'{len(td_rids)} metabolic/transporter reactions with TD data from total {len(orig_rids)}')
 
     def integrate_min_slack(self, fba_fluxes):
         """Integrate optimization results from slack minimization of slack model.

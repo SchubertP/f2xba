@@ -5,6 +5,8 @@ Extract nucleotide information from NCBI using E-utils EFetch.
 NCBI's Disclaimer and Copyright notice
 (https://www.ncbi.nlm.nih.gov/About/disclaimer.html).
 
+Check NCBI Entrez Programming Utilities https://www.ncbi.nlm.nih.gov/books/NBK25499
+
 Peter Schubert, CCB, HHU Duesseldorf, January 2023
 """
 
@@ -40,12 +42,14 @@ class NcbiChromosome:
         self.accession_id = accession_id
 
         seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta.txt')
+        aa_seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta_cds_aa.txt')
         ft_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_features.txt')
 
         # download data from NCBI, unless data exists locally
         if not os.path.exists(seq_fname) or not os.path.exists(ft_fname):
             self.download_data('fasta', seq_fname)
             self.download_data('ft', ft_fname)
+            # self.download_data('fasta_cds_aa', aa_seq_fname)
         else:
             print(f'extracting nucleotide sequence from {seq_fname}')
 
@@ -68,7 +72,10 @@ class NcbiChromosome:
     def download_data(self, rettype, fname):
         """Download data for retrival type from NCBI nucleotide database to file.
 
-        :param rettype: retrival type ('fasta' or 'ft')
+        rettype as per eFetch parameter description of NCBI Entrez Programming Utilities Help
+          https://www.ncbi.nlm.nih.gov/books/NBK25499/table/chapter4.T._valid_values_of__retmode_and
+
+        :param rettype: retrival type ('fasta', 'ft', 'fasta_cds_aa', 'fasta_cds_na')
         :type rettype: str
         :param fname: file name for fasta/feature download
         :type fname: str

@@ -6,7 +6,7 @@ Peter Schubert, HHU Duesseldorf, February 2023
 """
 
 from .sbml_sbase import SbmlSBase
-from f2xba.utils.mapping_utils import get_miriam_refs
+from sbmlxdf.misc import get_miriam_refs
 
 
 class SbmlSpecies(SbmlSBase):

@@ -10,31 +10,6 @@ from collections import defaultdict
 import sbmlxdf
 
 
-def get_miriam_refs(annotations, database, qualifier=None):
-    """Extract references from MIRIAM annotation for specific database/qualifier.
-
-    :param annotations: MIRIAM annotation string produced by sbmlxdf
-    :type annotations: str
-    :param database: specific resource to access, e.g. 'uniprot'
-    :type database: str
-    :param qualifier: specific qualifier for which to extract resouces
-                      e.g. 'bqbiol:is', (default: all)
-    :type qualifier: str or None (default)
-    :return: list of resources
-    :rtype: list of str
-    """
-    refs = []
-    if type(annotations) is str:
-        for annotation in sbmlxdf.record_generator(annotations):
-            fields = [item.strip() for item in annotation.split(',')]
-            if qualifier is not None and fields[0] != qualifier:
-                continue
-            for field in fields[1:]:
-                if database in field:
-                    refs.append(field.rsplit('/')[1])
-    return refs
-
-
 def get_srefs(srefs_str):
     """Extract composition from srefs string (component and stoichiometry).
 

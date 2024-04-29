@@ -8,7 +8,7 @@ import re
 import numpy as np
 import pandas as pd
 
-MAX_CONC_PROT = 10  # mg/gDW maximum protein concentration
+MAX_CONC_PROT = 100  # mg/gDW maximum protein concentration in kpmf (kilo protein mass fraction)
 
 
 class EcModel:
@@ -284,7 +284,7 @@ class EcModel:
         add protein drain reactions to the model
         add protein pool exchange reation to the model
 
-        protein concentration in model has units of mg/gDW
+        protein concentration in model has units of mg/gDW (i.e. 1000.0 * pmf)
 
         :param total_protein: total active protein mass balance in g/gDW
         :type total_protein: float
@@ -316,8 +316,10 @@ class EcModel:
             p = self.model.proteins[uid]
             draw_rid = f'V_PC_{uid}'
             draw_name = f'conc_prot_{uid}'
+            # supporting MOMENT model with protein split into protein species per reaction
             products = ' + '.join([sid for sid in p.linked_sids])
-            reaction_string = f'{p.mw / 1000.0} {pool_sid} => {products}'
+            # reaction_string = f'{p.mw / 1000.0} {pool_sid} => {products}'
+            reaction_string = f'{pool_sid} => {products}'
             protein_vars[draw_rid] = [draw_name, reaction_string, zero_mg_pid, max_conc_mg_pid,
                                       self.model.uid2gp[uid], 'protein']
 
@@ -363,30 +365,38 @@ class EcModel:
         from reaction get enzyme and corresponding kcat
         convert kcat from s-1 to h-1
         scaled total enzyme kcat by number of active sites
-        also consider enzymes/proteins in mg/mgDW
+
+        protein constraints are in units of mg/gDW
+        1/kcat [s] * 1/3600 [h/s]  * 1/n_AS * enz_stoic * flux [mmol/gDWh] * MW [mg/mmol] = 1 * V_PC_xxxx [mg/gDW]
 
         from enzyme get proteins and their stoichiometry in the enzyme complex
         add to reaction reactants the proteins with 1/kcat_per_h scaled by stoic.
         """
-        scale = 1e3
+        # scale = 1e3
         for r in self.model.reactions.values():
             assert (len(r.enzymes) <= 1)
             if len(r.enzymes) == 1 and r.kcat is not None:
                 e = self.model.enzymes[r.enzymes[0]]
                 enz_kcat_per_h = r.kcat * 3600.0 * e.active_sites
+
                 for locus, stoic in e.composition.items():
                     uid = self.model.locus2uid[locus]
-                    linked_sids = self.model.proteins[uid].linked_sids
+                    p = self.model.proteins[uid]
                     prot_sid = None
-                    if len(linked_sids) == 1:
-                        prot_sid = list(linked_sids)[0]
+                    # in MOMENT model, a promiscuous enzyme/protein has specific proteins per reactions
+                    # e.g. b2215, ompC, P06996: this protein is linked to all (reversible) reactions it catalyzes
+                    #  reactions R_23CCMPtex_iso4 and R_23CCMPtex_iso4_REV both coupled to constraint
+                    #  M_prot_P06996_R_23CAMPtex_iso4_e
+                    if len(p.linked_sids) == 1:
+                        prot_sid = list(p.linked_sids)[0]
                     else:
                         rev_rid = re.sub('_REV$', '', r.id)
-                        for linked_sid in linked_sids:
+                        for linked_sid in p.linked_sids:
                             if rev_rid in linked_sid:
                                 prot_sid = linked_sid
                                 break
-                    r.reactants[prot_sid] = stoic / enz_kcat_per_h * scale
+                    # r.reactants[prot_sid] = stoic / enz_kcat_per_h * scale
+                    r.reactants[prot_sid] = stoic / enz_kcat_per_h * p.mw
 
     def _rescale_reactions(self, df_rescale):
         """rescale reactions (e.g. Biomass) as per ecYeast7 (Sanchez, 2017)

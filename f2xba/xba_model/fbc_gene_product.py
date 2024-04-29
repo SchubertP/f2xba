@@ -5,7 +5,7 @@ Peter Schubert, HHU Duesseldorf, July 2022
 import re
 
 from .sbml_sbase import SbmlSBase
-from f2xba.utils.mapping_utils import get_miriam_refs
+from sbmlxdf.misc import get_miriam_refs
 
 
 class FbcGeneProduct(SbmlSBase):
@@ -28,6 +28,16 @@ class FbcGeneProduct(SbmlSBase):
         :type notes: str
         """
         self.notes = notes
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        setattr(self, attribute, value)
 
     def to_dict(self):
         data = super().to_dict()

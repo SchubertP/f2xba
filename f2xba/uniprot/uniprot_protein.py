@@ -151,17 +151,15 @@ class UniprotProtein:
         self.gene_name = s_data['Gene Names (primary)']
         self.loci = get_loci(s_data['Gene Names (ordered locus)'])
         self.protein_name = get_protein_name(s_data['Protein names'])
-        self.ec_numbers = get_refs(s_data['EC number'])
-        self.biocyc_ids = get_refs(s_data['BioCyc'])
-        self.location = get_location(s_data['Subcellular location [CC]'])
-        self.go_locations = get_go_locations(s_data['Gene Ontology (cellular component)'])
+        self.ec_numbers = get_refs(s_data.get('EC number'))
+        self.biocyc_ids = get_refs(s_data.get('BioCyc'))
+        self.location = get_location(s_data.get(['Subcellular location [CC]']))
+        self.go_locations = get_go_locations(s_data.get('Gene Ontology (cellular component)'))
         self.length = s_data['Length']
         self.mass = s_data['Mass']
-        # self.sequence = s_data['Sequence']
-        # TODO: add Interaction - Substructure information (e.g. for Yeast)
         self.aa_composition = get_aa_composition(s_data['Sequence'])
-        self.signal_peptide = s_data['Signal peptide']
-        self.cofactors, self.cofactor2chebi = get_cofactors(s_data['Cofactor'])
+        self.signal_peptide = s_data.get('Signal peptide')
+        self.cofactors, self.cofactor2chebi = get_cofactors(s_data.get('Cofactor'))
 
     def modify_attribute(self, attribute, value):
         """modify attribute value.

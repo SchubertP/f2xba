@@ -5,7 +5,6 @@ Peter Schubert, CCB, HHU Duesseldorf, January 2023
 
 import os
 import re
-import time
 import pandas as pd
 import gzip
 import urllib.parse
@@ -109,7 +108,7 @@ class UniprotData:
                   'ec', 'protein_name', 'cc_subunit', 'cc_subcellular_location', 'cc_cofactor',
                   'length', 'mass', 'sequence', 'ft_signal', 'cc_catalytic_activity', 'kinetics',
                   'go_p', 'go_c', 'go_f',
-                  'protein_families', 'xref_biocyc', 'date_modified']
+                  'protein_families', 'xref_biocyc', 'xref_refseq', 'date_modified']
         payload = {'compressed': 'true',
                    'fields': ','.join(fields),
                    'format': 'tsv',
