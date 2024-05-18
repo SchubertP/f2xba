@@ -18,6 +18,13 @@ from .biocyc import BiocycData
 from .uniprot import UniprotData
 from .ncbi import NcbiData
 
+from .optimization.ecm_opt import CobraEcmOptimization
+from .optimization.ecm_results import CobraEcmResults
+
+from .optimization.rba_opt import CobraRbaOptimization
+from .optimization.rba_results import CobraRbaResults
+
+
 __all__ = []
 __all__ += xba_model.__all__
 __all__ += ec_model.__all__
