@@ -17,7 +17,10 @@ from .rba_enzymes import RbaEnzymes
 from .rba_densities import RbaDensities
 from .rba_targets import RbaTargets
 from .rba_medium import RbaMedium
+from ..utils.calc_mw import protein_mw_from_aa_comp, rna_mw_from_nt_comp, ssdna_mw_from_dnt_comp
+
 from .initital_assignments import InitialAssignments
+import f2xba.prefixes as pf
 
 DEFAULT_GROWTH_RATE = 1.0   # h-1
 MAX_ENZ_CONC = 10           # mmol/gDW
@@ -292,7 +295,7 @@ class RbaModel:
         self.proteins.from_xba(rba_params, self.model, self.cid_mappings)
         self.add_dummy_proteins()
         self.enzymes.from_xba(general_params, self.model, self.parameters, self.cid_mappings, self.medium)
-        self.processes.from_xba(rba_params, self.model, self)
+        self.processes.from_xba(rba_params, self)
 
         print(f'{len(self.parameters.functions):4d} functions, {len(self.parameters.aggregates):4d} aggregates')
         print(f'>>> RBA model created from xba_model with parameters from {rba_params_fname}')
@@ -325,10 +328,11 @@ class RbaModel:
         u_dict = {'id': 'per_h', 'name': 'per hour', 'units': 'kind=second, exp=-1.0, scale=0, mult=3600.0'}
         self.model.add_unit_def(u_dict)
         protect_ids.add(u_dict['id'])
-        p_dict = {'id': 'growth_rate', 'value': growth_rate, 'units': 'per_h', 'constant': True,
-                  'name': 'growth rate for initial parametrization'}
-        self.model.add_parameter(p_dict)
-        protect_ids.add(p_dict['id'])
+
+        pid = 'growth_rate'
+        p_data = {'value': growth_rate, 'units': 'per_h', 'name': 'growth rate for initial parametrization'}
+        self.model.add_parameter(pid, p_data)
+        protect_ids.add(pid)
 
         # identify compartment where RBA medium is located
         xml_annot = f'ns_uri={XML_COMPARTMENT_NS}, prefix=rba, token=compartment, medium=True'
@@ -363,7 +367,9 @@ class RbaModel:
         self.initial_assignments.xba_implementation(self.model)
         self.model.clean(protect_ids)
 
-        # modify some model attributs and create L3V2 SBML model
+        # modify some model attributs and create L3V2 SBML model -
+        #  also set fbcStrict to False to allow immediate assignments
+        self.model.model_attrs['fbcStrict'] = False
         self.model.model_attrs['id'] += f'_RBA'
         if 'name' in self.model.model_attrs:
             self.model.model_attrs['name'] = f'RBA model of ' + self.model.model_attrs['name']
@@ -387,21 +393,44 @@ class RbaModel:
 
         Note: production / degradation reaction and target concentration variables are scalled accordingly.
         """
-        mm_species = {}
-        for mm_id in sorted(self.mmid2mm):
-            sid = f'MM_{mm_id}'
-            mm = self.mmid2mm[mm_id]
-            uid = self.model.locus2uid.get(mm_id)
-            uid_info = f' ({uid})' if uid is not None else ''
-            miriam_annot = f'bqbiol:is, uniprot/{uid}' if uid is not None else None
-            mm.scale = 1000.0 if mm.weight > 10 else 1.0
-            mw_prot_info = f'weight_kDa={self.model.proteins[uid].mw / 1000.0:.3f}, ' if uid is not None else ''
-            xml_annot = (f'ns_uri={XML_SPECIES_NS}, prefix=rba, token=macromolecule,'
-                         f'weight_aa={mm.weight}, {mw_prot_info} scale={mm.scale}')
+        xml_prefix = f'ns_uri={XML_SPECIES_NS}, prefix=rba, token=macromolecule'
 
-            mm_species[sid] = [f'macromolecule {mm_id}{uid_info}', mm.compartment, False, False, False,
-                               f'meta_{sid}', miriam_annot, xml_annot]
-            mm.sid = sid
+        mm_species = {}
+        # create protein species and configure scale
+        for mm_id, mm in self.proteins.macromolecules.items():
+            mm.sid = f'{pf.MM}_{mm_id}'
+            mm.scale = 1000.0 if mm.weight > 10 else 1.0
+            # for indiviually modeled proteins (Uniprot data is collected)
+            if mm_id in self.model.locus2uid:
+                uid = self.model.locus2uid[mm_id]
+                name = f'macromolecule {mm_id} ({uid})'
+                miriam_annot = f'bqbiol:is, uniprot/{uid}'
+                mw_kda = self.model.proteins[uid].mw / 1000.0
+            # for dummy proteins, we calculate molecular weight based on aa sequence
+            else:
+                mw_kda = protein_mw_from_aa_comp(mm.composition) / 1000.0
+                miriam_annot = None
+                name = f'macromolecule {mm_id}'
+
+            xml_annot = f'{xml_prefix}, weight_aa={mm.weight}, weight_kDa={mw_kda:.3f}, scale={mm.scale}'
+            mm_species[mm.sid] = [name, mm.compartment, False, False, False,
+                                  f'meta_{mm.sid}', miriam_annot, xml_annot]
+
+        for mm_id, mm in self.rnas.macromolecules.items():
+            mm.sid = f'{pf.MM}_{mm_id}'
+            mm.scale = 1000.0 if mm.weight > 10 else 1.0
+            mw_kda = rna_mw_from_nt_comp(mm.composition) / 1000.0
+            name = f'macromolecule {mm_id}'
+            xml_annot = f'{xml_prefix}, weight_aa={mm.weight}, weight_kDa={mw_kda:.4f}, scale={mm.scale}'
+            mm_species[mm.sid] = [name, mm.compartment, False, False, False, f'meta_{mm.sid}', None, xml_annot]
+
+        for mm_id, mm in self.dna.macromolecules.items():
+            mm.sid = f'{pf.MM}_{mm_id}'
+            mm.scale = 1000.0 if mm.weight > 10 else 1.0
+            mw_kda = ssdna_mw_from_dnt_comp(mm.composition) / 1000.0
+            name = f'macromolecule {mm_id}'
+            xml_annot = f'{xml_prefix}, weight_aa={mm.weight}, weight_kDa={mw_kda:.4f}, scale={mm.scale}'
+            mm_species[mm.sid] = [name, mm.compartment, False, False, False, f'meta_{mm.sid}', None, xml_annot]
 
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant',
                 'meta_id', 'miriamAnnotation', 'xmlAnnotation']
@@ -421,7 +450,7 @@ class RbaModel:
         constraints = {}
         for proc_id, proc in self.processes.processes.items():
             if 'capacity' in proc.machinery:
-                constr_id = f'C_PMC_{proc_id}'
+                constr_id = f'{pf.C_PMC}_{proc_id}'
                 constraints[constr_id] = [f'capacity {proc_id}', self.cid_mappings['cytoplasm_cid'],
                                           False, False, False]
                 proc.constr_id = constr_id
@@ -431,18 +460,18 @@ class RbaModel:
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
                 eidx = re.sub(r'_enzyme$', '', eid)
                 if e.forward_eff != self.parameters.f_name_zero:
-                    constr_id = f'C_EF_{eidx}'
+                    constr_id = f'{pf.C_EF}_{eidx}'
                     constraints[constr_id] = [f'fwd efficiency {eid}', self.cid_mappings['cytoplasm_cid'],
                                               False, False, False]
                     e.constr_id_fwd = constr_id
                 if e.backward_eff != self.parameters.f_name_zero:
-                    constr_id = f'C_ER_{eidx}'
+                    constr_id = f'{pf.C_ER}_{eidx}'
                     constraints[constr_id] = [f'rev efficiency {eid}', self.cid_mappings['cytoplasm_cid'],
                                               False, False, False]
                     e.constr_id_rev = constr_id
 
         for cid, d in self.densities.densities.items():
-            constr_id = f'C_D_{cid}'
+            constr_id = f'{pf.C_D}_{cid}'
             constraints[constr_id] = [f'compartment density for {cid}', cid, False, False, False]
             d.constr_id = constr_id
 
@@ -492,16 +521,16 @@ class RbaModel:
         are lumped in the original RBA formulation, making it difficult to follow the implementation in RBApy.
 
         Though this will add more variables to the linear problem, the advantages of separating the
-        individiual cost terms (to better understand the underlying mechanism) is regarded as benefitial to
-        understand the model construction.
+        individiual cost terms (to better understand the underlying mechanism) could improve
+        understanding of the model construction.
 
-        for each macromolecule we add up production requirements and create a 'R_PROC_<mm_id> reaction
-        for each macromolecule we also add up degradation requirements and create a 'R_DEGR_<mm_id> reaction
+        for specified macromolecules we add up production requirements and create a 'R_PROC_<mm_id> reaction
+        for specified macromolecules we add up degradation requirements and create a 'R_DEGR_<mm_id> reaction
 
         processing costs are identified and added to processing constraints 'C_PMC_<pm_id>', actually
         adding respective products with calculated costs as stoic coefficients.
 
-        reaction fluxes are in units of µmol per gDWh
+        reaction fluxes are in units of µmol/gDWh (note: metabolic reaction fluxes are in mmol/gDWh)
         """
         # get mapping of macromolecule to related processing reactions for production and degradation:
         mm_productions = defaultdict(list)
@@ -560,8 +589,8 @@ class RbaModel:
                                     pm_costs += comp_stoic * comp_proc.get('cost', 0.0)
                             products[pm.constr_id] = round(pm_costs / mm.scale, 8)
 
-                    rid = f'R_{proc_type}_{mm_id}'
                     if proc_type == 'PROD':
+                        rid = f'{pf.R_PROD}_{mm_id}'
                         products[mm.sid] += 1.0
                         if mm.scale == 1.0:
                             prod_reactions[rid] = [f'production reaction for {mm_id} (mmol)', False,
@@ -574,6 +603,7 @@ class RbaModel:
                                                    lb_pid_umol, ub_pid_umol,
                                                    'RBA_pm_reaction', 'RBA macromolecule processing']
                     else:
+                        rid = f'{pf.R_DEGR}_{mm_id}'
                         reactants[mm.sid] += 1.0
                         if mm.scale == 1.0:
                             degr_reactions[rid] = [f'degradation reaction for {mm_id} (mmol)', False,
@@ -686,6 +716,8 @@ class RbaModel:
         :param growth_rate: growth rate (h-1) required for macromolecule dilution
         :type growth_rate: float
         """
+        xml_prefix = f'ns_uri={XML_SPECIES_NS}, prefix=rba, token=macromolecule'
+
         lb_pid = self.model.get_fbc_bnd_pid(0.0, 'umol_per_gDW', 'zero_enzyme_umol_conc')
         ub_pid = self.model.get_fbc_bnd_pid(MAX_ENZ_CONC, 'umol_per_gDW', 'max_enzyme_umol_conc')
         scale = 1000.0
@@ -694,7 +726,8 @@ class RbaModel:
         for eid, e in self.enzymes.enzymes.items():
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
                 eidx = re.sub(r'_enzyme$', '', eid)
-                var_id = f'V_EC_{eidx}'
+                var_id = f'{pf.V_EC}_{eidx}'
+                name = f'{eid} concentration (µmol)'
 
                 # Determine reactants/products and sref ids for enzyme concentration variable
                 reactants = self._get_dilution_srefs(var_id, growth_rate, e.mach_reactants)
@@ -717,11 +750,21 @@ class RbaModel:
                 # couple weights of enzyme composition to density constraints
                 products.update(self._couple_weights(e.mach_reactants))
 
-                conc_vars[var_id] = [f'{eid} concentration (µmol)', False, reactants, products, scale, gpa,
-                                     lb_pid, ub_pid, 'RBA_enz_conc']
+                # determine enzyme molecular weight
+                enz_mw_kda = 0.0
+                for comp_id, stoic in e.mach_reactants.items():
+                    if comp_id in self.proteins.macromolecules:
+                        if comp_id in self.model.locus2uid:
+                            uid = self.model.locus2uid[comp_id]
+                            mw_kda = self.model.proteins[uid].mw / 1000.0
+                            enz_mw_kda += stoic * mw_kda
+                xml_annot = f'{xml_prefix}, weight_kDa={enz_mw_kda:.4f}, scale={scale}'
+
+                conc_vars[var_id] = [name, False, reactants, products, scale, gpa, lb_pid, ub_pid,
+                                     'RBA_enz_conc', xml_annot]
 
         cols = ['name', 'reversible', 'reactants', 'products', 'scale', 'fbcGeneProdAssoc',
-                'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind']
+                'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'xmlAnnotation']
         df_add_rids = pd.DataFrame(conc_vars.values(), index=list(conc_vars), columns=cols)
         print(f'{len(df_add_rids):4d} enzyme concentration variables to add')
         self.model.add_reactions(df_add_rids)
@@ -741,6 +784,8 @@ class RbaModel:
         :param growth_rate: growth rate (h-1) required for macromolecule dilution
         :type growth_rate: float
         """
+        xml_prefix = f'ns_uri={XML_SPECIES_NS}, prefix=rba, token=macromolecule'
+
         lb_pid = self.model.get_fbc_bnd_pid(0.0, 'umol_per_gDW', 'zero_enzyme_umol_conc')
         ub_pid = self.model.get_fbc_bnd_pid(MAX_ENZ_CONC, 'umol_per_gDW', 'max_enzyme_umol_conc')
         scale = 1000.0
@@ -748,7 +793,8 @@ class RbaModel:
         conc_vars = {}
         for pm_id, pm in self.processes.processes.items():
             if 'capacity' in pm.machinery:
-                var_id = f'V_PMC_{pm_id}'
+                var_id = f'{pf.V_PMC}_{pm_id}'
+                name = f'{pm_id} concentration'
 
                 # Determine reactants/products and sref ids for PM concentration variable
                 reactants = self._get_dilution_srefs(var_id, growth_rate, pm.machinery['reactants'])
@@ -767,11 +813,25 @@ class RbaModel:
                 # couple weights of process machine composition to density constraints
                 products.update(self._couple_weights(pm.machinery['reactants']))
 
-                conc_vars[var_id] = [f'{pm_id} concentration', False, reactants, products, scale,
-                                     gpa, lb_pid, ub_pid, 'RBA_pm_conc']
+                # determine molecular weight of process machine, consisting of proteins and/or RNA
+                pm_mw_kda = 0.0
+                for comp_id, stoic in pm.machinery['reactants'].items():
+                    if comp_id in self.proteins.macromolecules:
+                        if comp_id in self.model.locus2uid:
+                            uid = self.model.locus2uid[comp_id]
+                            mw_kda = self.model.proteins[uid].mw / 1000.0
+                            pm_mw_kda += stoic * mw_kda
+                    elif comp_id in self.rnas.macromolecules:
+                        mm = self.rnas.macromolecules[comp_id]
+                        mw_kda = rna_mw_from_nt_comp(mm.composition) / 1000.0
+                        pm_mw_kda += stoic * mw_kda
+                xml_annot = f'{xml_prefix}, weight_kDa={pm_mw_kda:.4f}, scale={scale}'
+
+                conc_vars[var_id] = [name, False, reactants, products, scale, gpa, lb_pid, ub_pid,
+                                     'RBA_pm_conc', xml_annot]
 
         cols = ['name', 'reversible', 'reactants', 'products', 'scale', 'fbcGeneProdAssoc',
-                'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind']
+                'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'xmlAnnotation']
         df_add_rids = pd.DataFrame(conc_vars.values(), index=list(conc_vars), columns=cols)
         print(f'{len(df_add_rids):4d} process machine concentration variables to add')
         self.model.add_reactions(df_add_rids)
@@ -794,7 +854,7 @@ class RbaModel:
         for tg_id, tg in self.targets.target_groups.items():
             for tid, t in tg.concentrations.items():
                 if tid in self.mmid2mm:
-                    var_id = f'V_TMMC_{tid}'
+                    var_id = f'{pf.V_TMMC}_{tid}'
                     mm = self.mmid2mm[tid]
 
                     # macromolecule dilution with growth rate
@@ -835,7 +895,7 @@ class RbaModel:
         :type growth_rate: float
         """
         # target concentration variables are constants, i.e. fixed at value 1
-        var_id = f'V_TSMC'
+        var_id = pf.V_TSMC
         one_umol_pid = self.model.get_fbc_bnd_pid(1.0e-3, 'mmol_per_gDW', 'one_umol_aa_per_gDW', reuse=False)
         scale = 1000.0
 
@@ -860,7 +920,7 @@ class RbaModel:
     def _xba_add_target_density_variables(self):
         """Add variables for target compartment density and slack variable to XBA model.        :
 
-        V_TD: Target density concentrations
+        V_TCD: Target density concentrations
         Units: mmol AA/gDW
         The variable is fixed at 1.
         Reactant coefficients are the target densities for the various compartments
@@ -872,7 +932,7 @@ class RbaModel:
         Implemented, so we can report on maximum compartment capacity utilization.
         """
         # add compartment density targets
-        var_id = f'V_TD'
+        var_id = pf.V_TCD
         one_mmol_pid = self.model.get_fbc_bnd_pid(1.0, 'mmol_per_gDW', 'one_mmol_aa_per_gDW', reuse=False)
         density_vars = {}
         reactants = {}
@@ -892,8 +952,8 @@ class RbaModel:
         ub_pid = self.model.get_fbc_bnd_pid(MAX_DENSITY_SLACK, 'mmol_per_gDW', 'density_slack_max', reuse=False)
         for cid, d in self.densities.densities.items():
             products = {d.constr_id: 1.0}
-            density_vars[f'V_SLACK_{cid}'] = [f'Positive Slack on {cid} density', False, {}, products,
-                                              lb_pid, ub_pid, 'slack_variable']
+            density_vars[f'{pf.V_SLACK}_{cid}'] = [f'Positive Slack on {cid} density', False, {}, products,
+                                                   lb_pid, ub_pid, 'slack_variable']
 
         cols = ['name', 'reversible', 'reactants', 'products',
                 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind']
@@ -981,7 +1041,7 @@ class RbaModel:
         # minimize sums of enzyme/process machineries concentrations
         obj_coeffs = {}
         for var_id in self.model.reactions:
-            if re.match('V_EC_', var_id) or re.match('V_PMC_', var_id):
+            if re.match(f'{pf.V_EC}_', var_id) or re.match(f'{pf.V_PMC}_', var_id):
                 obj_coeffs[var_id] = 1.0
         objectives_config = {'rba_obj': {'type': 'minimize', 'active': True, 'coefficients': obj_coeffs}}
         self.model.add_objectives(objectives_config)

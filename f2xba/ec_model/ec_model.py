@@ -7,6 +7,7 @@ Peter Schubert, HHU Duesseldorf, October 2023
 import re
 import numpy as np
 import pandas as pd
+import f2xba.prefixes as pf
 
 MAX_CONC_PROT = 100  # mg/gDW maximum protein concentration in kpmf (kilo protein mass fraction)
 
@@ -122,15 +123,11 @@ class EcModel:
         self.model.clean()
 
         # add some parameter values for reference (after model.clean() so they are not removed)
-        p1_dict = {'id': 'frac_prot_totprot', 'value': pm2totpm, 'units': 'dimensionless', 'constant': True,
-                   'name': 'protein mass fraction modelled'}
-        p2_dict = {'id': 'frac_totprot_cdw', 'value': p_total, 'units': 'dimensionless', 'constant': True,
-                   'name': 'protein mass fraction of total dry mass'}
-        p3_dict = {'id': 'frac_enzyme_sat', 'value': avg_enz_sat, 'units': 'dimensionless', 'constant': True,
-                   'name': 'average enzyme saturation level'}
-        self.model.add_parameter(p1_dict)
-        self.model.add_parameter(p2_dict)
-        self.model.add_parameter(p3_dict)
+        add_params = {'frac_prot_totprot': {'value': pm2totpm, 'name': 'protein mass fraction modelled'},
+                      'frac_totprot_cdw': {'value': p_total, 'name': 'protein mass fraction of total dry mass'},
+                      'frac_enzyme_sat': {'value': avg_enz_sat, 'name': 'average enzyme saturation level'}}
+        for pid, p_data in add_params.items():
+            self.model.add_parameter(pid, p_data)
 
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_{ecm_type}'
@@ -175,7 +172,7 @@ class EcModel:
         We only create proteins when gene product is used by any of the
         enzymes
 
-        add protein species to the model
+        add protein species to the model (also ensure that protein species name is valid)
         add protein drain reactions to the model
         """
         used_enz_gps = self._get_enzyme_gene_products()
@@ -183,10 +180,11 @@ class EcModel:
         protein_sids = {}
         for gpid in used_enz_gps:
             uid = self.model.gps[gpid].uid
+            checked_uid = re.sub(r'\W', '', uid)
             p = self.model.proteins[uid]
-            prot_sid = f'M_prot_{uid}_{p.cid}'
+            prot_sid = f'{pf.M_prot}_{checked_uid}_{p.cid}'
             p.link_sid(prot_sid)
-            prot_metaid = f'meta_prot_{uid}'
+            prot_metaid = f'meta_prot_{checked_uid}'
             prot_annot = f'bqbiol:is, uniprot/{uid}'
             protein_sids[prot_sid] = [p.name, p.cid, False, False, False, prot_metaid, prot_annot]
 
@@ -215,10 +213,11 @@ class EcModel:
                 enz = self.model.enzymes[r.enzymes[0]]
                 for locus in enz.composition:
                     uid = self.model.locus2uid[locus]
+                    checked_uid = re.sub(r'\W', '', uid)
                     p = self.model.proteins[uid]
-                    prot_sid = f'M_prot_{uid}_{rid}_{p.cid}'
+                    prot_sid = f'{pf.M_prot}_{checked_uid}_{rid}_{p.cid}'
                     p.link_sid(prot_sid)
-                    prot_metaid = f'meta_prot_{uid}_{rid}'
+                    prot_metaid = f'meta_prot_{checked_uid}_{rid}'
                     prot_annot = f'bqbiol:is, uniprot/{uid}'
                     protein_sids[prot_sid] = [p.name, p.cid, False, False, False, prot_metaid, prot_annot]
 
@@ -291,7 +290,7 @@ class EcModel:
         """
         # add total protein pool species in default compartment
         pool_cid = sorted([(count, cid) for cid, count in self.model.get_used_cids().items()])[-1][1]
-        pool_sid = f'M_prot_pool_{pool_cid}'
+        pool_sid = f'{pf.M_prot_pool}_{pool_cid}'
         pool_name = 'total protein pool'
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant']
         df_add_species = pd.DataFrame([[pool_name, pool_cid, False, False, False]],
@@ -300,7 +299,7 @@ class EcModel:
 
         # add total protein pool exchange reaction
         protein_vars = {}
-        draw_rid = f'V_PC_total_active'
+        draw_rid = pf.V_PC_total_active
         draw_name = f'total concentration active protein'
         zero_mg_pid = self.model.get_fbc_bnd_pid(0.0, 'mg_per_gDW', 'zero_mass_conc_mg')
         total_prot_mg_pid = self.model.get_fbc_bnd_pid(total_protein * 1000.0, 'mg_per_gDW', 'conc_active_protein_mg')
@@ -314,7 +313,8 @@ class EcModel:
         for gpid in used_enz_gps:
             uid = self.model.gps[gpid].uid
             p = self.model.proteins[uid]
-            draw_rid = f'V_PC_{uid}'
+            checked_uid = re.sub(r'\W', '', uid)
+            draw_rid = f'{pf.V_PC}_{checked_uid}'
             draw_name = f'conc_prot_{uid}'
             # supporting MOMENT model with protein split into protein species per reaction
             products = ' + '.join([sid for sid in p.linked_sids])

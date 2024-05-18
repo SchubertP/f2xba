@@ -6,6 +6,8 @@ Peter Schubert, CCB, HHU Duesseldorf, December 2022
 import os
 import numpy as np
 import pandas as pd
+import re
+from collections import defaultdict
 from xml.etree.ElementTree import parse, ElementTree, Element, SubElement, indent
 
 from ..utils.rba_utils import get_target_species_from_xml, get_target_reactions_from_xml, extract_params, \
@@ -51,12 +53,10 @@ class RbaTargets:
         :return: set of precursor metabolites and set of other metabolites
         :rtype: 2-tuple of sets of strings
         """
-        reactant_srefs = {}
+        reactant_srefs = defaultdict(int)
         for _, row in df_pmaps[df_pmaps['macromolecules'] == macromolecules].iterrows():
             reactants, _ = translate_reaction_string(row['reaction_string'])
             for sid in reactants:
-                if sid not in reactant_srefs:
-                    reactant_srefs[sid] = 0
                 reactant_srefs[sid] += 1
 
         selected_sids = {sid for sid, freq in reactant_srefs.items() if freq == 1}
@@ -78,7 +78,7 @@ class RbaTargets:
 
         :param biomass_rid: biomass reaction id
         :type biomass_rid: str
-        :param component_type:
+        :param component_type: 'metabolites', 'dna' or 'amino_acids'
         :type component_type: str
         :param rba_params: RBA model specific parametrization
         :type rba_params: dict of pandas DataFrames
@@ -87,12 +87,15 @@ class RbaTargets:
         :return: biomass composition for selected component type
         :rtype: dict (key: sid/str, val: stoichiometry/float)
         """
-        # identify precursor metabolites to DNA, RNA and proteins
+        # identify precursor species ids of DNA/RNA based on 'reaction_string' in sheet 'processing_maps'
         dna_nt_sids, other_sids = self.get_precursor_metabolites('dna', rba_params['processing_maps'])
         rna_nt_sids, _ = self.get_precursor_metabolites('rnas', rba_params['processing_maps'])
+
+        # map amino acid species ids to tRNAs based on sheet 'trn2locus'
         aa2trna = {aa_sid: trna for trna, aa_sid in rba_params['trna2locus']['biomass_aa'].items()
                    if type(aa_sid) is str}
 
+        # group reactant species ids of specified biomass reaction by dna, rna, amino_acid, metabolite
         dna_nt_stoic = {}
         rna_nt_stoic = {}
         aa_stoic = {}
@@ -105,9 +108,11 @@ class RbaTargets:
             elif sid in aa2trna:
                 aa_stoic[sid] = stoic
             # elif sid not in other_sids and sid.split('_')[-1] != xba_model.external_compartment:
+            # others_sids include h2o_c, ppi_c, h_c
             elif sid not in other_sids:
                 metabolite_stoic[sid] = stoic
 
+        # depending on selected component type, determine respective biomass composition
         srefs = {}
         if component_type == 'dna':
             srefs['dna'] = sum(dna_nt_stoic.values())
@@ -150,10 +155,20 @@ class RbaTargets:
                 agg = row.get('target_aggregate', np.nan)
 
                 # special treatment of biomass related concentration targets
+                # TODO: special treatment of biomass conc targets could be reworked and simplified
                 if (',' in target) and (np.isfinite(constant)):
-                    biomass_rid, component_type = [item.strip() for item in target.split(',')]
+                    biomass_rid = target.split(',')[0].strip()
+                    info = target.split(',', 1)[1].strip()
                     assert biomass_rid in xba_model.reactions, f'Biomass reaction {biomass_rid} not found in model'
-                    srefs = self.get_biomass_composition(biomass_rid, component_type, rba_params, xba_model)
+                    srefs = {}
+                    if re.match('exclude:', info):
+                        exclude_sids = {item.strip() for item in (info.split(':')[1]).split(',')}
+                        for sid, stoic in xba_model.reactions[biomass_rid].reactants.items():
+                            if sid not in exclude_sids:
+                                srefs[sid] = stoic
+                    elif info in ['metabolites', 'dna', 'amino_acids']:
+                        srefs = self.get_biomass_composition(biomass_rid, info, rba_params, xba_model)
+                    # create individual targets
                     for sid, stoic in srefs.items():
                         p_name = parameters.create_parameter(f'{sid}_{target_type}_auto_target', stoic * constant,
                                                              np.nan, np.nan)

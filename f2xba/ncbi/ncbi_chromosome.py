@@ -42,7 +42,7 @@ class NcbiChromosome:
         self.accession_id = accession_id
 
         seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta.txt')
-        aa_seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta_cds_aa.txt')
+        # aa_seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta_cds_aa.txt')
         ft_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_features.txt')
 
         # download data from NCBI, unless data exists locally

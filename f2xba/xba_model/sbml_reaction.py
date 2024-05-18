@@ -406,10 +406,12 @@ class SbmlReaction(SbmlSBase):
         else:
             return False
 
-    def correct_reversibility(self, parameters, exclude_ex_reactions=False):
+    def correct_reversibility_old(self, parameters, exclude_ex_reactions=False):
         """Correct reversibility based on flux bounds.
 
-        reversible is set to True if flux range is either positive or negative.
+        Note issues with reactions that have lb and ub both being negative (E.g. ATPase in MMSYN)
+
+        reversible is set to False if flux range is either positive or negative.
         exchange reactions can be exluded
 
         :param parameters: flux bound parameters

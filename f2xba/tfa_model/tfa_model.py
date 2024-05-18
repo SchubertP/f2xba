@@ -25,6 +25,7 @@ from .td_reaction_data import TdReactionData
 from .td_reactant_data import TdReactantData
 from ..utils.tfa_utils import extract_atoms
 from ..xba_model.fbc_objective import FbcObjective
+import f2xba.prefixes as pf
 
 
 # TD parameters
@@ -162,7 +163,7 @@ class TfaModel:
         if 'modify_drg0_bounds' in tfa_params:
             dgr0_vids = []
             for vid in tfa_params['modify_drg0_bounds'].index:
-                rid = re.sub('V_DRG0_', 'R_', vid)
+                rid = re.sub(f'{pf.V_DRG0}_', 'R_', vid)
                 if self.td_reactions[rid].add_td_constraints:
                     dgr0_vids.append(vid)
             self.modify_drg0_bounds(tfa_params['modify_drg0_bounds'].loc[dgr0_vids], remove_slack=False)
@@ -235,7 +236,7 @@ class TfaModel:
                 midx = sidx.rsplit('_', 1)[0]
                 sids.append(sidx)
                 mids.add(midx)
-                if f'V_LC_{sidx}' in var_ids:
+                if f'{pf.V_LC}_{sidx}' in var_ids:
                     td_sids.append(sidx)
                     td_mids.add(midx)
 
@@ -246,7 +247,7 @@ class TfaModel:
                 if r.kind in ['transporter', 'metabolic']:
                     ridx = re.sub(r'^R_', '', r.orig_rid)
                     orig_rids.add(ridx)
-                    if f'V_DRG_{ridx}' in var_ids:
+                    if f'{pf.V_DRG}_{ridx}' in var_ids:
                         td_rids.add(ridx)
         print(f'{len(td_sids)} species ({len(td_mids)} metabolites) with TD data from total {len(sids)} ({len(mids)})')
         print(f'{len(td_rids)} metabolic/transporter reactions with TD data from total {len(orig_rids)}')
@@ -718,18 +719,16 @@ class TfaModel:
 
         Note: irreversible reactions with TD data get not split
         and some constrations are not required
-
-        Constraints are added as pseudo species with prefix 'C_'
         """
-        constr2name_rev = {'DRG': "∆rG'",
-                           'SU': 'simultaneous use',
-                           'GFC': "∆rG' forward coupling",
-                           'GRC': "∆rG' reverse coupling",
-                           'FFC': 'flux forward coupling',
-                           'FRC': 'flux reverse coupling'}
-        constr2name_irr = {'DRG': "∆rG'",
-                           'GFC': "∆rG' forward coupling",
-                           'FFC': 'flux forward coupling'}
+        constr2name_rev = {pf.C_DRG: "∆rG'",
+                           pf.C_SU: 'simultaneous use',
+                           pf.C_GFC: "∆rG' forward coupling",
+                           pf.C_GRC: "∆rG' reverse coupling",
+                           pf.C_FFC: 'flux forward coupling',
+                           pf.C_FRC: 'flux reverse coupling'}
+        constr2name_irr = {pf.C_DRG: "∆rG'",
+                           pf.C_GFC: "∆rG' forward coupling",
+                           pf.C_FFC: 'flux forward coupling'}
 
         pseudo_sids = {}
         for rid, td_rdata in self.td_reactions.items():
@@ -738,7 +737,7 @@ class TfaModel:
                 ridx = re.sub('^R_', '', rid)
                 constr2name = constr2name_rev if td_rdata.reversible else constr2name_irr
                 for constr, name in constr2name.items():
-                    pseudo_sids[f'C_{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
+                    pseudo_sids[f'{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant']
         df_add_species = pd.DataFrame(pseudo_sids.values(), index=list(pseudo_sids), columns=cols)
         print(f'{len(df_add_species):4d} constraints to add')
@@ -778,18 +777,18 @@ class TfaModel:
                 assert(td_rdata.drg0_tr is not None)
                 ridx = re.sub('^R_', '', rid)
                 if td_rdata.reversible:
-                    reactions_str = f'C_DRG_{ridx} + C_GRC_{ridx} -> C_GFC_{ridx}'
+                    reactions_str = f'{pf.C_DRG}_{ridx} + {pf.C_GRC}_{ridx} -> {pf.C_GFC}_{ridx}'
                 else:
-                    reactions_str = f'C_DRG_{ridx} -> C_GFC_{ridx}'
-                pseudo_rids[f'V_DRG_{ridx}'] = [f'{var2name["DRG"]} for {ridx}', reactions_str,
-                                                drg_lb_pid, drg_ub_pid, 'td_variable', 'continuous']
+                    reactions_str = f'{pf.C_DRG}_{ridx} -> {pf.C_GFC}_{ridx}'
+                pseudo_rids[f'{pf.V_DRG}_{ridx}'] = [f'{var2name["DRG"]} for {ridx}', reactions_str,
+                                                     drg_lb_pid, drg_ub_pid, 'td_variable', 'continuous']
 
                 drgo_lb = td_rdata.drg0_tr - td_rdata.drg0_tr_error
                 drgo_ub = td_rdata.drg0_tr + td_rdata.drg0_tr_error
-                drgo_lb_pid = self.model.get_fbc_bnd_pid(drgo_lb, 'kJ_per_mol', f'V_DRG0_{ridx}_lb', reuse=False)
-                drgo_ub_pid = self.model.get_fbc_bnd_pid(drgo_ub, 'kJ_per_mol', f'V_DRG0_{ridx}_ub', reuse=False)
-                pseudo_rids[f'V_DRG0_{ridx}'] = [f'{var2name["DRG0"]} for {ridx}', f'-> C_DRG_{ridx}',
-                                                 drgo_lb_pid, drgo_ub_pid, 'td_variable', 'continuous']
+                drgo_lb_pid = self.model.get_fbc_bnd_pid(drgo_lb, 'kJ_per_mol', f'{pf.V_DRG0}_{ridx}_lb', reuse=False)
+                drgo_ub_pid = self.model.get_fbc_bnd_pid(drgo_ub, 'kJ_per_mol', f'{pf.V_DRG0}_{ridx}_ub', reuse=False)
+                pseudo_rids[f'{pf.V_DRG0}_{ridx}'] = [f'{var2name["DRG0"]} for {ridx}', f'-> {pf.C_DRG}_{ridx}',
+                                                      drgo_lb_pid, drgo_ub_pid, 'td_variable', 'continuous']
 
         cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
@@ -843,12 +842,12 @@ class TfaModel:
                 if td_rdata.reversible:
                     fu_reaction = f'{fbc_max_abs_flux_val} C_FFC_{ridx} => {MAX_DRG} C_GFC_{ridx} + C_SU_{ridx}'
                     bu_reaction = f'{fbc_max_abs_flux_val} C_FRC_{ridx} => {MAX_DRG} C_GRC_{ridx} + C_SU_{ridx}'
-                    pseudo_rids[f'V_RU_{ridx}'] = [f'{var2name["RU"]} for {ridx}', bu_reaction,
-                                                   lb_pid, ub_pid, 'td_variable', 'binary']
+                    pseudo_rids[f'{pf.V_RU}_{ridx}'] = [f'{var2name["RU"]} for {ridx}', bu_reaction,
+                                                        lb_pid, ub_pid, 'td_variable', 'binary']
                 else:
                     fu_reaction = f'{fbc_max_abs_flux_val} C_FFC_{ridx} => {MAX_DRG} C_GFC_{ridx}'
-                pseudo_rids[f'V_FU_{ridx}'] = [f'{var2name["FU"]} for {ridx}', fu_reaction,
-                                               lb_pid, ub_pid, 'td_variable', 'binary']
+                pseudo_rids[f'{pf.V_FU}_{ridx}'] = [f'{var2name["FU"]} for {ridx}', fu_reaction,
+                                                    lb_pid, ub_pid, 'td_variable', 'binary']
 
         cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
@@ -899,12 +898,12 @@ class TfaModel:
             sidx = re.sub('^M_', '', lc_sid)
             c_min = self.model.species[lc_sid].c_min
             c_max = self.model.species[lc_sid].c_max
-            lc_lb_pid = self.model.get_fbc_bnd_pid(np.log(c_min), 'kJ_per_mol', f'V_LC_{sidx}_lb')
-            lc_ub_pid = self.model.get_fbc_bnd_pid(np.log(c_max), 'kJ_per_mol', f'V_LC_{sidx}_ub')
+            lc_lb_pid = self.model.get_fbc_bnd_pid(np.log(c_min), 'kJ_per_mol', f'{pf.V_LC}_{sidx}_lb')
+            lc_ub_pid = self.model.get_fbc_bnd_pid(np.log(c_max), 'kJ_per_mol', f'{pf.V_LC}_{sidx}_ub')
             reac_str = ' + '.join([f'{-rt_stoic} C_DRG_{ridx}' for ridx, rt_stoic in data.items() if rt_stoic < 0.0])
             prod_str = ' + '.join([f'{rt_stoic} C_DRG_{ridx}' for ridx, rt_stoic in data.items() if rt_stoic > 0.0])
-            pseudo_rids[f'V_LC_{sidx}'] = [f'{var2name["LC"]} of {lc_sid}', f'{reac_str} -> {prod_str}',
-                                           lc_lb_pid, lc_ub_pid, 'td_variable', 'continuous']
+            pseudo_rids[f'{pf.V_LC}_{sidx}'] = [f'{var2name["LC"]} of {lc_sid}', f'{reac_str} -> {prod_str}',
+                                                lc_lb_pid, lc_ub_pid, 'td_variable', 'continuous']
 
         cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
@@ -926,11 +925,11 @@ class TfaModel:
         for rid, td_rdata in self.td_reactions.items():
             if td_rdata.add_td_constraints:
                 ridx = re.sub('^R_', '', rid)
-                modify_attrs.append([rid, 'reaction', 'product', f'C_FFC_{ridx}=1.0'])
+                modify_attrs.append([rid, 'reaction', 'product', f'{pf.C_FFC}_{ridx}=1.0'])
                 if td_rdata.reversible:
                     r = self.model.reactions[rid]
                     rev_r = self.model.split_reversible_reaction(r)
-                    modify_attrs.append([rev_r.id, 'reaction', 'product', f'C_FRC_{ridx}=1.0'])
+                    modify_attrs.append([rev_r.id, 'reaction', 'product', f'{pf.C_FRC}_{ridx}=1.0'])
                 # if all_reversible is True:
                 #     r_lb = self.model.parameters[r.fbc_lower_bound].value
                 #     rev_r_ub = self.model.parameters[rev_r.fbc_upper_bound].value
@@ -953,12 +952,13 @@ class TfaModel:
         one_kj_pid = self.model.get_fbc_bnd_pid(1.0, 'kJ_per_mol', 'one_kJ', reuse=False)
 
         rhs_vars = {}
-        rhs_flux_reactants = {sid: 1.0 for sid in self.model.species if re.match('C_SU_', sid)}
-        rhs_energy_reactants = {sid: 999.99 for sid in self.model.species if re.match('(C_GFC_)|(C_GRC_)', sid)}
-        rhs_vars[f'V_RHS_flux_coupling'] = [f'RHS for TD C_SU_ constraints', rhs_flux_reactants, {}, False,
-                                            one_mmol_pid, one_mmol_pid, 'fixed variable', 'continuous']
-        rhs_vars[f'V_RHS_energy_coupling'] = [f'RHS for TD C_GxC_ constraints', rhs_energy_reactants, {}, False,
-                                              one_kj_pid, one_kj_pid, 'fixed variable', 'continuous']
+        rhs_flux_reactants = {sid: 1.0 for sid in self.model.species if re.match(f'{pf.C_SU}_', sid)}
+        rhs_energy_reactants = {sid: 999.99 for sid in self.model.species
+                                if re.match(f'{pf.C_GFC}_', sid) or re.match(f'{pf.C_GRC}_', sid)}
+        rhs_vars[f'{pf.V_RHS_FC}'] = [f'RHS for TD C_SU_ constraints', rhs_flux_reactants, {}, False,
+                                      one_mmol_pid, one_mmol_pid, 'fixed variable', 'continuous']
+        rhs_vars[f'{pf.V_RHS_GC}'] = [f'RHS for TD C_GxC_ constraints', rhs_energy_reactants, {}, False,
+                                      one_kj_pid, one_kj_pid, 'fixed variable', 'continuous']
         cols = ['name', 'reactants', 'products', 'reversible', 'fbcLowerFluxBound', 'fbcUpperFluxBound',
                 'kind', 'notes']
         df_add_rids = pd.DataFrame(rhs_vars.values(), index=list(rhs_vars), columns=cols)
@@ -1009,10 +1009,10 @@ class TfaModel:
             if td_rdata.add_td_constraints:
                 assert(td_rdata.drg0_tr is not None)
                 ridx = re.sub('^R_', '', rid)
-                pseudo_rids[f'V_NS_{ridx}'] = [f'{var2name["NS"]} for {ridx}', f'C_DRG_{ridx} =>',
-                                               lb_pid, ub_pid, 'td_variable', 'continuous']
-                pseudo_rids[f'V_PS_{ridx}'] = [f'{var2name["PS"]} for {ridx}', f'=> C_DRG_{ridx}',
-                                               lb_pid, ub_pid, 'td_variable', 'continuous']
+                pseudo_rids[f'{pf.V_NS}_{ridx}'] = [f'{var2name["NS"]} for {ridx}', f'{pf.C_DRG}_{ridx} =>',
+                                                    lb_pid, ub_pid, 'td_variable', 'continuous']
+                pseudo_rids[f'{pf.V_PS}_{ridx}'] = [f'{var2name["PS"]} for {ridx}', f'=> {pf.C_DRG}_{ridx}',
+                                                    lb_pid, ub_pid, 'td_variable', 'continuous']
 
         cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
@@ -1033,7 +1033,8 @@ class TfaModel:
 
         # create new active slack_objective (minimize sum of slack variables)
         slack_obj_id = 'slack_objective'
-        slack_obj_coefs = [rid for rid in self.model.reactions if re.match('V_[PN]S_', rid)]
+        slack_obj_coefs = [rid for rid in self.model.reactions
+                           if re.match(f'{pf.V_PS}_', rid) or re.match(f'{pf.V_NS}_', rid)]
         srefs_str = '; '.join([f'reac={var_name}, coef=1.0' for var_name in slack_obj_coefs])
         slack_obj_dict = {'type': 'minimize', 'active': True, 'fluxObjectives': srefs_str}
         self.model.objectives[slack_obj_id] = FbcObjective(pd.Series(slack_obj_dict, name=slack_obj_id))
@@ -1057,20 +1058,23 @@ class TfaModel:
         eps = 0.5
         drg0_slack = {}
         for vname, flux in fluxes.items():
-            if flux > 0.0 and (re.match('V_NS_', vname) or re.match('V_PS_', vname)):
+            if flux > 0.0 and (re.match(f'{pf.V_NS}_', vname) or re.match(f'{pf.V_PS}_', vname)):
                 drg0_slack[vname] = flux
 
         drgo_relaxations = {}
         modify_attrs = {}
         for vname, slack in drg0_slack.items():
-            ridx = re.sub('V_[PN]S_', '', vname)
-            drg0_var = self.model.reactions[f'V_DRG0_{ridx}']
+            if re.match(f'{pf.V_PS}_', vname):
+                ridx = re.sub(f'{pf.V_PS}_', '', vname)
+            else:
+                ridx = re.sub(f'{pf.V_NS}_', '', vname)
+            drg0_var = self.model.reactions[f'{pf.V_DRG0}_{ridx}']
             drg0_lb_pid = drg0_var.fbc_lower_bound
             drg0_ub_pid = drg0_var.fbc_upper_bound
             drg0_lb_val = self.model.parameters[drg0_lb_pid].value
             drg0_ub_val = self.model.parameters[drg0_ub_pid].value
 
-            if re.match('V_NS_', vname):
+            if re.match(f'{pf.V_NS}_', vname):
                 drg0_new_lb_val = drg0_lb_val - slack - eps
                 modify_attrs[drg0_lb_pid] = ['parameter', 'value', drg0_new_lb_val, 'relaxation']
                 drgo_relaxations[ridx] = f"lower ∆rG'˚ bound from {drg0_lb_val:8.4f} to {drg0_new_lb_val:8.4f} " \
@@ -1093,7 +1097,8 @@ class TfaModel:
         Reactivate the old optimization objective
         """
         del self.model.objectives['slack_objective']
-        to_del = [vname for vname in self.model.reactions if re.match('V_[PN]S_', vname)]
+        to_del = [vname for vname in self.model.reactions
+                  if re.match(f'{pf.V_PS}_', vname) or re.match(f'{pf.V_NS}_', vname)]
         for vname in to_del:
             del self.model.reactions[vname]
 
@@ -1108,14 +1113,14 @@ class TfaModel:
 
         Adding new species (constraints) to the model
         """
-        constr2name = {'DC': "∆rG' displacement constraint"}
+        constr2name = {'C_DC': "∆rG' displacement constraint"}
 
         pseudo_sids = {}
         for rid, td_rdata in self.td_reactions.items():
             if td_rdata.add_td_constraints:
                 ridx = re.sub('^R_', '', rid)
                 for constr, name in constr2name.items():
-                    pseudo_sids[f'C_{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
+                    pseudo_sids[f'{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
 
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant']
         df_add_species = pd.DataFrame(pseudo_sids.values(), index=list(pseudo_sids), columns=cols)
@@ -1145,8 +1150,8 @@ class TfaModel:
         for rid, td_rdata in self.td_reactions.items():
             if td_rdata.add_td_constraints:
                 ridx = re.sub('^R_', '', rid)
-                pseudo_rids[f'V_LNG_{ridx}'] = [f'{var2name["LNG"]} for {ridx}', f'-> C_DC_{ridx}',
-                                                lb_pid, ub_pid, 'td_variable', 'continuous']
+                pseudo_rids[f'{pf.V_LNG}_{ridx}'] = [f'{var2name["LNG"]} for {ridx}', f'-> {pf.C_DC}_{ridx}',
+                                                     lb_pid, ub_pid, 'td_variable', 'continuous']
 
         cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
         df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
@@ -1157,7 +1162,7 @@ class TfaModel:
         modify_attrs = {}
         for rid, td_rdata in self.td_reactions.items():
             ridx = re.sub('^R_', '', rid)
-            modify_attrs[f'V_DRG_{ridx}'] = ['reaction', 'reactant', f'C_DC_{ridx}={1/RT}']
+            modify_attrs[f'{pf.V_DRG}_{ridx}'] = ['reaction', 'reactant', f'{pf.C_DC}_{ridx}={1/RT}']
 
         cols = ['component', 'attribute', 'value']
         df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)

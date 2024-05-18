@@ -28,6 +28,7 @@ from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
 from ..utils.mapping_utils import get_srefs, parse_reaction_string
 from ..biocyc.biocyc_data import BiocycData
+import f2xba.prefixes as pf
 
 FBC_BOUND_TOL = '.10e'
 
@@ -195,8 +196,9 @@ class XbaModel:
         if 'add_reactions' in xba_params:
             self.add_reactions(xba_params['add_reactions'])
             protect_ids.extend(xba_params['add_reactions'].index)
-        for r in self.reactions.values():
-            r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
+
+        # for r in self.reactions.values():
+        #     r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
         # update mappings (just in case)
         self.update_gp_mappings()
 
@@ -564,13 +566,19 @@ class XbaModel:
         unit_id = u_dict['id']
         self.unit_defs[unit_id] = SbmlUnitDef(pd.Series(u_dict, name=unit_id))
 
-    def add_parameter(self, p_dict):
+    def add_parameter(self, pid, p_dict):
         """Add a single parameter to the model.
 
+        parameter id must be SBML compliant
+        p_dict must incluce 'value' and may include 'units', 'constant', 'name', 'sboterm', 'metaid'
+
+        :param pid: parameter id to be used
+        :type pid: str
         :param p_dict: parameter definition
         :type p_dict: dict
         """
-        pid = p_dict['id']
+        if pid is None:
+            pid = p_dict['id']
         self.parameters[pid] = SbmlParameter(pd.Series(p_dict, name=pid))
 
     def add_function_def(self, fd_dict):
@@ -1243,29 +1251,6 @@ class XbaModel:
         return n_updates
 
     # MODEL CONVERSIONS
-    def add_parameter_old(self, pid, value, units, constant=True, pname=None, sboterm=None):
-        """add single parameter to the model.
-
-        :param pid: parameter id (compliant to SBML ids)
-        :type pid: str
-        :param value: paramter value
-        :type value: float
-        :param units: units, must be one of the existing model units
-        :type units: str
-        :param constant: (optional) constant attribute
-        :type constant: bool (default: True)
-        :param pname: (optional) parameter name
-        :type pname: if not supplied, used parameter id
-        :param sboterm: (optional), SBO term, e.g. 'SBO:0000626'
-        :type sboterm: None
-        :return:
-        """
-        p_dict = {'id': pid, 'value': value, 'units': units, 'constant': constant,
-                  'name': pname if type(pname) is str else pid}
-        if sboterm is not None:
-            p_dict['sboterm'] = sboterm
-        self.parameters[pid] = SbmlParameter(pd.Series(p_dict, name=pid))
-
     def get_fbc_bnd_pid(self, val, unit_id, proposed_pid, reuse=True):
         """Get parameter id for a given fbc bound value und unit type.
 

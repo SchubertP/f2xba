@@ -41,28 +41,39 @@ class RbaProcesses:
         else:
             print(f'processingMaps not imported!')
 
-    def from_xba(self, rba_params, xba_model, rba_model):
+    def from_xba(self, rba_params, rba_model):
         """Configure Processes and Processing maps.
 
         Parameter functions and aggregates are created
         Cofactors are automatically added to translation map.
 
+        'input_filter' for set 'rna'
+        - empty: select all rnas in the RBA model as input
+        - list of patterns, e.g. 'mrna': select rnas with name starting with any of the patterns
+            - e.g. 'mrna' to select only mrna
+            - e.g. 'trna, b' to select only tRNAs and E. coli gene loci (used for rRNA)
+
+        'input_filter' for set 'protein':
+        - empty: select all proteins in the RBA model as input
+        - 'secreted': all RBA proteins not located in cytoplasm (based on reaction reactants location)
+           - NOTE: previously we checked UniProt signal_sequence
+           - NOTE: in Yeast with ribosomal and cytosolic DNA we would have to rework 'secreted'
+        - list of patterns, e.g. select proteins with name starting with any of the patterns
+            - e.g. 'dummy_protein_c'
+
         :param rba_params: RBA model specific parametrization
         :type rba_params: dict of pandas DataFrames
-        :param xba_model: xba model based on genome scale metabolic model
-        :type xba_model: Class XbaModel
         :param rba_model: rba model instance
         :type rba_model: class RbaModel
         """
 
-        # self.processing_maps
         df_pmaps_data = rba_params['processing_maps']
         df_proc_data = rba_params['processes']
         df_mach_data = rba_params['machineries']
         cytoplasm_cid = rba_model.cid_mappings['cytoplasm_cid']
 
-        pmap2set = {}
         # Process data
+        pmap2set = {}
         for proc_id, row in df_proc_data.iterrows():
             proc_name = row['name']
             proc_set = row['set']
@@ -80,7 +91,8 @@ class RbaProcesses:
                 machinery['capacity'] = RbaTargetValue.get_target_value('value', p_name)
                 machinery['reactants'] = {}
                 machinery['products'] = {}
-                for _, mach_comp in df_mach_data.loc[proc_id].iterrows():
+                # note: df_mach_data.loc[[proc_id]] with double angular brackets to enfoce dataframe being returned
+                for _, mach_comp in df_mach_data.loc[[proc_id]].iterrows():
                     if mach_comp['stoic'] < 0.0:
                         machinery['reactants'][mach_comp['id']] = -mach_comp['stoic']
                     else:
@@ -89,26 +101,51 @@ class RbaProcesses:
             inputs = []
             if proc_set == 'dna':
                 inputs = list(rba_model.dna.macromolecules)
+
             elif proc_set == 'rna':
-                if row.get('input_filter', np.nan) == 'mrna':
-                    inputs = [sid for sid in rba_model.rnas.macromolecules if re.search('mrna', sid) is not None]
-                elif row.get('input_filter', np.nan) == 'srna':
-                    inputs = [sid for sid in rba_model.rnas.macromolecules if re.search('mrna', sid) is None]
-                else:
+                if type(row['input_filter']) is not str:
                     inputs = list(rba_model.rnas.macromolecules)
+                else:
+                    patterns = [pattern.strip() for pattern in row['input_filter'].split(',')]
+                    input_set = set()
+                    for rnaid in rba_model.rnas.macromolecules:
+                        for pattern in patterns:
+                            if re.match(pattern, rnaid):
+                                input_set.add(rnaid)
+                                break
+                    inputs = list(input_set)
+
             elif proc_set == 'protein':
-                inputs = list(rba_model.proteins.macromolecules)
-                if row.get('input_filter', np.nan) == 'signal_sequence':
-                    filtered_list = []
-                    for locus in inputs:
-                        if locus in xba_model.locus2uid:
-                            p = xba_model.proteins[xba_model.locus2uid[locus]]
+                if type(row['input_filter']) is not str:
+                    inputs = list(rba_model.proteins.macromolecules)
+                elif row['input_filter'] == 'signal_peptide':
+                    inputs = []
+                    for locus in rba_model.proteins.macromolecules:
+                        # add those proteins to the input, that have a signal_peptide in their UniProt data
+                        if locus in rba_model.model.locus2uid:
+                            p = rba_model.model.proteins[rba_model.model.locus2uid[locus]]
                             if p.has_signal_peptide is True:
-                                filtered_list.append(locus)
+                                inputs.append(locus)
+                        # dummy proteins have no UniProt entries. We add them to input if they are located in cytoplasm
                         else:
                             if rba_model.proteins.macromolecules[locus].compartment != cytoplasm_cid:
-                                filtered_list.append(locus)
-                    inputs = filtered_list
+                                inputs.append(locus)
+                else:
+                    items = {item.strip() for item in row['input_filter'].split(',')}
+                    input_set = set()
+                    # check if items are valid compartment ids:
+                    if len(items.intersection(set(rba_model.metabolism.compartments))) == len(items):
+                        for mm_id, mm in rba_model.proteins.macromolecules.items():
+                            if mm.compartment in items:
+                                input_set.add(mm_id)
+                    else:
+                        # consider items as patterns or names of macromolecules
+                        for mm_id in rba_model.proteins.macromolecules:
+                            for pattern in items:
+                                if re.match(pattern, mm_id):
+                                    input_set.add(mm_id)
+                                    break
+                    inputs = list(input_set)
 
             proc_data = {'processingMap': proc_map, 'set': proc_set, 'inputs': inputs}
             if proc_type == 'production':

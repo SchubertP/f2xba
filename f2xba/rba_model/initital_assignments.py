@@ -227,7 +227,7 @@ class AssignmentData:
             x_max = f.parameters['X_MAX'] if np.isfinite(f.parameters['X_MAX']) else DEFAULT_INF
             y_min = f.parameters['Y_MIN'] if np.isfinite(f.parameters['Y_MIN']) else -DEFAULT_INF
             y_max = f.parameters['Y_MAX'] if np.isfinite(f.parameters['Y_MAX']) else DEFAULT_INF
-            math_str = (f'linear({variable}, {y0} dimensionless, {slope} time, {x_min} per_h, {x_max} per_h, '
+            math_str = (f'linear({variable}, {y0} dimensionless, {slope} hour, {x_min} per_h, {x_max} per_h, '
                         f'{y_min} dimensionless, {y_max} dimensionless)')
 
         elif f.type == 'michaelisMenten':
