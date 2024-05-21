@@ -236,11 +236,12 @@ class CobraRbaResults:
                     # exclude any RNAs (e.g. in ribosome)
                     if self.cro.df_mm_data.at[pid, 'uniprot']:
                         protein_mmol_per_gdw[pid] += stoic * conc / scale
-            # include dummy_proteins
-            elif re.match(f'{pf.V_TMMC}_dummy', var_id):
+            # include protein concentrations from concentration targets (proteins not included in enzymes)
+            elif re.match(f'{pf.V_TMMC}', var_id):
                 pid = re.sub(f'{pf.V_TMMC}_', '', var_id)
-                scale = self.cro.df_mm_data.at[pid, 'scale']
-                protein_mmol_per_gdw[pid] += conc / scale
+                if self.cro.df_mm_data.at[pid, 'type'] == 'proteins':
+                    scale = self.cro.df_mm_data.at[pid, 'scale']
+                    protein_mmol_per_gdw[pid] += conc / scale
 
         prot_data = {}
         for pid, mmol_per_gdw in protein_mmol_per_gdw.items():
@@ -259,20 +260,26 @@ class CobraRbaResults:
     def collect_protein_results(self, conc=False):
         """Collect protein mass fractions across several conditions.
 
+        From rba solutions, extract protein mass fractions or concentrations
+        across conditions.
+
+        In case of protein mass fractions, add information of experimental
+        proteomics (if provided)
+
         :return: Protein mass fractions for several conditions
         :rtype: pandas DataFrame
         """
         col_name = 'µmol_per_gDW' if conc else 'mg_per_gDW'
-        if conc is False and self.df_mpmf is not None:
-            exp_mpmf_cols = ['uniprot', 'description', 'gene_name', 'mw', 'avg_mpmf', 'rank']
-            df_proteins = self.df_mpmf[exp_mpmf_cols].copy()
-        else:
-            df_proteins = None
-
+        df_proteins = None
         for condition, solution in self.results.items():
             df = self.get_predicted_protein_data(solution)
             if df_proteins is None:
-                df_proteins = df[['uniprot', 'mw_kDa', col_name]].copy()
+                if conc is False and self.df_mpmf is not None:
+                    exp_mpmf_cols = ['gene_name', 'avg_mpmf', 'rank']
+                    df_proteins = df[['uniprot', 'mw_kDa']].join(self.df_mpmf[exp_mpmf_cols])
+                    df_proteins = pd.concat([df_proteins, df[col_name]], axis=1)
+                else:
+                    df_proteins = df[['uniprot', 'mw_kDa', col_name]].copy()
             else:
                 df_proteins = pd.concat([df_proteins, df[col_name]], axis=1)
             df_proteins.rename(columns={col_name: f'{condition}'}, inplace=True)

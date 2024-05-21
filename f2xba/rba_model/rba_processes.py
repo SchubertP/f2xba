@@ -66,7 +66,6 @@ class RbaProcesses:
         :param rba_model: rba model instance
         :type rba_model: class RbaModel
         """
-
         df_pmaps_data = rba_params['processing_maps']
         df_proc_data = rba_params['processes']
         df_mach_data = rba_params['machineries']

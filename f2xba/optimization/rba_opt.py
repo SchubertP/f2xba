@@ -165,8 +165,8 @@ class CobraRbaOptimization:
                 mw_aa = float(xml_attrs['weight_aa']) if 'weight_aa' in xml_attrs else None
                 mw_kda = float(xml_attrs['weight_kDa']) if 'weight_kDa' in xml_attrs else None
                 scale = float(xml_attrs['scale']) if 'scale' in xml_attrs else 1.0
-                mms[mm_id] = [uniprot, mw_kda, mw_aa, scale]
-        cols = ['uniprot', 'mw_kDa', 'mw_aa', 'scale']
+                mms[mm_id] = [xml_attrs['type'], uniprot, mw_kda, mw_aa, scale]
+        cols = ['type', 'uniprot', 'mw_kDa', 'mw_aa', 'scale']
         df_mms = pd.DataFrame(mms.values(), index=list(mms), columns=cols)
         df_mms.index.name = 'mm_id'
         return df_mms

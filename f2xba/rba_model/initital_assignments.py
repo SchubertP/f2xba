@@ -206,6 +206,9 @@ class AssignmentData:
     def rba_function2math_str(f):
         """Convert RBA function to an inline coded function string using function definitions.
 
+        Not realy clean:
+          Support for variable 'growth_rate' in michaelis mentent functions - wrt units
+
         Note: Needs to be updated, once function definitions are changed
 
         :param f: RBA function
@@ -231,16 +234,17 @@ class AssignmentData:
                         f'{y_min} dimensionless, {y_max} dimensionless)')
 
         elif f.type == 'michaelisMenten':
+            ia_units = 'per_h' if variable == 'growth_rate' else 'substance'
             kcat = f.parameters['kmax']
             km = f.parameters['Km']
             if 'Y_MIN' in f.parameters and np.isfinite(f.parameters['Y_MIN']):
                 y_min = f.parameters['Y_MIN']
-                math_str = (f'michaelis_menten_ymin({variable}, {kcat} dimensionless, {km} substance, '
+                math_str = (f'michaelis_menten_ymin({variable}, {kcat} dimensionless, {km} {ia_units}, '
                             f'{y_min} dimensionless)')
             elif kcat == 1.0:
-                math_str = f'michaelis_menten_sat({variable}, {km} substance)'
+                math_str = f'michaelis_menten_sat({variable}, {km} {ia_units})'
             else:
-                math_str = f'michaelis_menten({variable}, {kcat} dimensionless, {km} substance)'
+                math_str = f'michaelis_menten({variable}, {kcat} dimensionless, {km} {ia_units})'
 
         elif f.type == 'exponential':
             rate = f.parameters['RATE']
