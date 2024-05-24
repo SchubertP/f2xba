@@ -325,6 +325,10 @@ class RbaModel:
 
         protect_ids = set()
 
+        u_dict = {'id': 'hour', 'name': 'hour', 'units': 'kind=second, exp=1.0, scale=0, mult=3600.0'}
+        self.model.add_unit_def(u_dict)
+        protect_ids.add(u_dict['id'])
+
         u_dict = {'id': 'per_h', 'name': 'per hour', 'units': 'kind=second, exp=-1.0, scale=0, mult=3600.0'}
         self.model.add_unit_def(u_dict)
         protect_ids.add(u_dict['id'])

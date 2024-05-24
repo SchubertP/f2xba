@@ -28,7 +28,6 @@ from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
 from ..utils.mapping_utils import get_srefs, parse_reaction_string
 from ..biocyc.biocyc_data import BiocycData
-import f2xba.prefixes as pf
 
 FBC_BOUND_TOL = '.10e'
 
@@ -1055,48 +1054,6 @@ class XbaModel:
                 e.active_sites = row.get('active_sites', 1)
                 count += 1
         return count
-
-    def set_enzyme_composition_old(self, fname):
-        """Configure enzyme composition.
-
-        Excel document requires an index column (not used) and column 'composition'
-        Only column 'composition' is processed.
-            'composition' contains a sref presentation of enzyme composition,
-        e.g. 'gene=b2222, stoic=2.0; gene=b2221, stoic=2.0'
-
-        Model enzyme id is determined by concatenating the locus ids (after sorting)
-        e.g. 'gene=b2222, stoic=2.0; gene=b2221, stoic=2.0' - > 'enz_b2221_b2222'
-
-        :param fname: name of Excel document specifying enzyme composition
-        :type fname: str
-        :return: number of updates
-        :rtype: int
-        """
-        # load enzyme composition data from file
-        with pd.ExcelFile(fname) as xlsx:
-            df = pd.read_excel(xlsx, index_col=0)
-        enz_composition = [get_srefs(re.sub('gene', 'species', srefs)) for srefs in df['composition'].values]
-
-        # determining enzyme id from enzyme composition
-        eid2comp = {'enz_' + '_'.join(sorted(comp.keys())): comp for comp in enz_composition}
-
-        # update model enzymes with composition data
-        n_count = 0
-        for eid, enz in self.enzymes.items():
-            if eid in eid2comp:
-                enz.composition = eid2comp[eid]
-                n_count += 1
-            else:
-                gpa_genes = set(enz.composition)
-                if len(gpa_genes) > 1:
-                    # model enzyme ids are based on model reaction gpa
-                    #  model enzymes might be composed of several sub-complexes, e.g. Ecocyc complexes
-                    #  here we try to identify such sub-complexes and update that part of the stoichiomerty
-                    for genes_stoic in eid2comp.values():
-                        if set(genes_stoic).intersection(gpa_genes) == set(genes_stoic):
-                            enz.composition.update(genes_stoic)
-                            n_count += 1
-        return n_count
 
     def get_catalyzed_reaction_kinds(self):
         """retrieve reaction ids for each kind/type of catalyzed reaction

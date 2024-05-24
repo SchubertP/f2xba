@@ -9,19 +9,18 @@ support for thermodynamic enhance models (TGECKO, TccFBA, TMOMENTmr, TMOMENT)
 Peter Schubert, HHU Duesseldorf, CCB, April 2024
 """
 
-import os
 import re
 import pandas as pd
 import numpy as np
-import json
-from scipy.stats import pearsonr
+from collections import defaultdict
 
 import f2xba.prefixes as pf
+from .results import Results
 
-# TODO Abstract classes
-class CobraEcmResults:
 
-    def __init__(self, ceo, results, df_mpmf=None):
+class CobraEcmResults(Results):
+
+    def __init__(self, optim, results, df_mpmf=None):
         """Instantiation
 
         Results for different media conditions with CobraPy solution objects
@@ -37,19 +36,16 @@ class CobraEcmResults:
                 'avg_mpmf': average milli pmf across conditions
                 'rank': rank in experiment
 
-        :param ceo: a cobra rba optimization instance
-        :type ceo: CobraEcmOptimization
+        :param optim: a cobra rba optimization instance
+        :type optim: CobraEcmOptimization
         :param results: CobraPy optimization results across different media
         :type results: dict (key: str, val: cobra.core.solution.Solution)
         :param df_mpmf: protein mass fractions in mg/g_total_active_protein
         :type df_mpmf: pandas dataframe
         """
-        self.ceo = ceo
-        self.results = results
-        self.n_media = len(results)
-        self.df_mpmf = df_mpmf
+        super().__init__(optim, results, df_mpmf)
 
-    def get_predicted_protein_mpfms(self, solution):
+    def get_predicted_protein_data(self, solution):
         """Extract relative protein mpmf wrt to total active protein for single solution
 
         mpmf: 1000.0 * protein mass fraction i.e. (mg_protein/g_total_active)
@@ -65,129 +61,85 @@ class CobraEcmResults:
         :type solution: cobra.core.solution.Solution
         :return:
         """
-        mpmfs = {}
-        total_active_protein = solution.fluxes[f'{pf.V_PC_total_active}']
-        for rid, mg_per_gdw in solution.fluxes.items():
+        prot_data = {}
+        enz_sat = self.optim.avg_enz_saturation
+        for rid, mg_active_per_gdw in solution.fluxes.items():
             if re.match(f'{pf.V_PC}_', rid) and rid != pf.V_PC_total_active:
                 uid = re.sub(f'{pf.V_PC}_', '', rid)
-                gene = self.ceo.uid2gene.get(uid, 'unknown')
-                mpmfs[gene] = [uid, mg_per_gdw/total_active_protein * 1000.0]
-        df_mpfms = pd.DataFrame(mpmfs.values(), index=list(mpmfs), columns=['uniprot', 'mpmf'])
-        df_mpfms.index.name = 'gene'
-        return df_mpfms
+                if uid in self.optim.uid2gene:
+                    label, name = self.optim.uid2gene[uid]
+                else:
+                    label, name = [None, None]
+                mg_per_gdw = mg_active_per_gdw / enz_sat
+                prot_data[label] = [name, uid, mg_per_gdw]
+        cols = ['gene_name', 'uniprot', 'mg_per_gDW']
+        df_prot_data = pd.DataFrame(prot_data.values(), index=list(prot_data), columns=cols)
+        df_prot_data.index.name = 'gene'
+        return df_prot_data
 
-    def collect_proteins(self):
+    def collect_protein_results(self):
         """
 
         :return:
         """
-        if self.df_mpmf is not None:
-            exp_mpmf_cols = ['uniprot', 'description', 'gene_name', 'mw', 'avg_mpmf', 'rank']
-            df_proteins = self.df_mpmf[exp_mpmf_cols].copy()
-        else:
-            df_proteins = None
-
+        df_proteins = None
         for condition, solution in self.results.items():
-            df = self.get_predicted_protein_mpfms(solution)
+            df = self.get_predicted_protein_data(solution)
             if df_proteins is None:
-                df_proteins = df
+                if self.df_mpmf is not None:
+                    exp_mpmf_cols = ['description', 'avg_mpmf', 'rank']
+                    df_proteins = df[['uniprot', 'gene_name']].join(self.df_mpmf[exp_mpmf_cols])
+                    df_proteins = pd.concat([df_proteins, df['mg_per_gDW']], axis=1)
+                else:
+                    df_proteins = df[['uniprot', 'gene_name', 'mg_per_gDW']].copy()
             else:
-                df_proteins = pd.concat([df_proteins, df['mpmf']], axis=1)
-            df_proteins.rename(columns={'mpmf': f'{condition}'}, inplace=True)
+                df_proteins = pd.concat([df_proteins, df['mg_per_gDW']], axis=1)
+            df_proteins.rename(columns={'mg_per_gDW': f'{condition}'}, inplace=True)
+
         avg = df_proteins.iloc[:, -self.n_media:].sum(axis=1).values/self.n_media
         stdev = df_proteins.iloc[:, -self.n_media:].std(axis=1).values
-        df_proteins.insert(len(df_proteins.columns) - self.n_media, 'mean mpmf', avg)
+        df_proteins.insert(len(df_proteins.columns) - self.n_media, 'mean mg_per_gDW', avg)
         df_proteins.insert(len(df_proteins.columns) - self.n_media, 'stdev', stdev)
         df_proteins.index.name = 'gene'
-        df_proteins.sort_values(by='mean mpmf', ascending=False, inplace=True)
+        df_proteins.sort_values(by='mean mg_per_gDW', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_proteins)+1))
         df_proteins.insert(len(df_proteins.columns) - self.n_media, 'predicted_rank', rank)
         return df_proteins
 
     def get_fluxes(self, solution):
         fluxes = {}
-        for rid, val in solution.fluxes.items():
+        for rid, mmol_per_gdwh in solution.fluxes.items():
             if re.match(f'{pf.V}_', rid) is None and re.search('_arm', rid) is None:
-                fluxes[rid] = [self.ceo.rxn_data[rid]['reaction_str'], self.ceo.rxn_data[rid]['gpr'], val]
-        df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=['reaction_str', 'gpa', 'flux'])
+                reaction_str = self.optim.rdata[rid]['reaction_str']
+                gpr = self.optim.rdata[rid]['gpr']
+                fluxes[rid] = [reaction_str, gpr, mmol_per_gdwh, abs(mmol_per_gdwh)]
+        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+        df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=cols)
         df_fluxes.index.name = 'reaction'
         return df_fluxes
 
-    def collect_fluxes(self):
-        n_media = len(self.results)
-        df_fluxes = None
-        for condition, solution in self.results.items():
-            df = self.get_fluxes(solution)
-            df_fluxes = df if df_fluxes is None else pd.concat([df_fluxes, df['flux']], axis=1)
-            df_fluxes.rename(columns={'flux': f'{condition}'}, inplace=True)
-        avg = df_fluxes.iloc[:, -n_media:].sum(axis=1).values/n_media
-        stdev = df_fluxes.iloc[:, -n_media:].std(axis=1).values
-        df_fluxes.insert(len(df_fluxes.columns) - n_media, 'mean mmol_per_gDWh)', avg)
-        df_fluxes.insert(len(df_fluxes.columns) - n_media, 'abs_mean', abs(avg))
-        df_fluxes.insert(len(df_fluxes.columns) - n_media, 'stdev', stdev)
-        df_fluxes.sort_values(by='abs_mean', ascending=False, inplace=True)
-        rank = np.array(range(1, len(df_fluxes)+1))
-        df_fluxes.insert(len(df_fluxes.columns) - n_media, 'rank', rank)
-        df_fluxes.index.name = 'rid'
-        return df_fluxes
-
-    @staticmethod
-    def get_net_fluxes(solution):
+    def get_net_fluxes(self, solution):
         """net fluxes of a solution"""
-        net_fluxes = {}
+        net_fluxes = defaultdict(float)
         for rid, val in solution.fluxes.items():
             if re.search(f'{pf.V}_', rid) is None and re.search('_arm', rid) is None:
                 fwd_rid = re.sub('_REV$', '', rid)
                 net_rid = re.sub(r'_iso\d*', '', fwd_rid)
-                if net_rid not in net_fluxes:
-                    net_fluxes[net_rid] = 0.0
                 if re.search('_REV', rid):
                     net_fluxes[net_rid] -= val
                 else:
                     net_fluxes[net_rid] += val
-        df_net_fluxes = pd.DataFrame(net_fluxes.values(), index=list(net_fluxes), columns=['flux'])
-        df_net_fluxes['abs_flux'] = df_net_fluxes['flux'].abs()
+
+        # add reaction string and gene product relations
+        net_flux_data = {}
+        for rid, mmol_per_gdwh in net_fluxes.items():
+            rdata = self.optim.net_rdata.get(rid)
+            if rdata:
+                net_flux_data[rid] = [rdata['reaction_str'], rdata['gpr'], mmol_per_gdwh, abs(mmol_per_gdwh)]
+            else:
+                net_flux_data[rid] = [None, None, mmol_per_gdwh, abs(mmol_per_gdwh)]
+
+        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+        df_net_fluxes = pd.DataFrame(net_flux_data.values(), index=list(net_flux_data), columns=cols)
         df_net_fluxes.index.name = 'rid'
         return df_net_fluxes
-
-    # TODO: collect_flux_data (i.e. combine collect_fluxes() and collect_net_fluxes()
-    def collect_net_fluxes(self):
-        df_net_fluxes = None
-        for condition, solution in self.results.items():
-            df = self.get_net_fluxes(solution)
-            if df_net_fluxes is None:
-                df_net_fluxes = df[['flux']].copy()
-            else:
-                df_net_fluxes = pd.concat([df_net_fluxes, df['flux']], axis=1)
-            df_net_fluxes.rename(columns={'flux': f'{condition}'}, inplace=True)
-        avg = df_net_fluxes.iloc[:, -self.n_media:].sum(axis=1).values/self.n_media
-        stdev = df_net_fluxes.iloc[:, -self.n_media:].std(axis=1).values
-        df_net_fluxes.insert(0, 'mean mmol_per_gDWh)', avg)
-        df_net_fluxes.insert(1, 'abs_mean', abs(avg))
-        df_net_fluxes.insert(2, 'stdev', stdev)
-        df_net_fluxes.sort_values(by='abs_mean', ascending=False, inplace=True)
-        rank = np.array(range(1, len(df_net_fluxes)+1))
-        df_net_fluxes.insert(0, 'rank', rank)
-        df_net_fluxes.index.name = 'flux'
-        return df_net_fluxes
-
-    def report_proteomics_correlation(self):
-        df_proteins = self.collect_proteins()
-        model_genes = set(df_proteins.index)
-        for condition in list(self.df_mpmf.columns)[6:]:
-            if condition in df_proteins.columns:
-                exp_genes = {gene for gene, pmf in self.df_mpmf[condition].items() if np.isfinite(pmf)}
-                genes = list(exp_genes.intersection(model_genes))
-                r_value, p_value = pearsonr(df_proteins.loc[genes][condition].values,
-                                            self.df_mpmf.loc[genes][condition].values)
-                print(f'{condition:20s}: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}')
-
-    def save_fluxes_to_escher(self, escher_dir, ecm_name):
-        df_net_fluxes = self.collect_net_fluxes()
-
-        for condition in list(df_net_fluxes.columns)[4:]:
-            flux_dict = df_net_fluxes[condition][abs(df_net_fluxes[condition]) > 1e-8].to_dict()
-            fname = os.path.join(escher_dir, ecm_name + f'_{condition}_fluxes.json')
-            with open(fname, 'w') as f:
-                json.dump(flux_dict, f)
-        print(f'fnet fluxes stored under {escher_dir}')

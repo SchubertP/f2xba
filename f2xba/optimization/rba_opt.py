@@ -27,36 +27,32 @@ from collections import defaultdict
 import sbmlxdf
 import f2xba.prefixes as pf
 from .rba_initial_assignments import InitialAssignments
+from .optimize import Optimize
 
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
 XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
 
 
-class CobraRbaOptimization:
+class CobraRbaOptimization(Optimize):
 
     def __init__(self, cobra_model, fname):
-        self.model = cobra_model
-        self.report_model_size()
+        super().__init__(cobra_model, fname)
 
-        # load SBML model into sbmlxdf
-        sbml_model = sbmlxdf.Model(fname)
-        print(f'SBML model loaded by sbmlxdf for model data extraction')
-        m_dict = sbml_model.to_df()
         required = {'species', 'reactions', 'unitDefs', 'funcDefs', 'initAssign', 'parameters', 'compartments'}
-        missing = required.difference(set(m_dict))
+        missing = required.difference(set(self.m_dict))
         if len(missing) > 0:
             print(f'Missing components {missing} in SBML document!')
             raise AttributeError
 
-        self.df_mm_data = self.get_macromolecule_data(m_dict['species'])
-        self.df_enz_data = self.get_enzyme_data(m_dict['reactions'])
-        self.initial_assignments = InitialAssignments(self.model, m_dict)
+        self.df_mm_data = self.get_macromolecule_data(self.m_dict['species'])
+        self.df_enz_data = self.get_enzyme_data(self.m_dict['reactions'])
+        self.initial_assignments = InitialAssignments(self.model, self.m_dict)
 
-        medium_cid = self.get_medium_cid(m_dict['compartments'])
-        self.ex_rid2mid = self.get_ex_rid2mid(m_dict['reactions'], medium_cid)
+        medium_cid = self.get_medium_cid(self.m_dict['compartments'])
+        self.ex_rid2mid = self.get_ex_rid2mid(self.m_dict['reactions'], medium_cid)
 
-        model_gr = m_dict['parameters'].loc['growth_rate'].value
+        model_gr = self.m_dict['parameters'].loc['growth_rate'].value
         self.enz_mm_composition = self.get_enzyme_mm_composition(model_gr)
 
         self.configure_rba_model_constraints()
@@ -66,20 +62,6 @@ class CobraRbaOptimization:
         if 'cplex' in self.model.solver.interface.__name__:
             self.model.solver.problem.parameters.read.scale.set(-1)
         return
-
-    def report_model_size(self):
-        n_vars_drg = 0
-        n_vars_ec = 0
-        n_vars_pmc = 0
-        for rxn in self.model.reactions:
-            if re.match(f'{pf.V_DRG}_', rxn.id):
-                n_vars_drg += 1
-            elif re.match(f'{pf.V_EC}_', rxn.id):
-                n_vars_ec += 1
-            elif re.match(f'{pf.V_PMC}_', rxn.id):
-                n_vars_pmc += 1
-        print(f'{len(self.model.variables)} variables, {len(self.model.constraints)} constraints')
-        print(f'{n_vars_ec} enzymes, {n_vars_pmc} process machines, {n_vars_drg} TD reaction constraints')
 
     @staticmethod
     def get_medium_cid(df_compartments):
@@ -130,27 +112,6 @@ class CobraRbaOptimization:
                 if re.match(cprefix, constr.name):
                     constr.lb, constr.ub = bounds
         print(f'RBA enzyme efficiency constraints configured (C_EF_xxx, C_ER_xxx) ≤ 0')
-
-    def configure_td_model_constraints(self):
-        # configure thermodynamic related model constraints and variables
-        is_td = False
-        modify_var_types = {f'{pf.V_FU}_': 'binary', f'{pf.V_RU}_': 'binary'}
-        for var in self.model.variables:
-            for vprefix, vtype in modify_var_types.items():
-                if re.match(vprefix, var.name) and 'reverse' not in var.name:
-                    is_td = True
-                    var.type = vtype
-        modify_constr_bounds = {f'{pf.C_FFC}_': [None, 0.0], f'{pf.C_FRC}_': [None, 0.0],
-                                f'{pf.C_GFC}_': [None, 0.0], f'{pf.C_GRC}_': [None, 0.0],
-                                f'{pf.C_SU}_': [None, 0.0]}
-        for constr in self.model.constraints:
-            for cprefix, bounds in modify_constr_bounds.items():
-                if re.match(cprefix, constr.name):
-                    constr.lb, constr.ub = bounds
-
-        if is_td is True:
-            print(f'Thermodynamic use variables (V_FU_xxx and V_RU_xxx) as binary')
-            print(f'Thermodynamic constraints (C_F[FR]C_xxx, C_G[FR]C_xxx, C_SU_xxx) ≤ 0')
 
     # INITIAL DATA COLLECTION PART
     @staticmethod
