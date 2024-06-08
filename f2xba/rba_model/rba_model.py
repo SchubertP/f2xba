@@ -238,9 +238,11 @@ class RbaModel:
         count = self.model.create_proteins()
         if count > 0:
             print(f'{count:4d} protein(s) created with UniProt information')
-        count = self.model.map_protein_cofactors()
-        if count > 0:
-            print(f'{count:4d} cofactor(s) mapped to species ids for added protein')
+
+        if self.model.cofactor_flag is True:
+            count = self.model.map_protein_cofactors()
+            if count > 0:
+                print(f'{count:4d} cofactor(s) mapped to species ids for added protein')
 
         # split reactions into (reversible) isoreactions
         n_r = len(self.model.reactions)
@@ -290,8 +292,12 @@ class RbaModel:
         self.metabolism.from_xba(rba_params, self.model)
 
         self.medium.from_xba(general_params, self.model)
-        self.dna.from_xba(rba_params, self.model, self.cid_mappings)
-        self.rnas.from_xba(rba_params, self.model, self.cid_mappings)
+
+        macromolecules = set(rba_params['processes']['set'].values)
+        if 'dna' in macromolecules:
+            self.dna.from_xba(rba_params, self.model, self.cid_mappings)
+        if 'rna' in macromolecules:
+            self.rnas.from_xba(rba_params, self.model, self.cid_mappings)
         self.proteins.from_xba(rba_params, self.model, self.cid_mappings)
         self.add_dummy_proteins()
         self.enzymes.from_xba(general_params, self.model, self.parameters, self.cid_mappings, self.medium)
@@ -325,13 +331,17 @@ class RbaModel:
 
         protect_ids = set()
 
-        u_dict = {'id': 'hour', 'name': 'hour', 'units': 'kind=second, exp=1.0, scale=0, mult=3600.0'}
-        self.model.add_unit_def(u_dict)
-        protect_ids.add(u_dict['id'])
-
-        u_dict = {'id': 'per_h', 'name': 'per hour', 'units': 'kind=second, exp=-1.0, scale=0, mult=3600.0'}
-        self.model.add_unit_def(u_dict)
-        protect_ids.add(u_dict['id'])
+        # create units required for RBA
+        rba_units = {'hour': {'name': 'hour', 'units': 'kind=second, exp=1.0, scale=0, mult=3600.0'},
+                     'per_h': {'name': 'per hour', 'units': 'kind=second, exp=-1.0, scale=0, mult=3600.0'},
+                     'mmol_per_gDW': {'name': 'Millimoles', 'units': 'kind=mole, exp=1.0, scale=-3, mult=1.0; '
+                                                                     'kind=gram, exp=-1.0, scale=0, mult=1.0'}
+                     }
+        for unit_id, data in rba_units.items():
+            if unit_id not in self.model.unit_defs:
+                data['id'] = unit_id
+                self.model.add_unit_def(data)
+            protect_ids.add(unit_id)
 
         pid = 'growth_rate'
         p_data = {'value': growth_rate, 'units': 'per_h', 'name': 'growth rate for initial parametrization'}

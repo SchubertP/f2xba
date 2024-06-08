@@ -166,6 +166,11 @@ class RbaTargets:
                         for sid, stoic in xba_model.reactions[biomass_rid].reactants.items():
                             if sid not in exclude_sids:
                                 srefs[sid] = stoic
+                    elif re.match('include:', info):
+                        include_sids = {item.strip() for item in (info.split(':')[1]).split(',')}
+                        for sid, stoic in xba_model.reactions[biomass_rid].reactants.items():
+                            if sid in include_sids:
+                                srefs[sid] = stoic
                     elif info in ['metabolites', 'dna', 'amino_acids']:
                         srefs = self.get_biomass_composition(biomass_rid, info, rba_params, xba_model)
                     # create individual targets

@@ -141,11 +141,9 @@ class Results(ABC):
         :rtype: pandas DataFrame
         """
         df_proteins = self.collect_protein_results()
-        model_genes = set(df_proteins.index)
-        for condition in list(self.df_mpmf.columns)[6:]:
-            if condition in df_proteins.columns:
-                exp_genes = {gene for gene, pmf in self.df_mpmf[condition].items() if np.isfinite(pmf)}
-                genes = list(exp_genes.intersection(model_genes))
+        for condition in self.results:
+            if condition in self.df_mpmf.columns:
+                genes = list(self.df_mpmf.index.intersection(df_proteins.index))
                 r_value, p_value = pearsonr(df_proteins.loc[genes][condition].values,
                                             self.df_mpmf.loc[genes][condition].values)
                 print(f'{condition:20s}: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}')

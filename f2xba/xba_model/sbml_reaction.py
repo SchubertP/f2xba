@@ -90,6 +90,10 @@ class SbmlReaction(SbmlSBase):
             self._products = self.get_srefs(value)
 
     @property
+    def reaction_string(self):
+        return self.get_reaction_string()
+
+    @property
     def gene_product_assoc(self):
         return self._gene_product_assoc
 

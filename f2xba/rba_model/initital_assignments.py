@@ -234,7 +234,7 @@ class AssignmentData:
                         f'{y_min} dimensionless, {y_max} dimensionless)')
 
         elif f.type == 'michaelisMenten':
-            ia_units = 'per_h' if variable == 'growth_rate' else 'substance'
+            ia_units = 'per_h' if variable == 'growth_rate' else 'mmol_per_gDW'
             kcat = f.parameters['kmax']
             km = f.parameters['Km']
             if 'Y_MIN' in f.parameters and np.isfinite(f.parameters['Y_MIN']):

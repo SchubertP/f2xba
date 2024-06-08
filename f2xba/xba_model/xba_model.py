@@ -27,6 +27,7 @@ from .enzyme import Enzyme
 from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
 from ..utils.mapping_utils import get_srefs, parse_reaction_string
+from ..utils.calc_mw import calc_mw_from_formula
 from ..biocyc.biocyc_data import BiocycData
 
 FBC_BOUND_TOL = '.10e'
@@ -70,6 +71,7 @@ class XbaModel:
                              for symbol_id, row in model_dict['initAssign'].iterrows()}
                              if 'initAssign' in model_dict else None)
 
+        self.cofactor_flag = True
         self.uid2gp = {}
         self.locus2gp = {}
         self.locus2uid = {}
@@ -174,6 +176,7 @@ class XbaModel:
             print(f'{len(xba_params)} tables with XBA model configuration parameters loaded from {fname}')
 
         general_params = xba_params['general']['value'].to_dict()
+        self.cofactor_flag = general_params.get('cofactor_flag', True)
 
         #############################
         # modify/correct components #
@@ -232,7 +235,7 @@ class XbaModel:
         if 'chebi2sid' in xba_params:
             self.user_chebi2sid = {str(chebi): sid for chebi, sid in xba_params['chebi2sid']['sid'].items()
                                    if sid in self.species}
-        if general_params.get('cofactor_flag', False) is True:
+        if self.cofactor_flag is True:
             count = self.map_protein_cofactors()
             print(f'{count:4d} cofactors mapped to species ids')
 
@@ -414,43 +417,8 @@ class XbaModel:
                         new_refs |= orig2rids[ref]
                 group.id_refs = new_refs
 
-    def validate(self):
-        """Validate compliance to SBML standards.
+    def create_sbml_model(self):
 
-        :return: flag if model complies to SBML standards
-        :rtype: bool
-        """
-        m_dict = {
-            'sbml': self.sbml_container,
-            'modelAttrs': self.model_attrs,
-            'unitDefs': pd.DataFrame([data.to_dict() for data in self.unit_defs.values()]).set_index('id'),
-            'compartments': pd.DataFrame([data.to_dict() for data in self.compartments.values()]).set_index('id'),
-            'parameters': pd.DataFrame([data.to_dict() for data in self.parameters.values()]).set_index('id'),
-            'species': pd.DataFrame([data.to_dict() for data in self.species.values()]).set_index('id'),
-            'reactions': pd.DataFrame([data.to_dict() for data in self.reactions.values()]).set_index('id'),
-            'fbcObjectives': pd.DataFrame([data.to_dict() for data in self.objectives.values()]).set_index('id'),
-            'fbcGeneProducts': pd.DataFrame([data.to_dict() for data in self.gps.values()]).set_index('id'),
-        }
-        if self.groups:
-            m_dict['groups'] = pd.DataFrame([data.to_dict() for data in self.groups.values()])
-
-        model = sbmlxdf.Model()
-        model.from_df(m_dict)
-        errors = model.validate_sbml()
-        if len(errors) == 0:
-            return True
-        else:
-            print(f'model not exported due to errors (see ./results/tmp.txt): ', errors)
-            return False
-
-    def export(self, fname):
-        """Export the model to SBML or Excel.
-
-        :param fname: path/filename (with extension '.xml' or '.xlsx')
-        :type fname: str
-        :return: flag if model can be exported
-        :rtype: bool
-        """
         m_dict = {
             'sbml': self.sbml_container,
             'modelAttrs': self.model_attrs,
@@ -469,14 +437,38 @@ class XbaModel:
         if self.init_assigns:
             m_dict['initAssign'] = pd.DataFrame([data.to_dict()
                                                  for data in self.init_assigns.values()]).set_index('symbol')
+        sbml_model = sbmlxdf.Model()
+        sbml_model.from_df(m_dict)
+        return sbml_model
 
+    def validate(self):
+        """Validate compliance to SBML standards.
+
+        :return: flag if model complies to SBML standards
+        :rtype: bool
+        """
+        model = self.create_sbml_model()
+        errors = model.validate_sbml()
+        if len(errors) == 0:
+            return True
+        else:
+            print(f'model not exported due to errors (see ./results/tmp.txt): ', errors)
+            return False
+
+    def export(self, fname):
+        """Export the model to SBML or Excel.
+
+        :param fname: path/filename (with extension '.xml' or '.xlsx')
+        :type fname: str
+        :return: flag if model can be exported
+        :rtype: bool
+        """
         extension = fname.split('.')[-1]
         if extension not in ['xml', 'xlsx']:
             print(f'model not exported, unknown file extension, expected ".xml" or ".xlsx": {fname}')
             return False
 
-        model = sbmlxdf.Model()
-        model.from_df(m_dict)
+        model = self.create_sbml_model()
         if extension == 'xml':
             model.export_sbml(fname)
             print(f'model exported to SBML: {fname}')
@@ -1518,6 +1510,48 @@ class XbaModel:
             del self.enzymes[eid]
         for uid in unused_uids:
             del self.proteins[uid]
+
+    def get_sref_data(self, srefs):
+        """For given species references of a reaction extract weight data
+
+        Determine molecular weight, based on species formula
+        Determine mg_per_gDW based on stoichiometry
+        :param srefs: species references for either reaction reactants or products
+        :type self: dict (key: species id/str, val: stoic/float)
+        :return: species reference data collected
+        :rtype: pandas DataFrame
+        """
+        sref_data = {}
+        for sid, mmol_per_gDW in srefs.items():
+            s = self.species[sid]
+            name = s.name
+            formula = s.formula
+            g_per_mol = np.nan
+            mg_per_gdw = np.nan
+            if type(formula) is str:
+                g_per_mol = calc_mw_from_formula(formula)
+                mg_per_gdw = mmol_per_gDW * g_per_mol
+            sref_data[sid] = [name, formula, g_per_mol, mmol_per_gDW, mg_per_gdw]
+        cols = ['name', 'formula', 'g_per_mol', 'mmol_per_gDW', 'mg_per_gDW']
+        df_sref_data = pd.DataFrame(sref_data.values(), index=list(sref_data), columns=cols)
+        df_sref_data.index.name = 'id'
+        return df_sref_data
+
+    def get_biomass_data(self, rid):
+        """For given (biomass) reaction extract reactant/product data.
+
+        Determine molecular weight, based on species formula
+        Determine mg_per_gDW based on stoichiometry
+
+        :param rid: (biomass) reaction id of the model
+        :type rid: str
+        :return: reactant and product data
+        :rtype: two pandas DataFrames
+        """
+        r = self.reactions[rid]
+        df_reactants = self.get_sref_data(r.reactants)
+        df_products = self.get_sref_data(r.products)
+        return df_reactants, df_products
 
     # old / currently unused methods
 

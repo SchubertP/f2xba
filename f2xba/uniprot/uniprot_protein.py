@@ -17,7 +17,7 @@ def get_loci(loci_str):
     """
     loci = []
     if type(loci_str) == str:
-        loci = [locus.strip() for locus in loci_str.split()]
+        loci = [re.sub(';', '', locus).strip() for locus in loci_str.split()]
     return loci
 
 
@@ -40,23 +40,23 @@ def get_location(location_str):
     return location
 
 
-def get_go_locations(go_cellular_string):
-    """Extract cellular location from GO annotation.
+def get_go_terms(go_annotation):
+    """Extract Gene Ontology terms from a GO annotation element.
 
-    Extract all location, but remove annotation term in square brackets
+    Remove GO ids in square brackets
     Strip leading/trailing spaces
 
-    :param go_cellular_string: value of Uniprot 'Gene Ontology (cellular component)'
-    :type go_cellular_string: str
-    :return: cellular location, sorted
-    :rtype: str
+    :param go_annotation: value of Uniprot 'Gene Ontology (xxx)' annotation
+    :type go_annotation: str
+    :return: list of go terms (without go ids) - sorted
+    :rtype: list of str
     """
-    cellular_location = []
-    if type(go_cellular_string) == str:
-        for go_annotation in go_cellular_string.split(';'):
-            location = go_annotation.split('[')[0]
-            cellular_location.append(location.strip())
-    return cellular_location
+    go_terms = []
+    if type(go_annotation) is str:
+        for go_term_goid in go_annotation.split(';'):
+            go_term = go_term_goid.split('[')[0]
+            go_terms.append(go_term.strip())
+    return sorted(go_terms)
 
 
 def get_refs(refs_str):
@@ -154,7 +154,9 @@ class UniprotProtein:
         self.ec_numbers = get_refs(s_data.get('EC number'))
         self.biocyc_ids = get_refs(s_data.get('BioCyc'))
         self.location = get_location(s_data.get(['Subcellular location [CC]']))
-        self.go_locations = get_go_locations(s_data.get('Gene Ontology (cellular component)'))
+        self.go_components = get_go_terms(s_data.get('Gene Ontology (cellular component)'))
+        self.go_processes = get_go_terms(s_data.get('Gene Ontology (biological process)'))
+        self.go_functions = get_go_terms(s_data.get('Gene Ontology (molecular function)'))
         self.length = s_data['Length']
         self.mass = s_data['Mass']
         self.aa_composition = get_aa_composition(s_data['Sequence'])
