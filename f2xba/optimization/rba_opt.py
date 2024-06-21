@@ -204,18 +204,18 @@ class CobraRbaOptimization(Optimize):
         :return:
         """
         # first, check feasibility a minimal (or zero) growth
-        with self.model:
-            self.set_growth_rate(gr_min)
-            opt_value = self.model.slim_optimize()
+        # with self.model:
+        self.set_growth_rate(gr_min)
+        opt_value = self.model.slim_optimize()
 
         # bisection algorithm to narrow in on maximum growth rate
         if math.isfinite(opt_value):
             n_iter = 1
             while ((gr_max - gr_min) > bisection_tol) and (n_iter < max_iter):
                 gr_test = gr_min + 0.5 * (gr_max - gr_min)
-                with self.model:
-                    self.set_growth_rate(gr_test)
-                    opt_value = self.model.slim_optimize()
+                # with self.model:
+                self.set_growth_rate(gr_test)
+                opt_value = self.model.slim_optimize()
                 if math.isfinite(opt_value):
                     gr_min = gr_test
                 else:
@@ -225,9 +225,9 @@ class CobraRbaOptimization(Optimize):
             # collect optimiziation solution at optimum growth rate
             if (gr_max - gr_min) < bisection_tol:
                 gr_opt = gr_min
-                with self.model:
-                    self.set_growth_rate(gr_opt)
-                    solution = self.model.optimize()
+                # with self.model:
+                self.set_growth_rate(gr_opt)
+                solution = self.model.optimize()
                 solution.gr_opt = gr_opt
                 solution.n_iter = n_iter
                 solution.density_constraints = {met.id: -val for met, val

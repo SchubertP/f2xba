@@ -146,7 +146,7 @@ class Results(ABC):
                 genes = list(self.df_mpmf.index.intersection(df_proteins.index))
                 r_value, p_value = pearsonr(df_proteins.loc[genes][condition].values,
                                             self.df_mpmf.loc[genes][condition].values)
-                print(f'{condition:20s}: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}')
+                print(f'{condition:25s}: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}')
 
     def save_fluxes_to_escher(self, escher_dir, model_name):
         """Export net metabolic reaction fluxes (mmol/gDWh) to Escher compliant files.

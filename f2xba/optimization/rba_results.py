@@ -92,7 +92,7 @@ class CobraRbaResults(Results):
 
         net_fluxes = defaultdict(float)
         for rid, val in solution.fluxes.items():
-            if re.search(f'{pf.V}_', rid) is None:
+            if re.match(f'{pf.V}_', rid) is None:
                 # check for macromolecule synthesis/degradation fluxes that might be scaled
                 if re.match(pf_prod, rid) or re.match(pf_degr, rid):
                     if re.match(pf_prod, rid):

@@ -88,10 +88,9 @@ class InitialAssignments:
         self.ia_functions = {symbol: IaFunction(symbol, row['math'])
                              for symbol, row in m_dict['initAssign'].iterrows()}
         for symbol, iaf in self.ia_functions.items():
-            iaf.is_medium_dependent = True if re.search(r'\bM_', iaf.math) else False
+            iaf.is_medium_dependent = True if re.search(r'\b' + f'{pf.M}_', iaf.math) else False
             iaf.is_growth_rate_dependent = True if 'growth_rate' in iaf.math else False
             iaf.set_expanded_math(func_defs, unit_ids)
-
         self.target_rids = self.get_target_rids(m_dict['reactions'])
 
     @staticmethod
@@ -129,7 +128,7 @@ class InitialAssignments:
         return func_defs
 
     def get_target_rids(self, df_reactions):
-        """Map reaction ids affected by initial assignemnt to related parameters
+        """Map reaction ids affected by initial assignment to related parameters
 
         we convert reaction ids and metabolite ids to cobra ids,
         i.e. removing leading R_ on reaction ids and M_ on metabolite ids

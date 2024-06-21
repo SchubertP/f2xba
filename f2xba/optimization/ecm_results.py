@@ -122,7 +122,7 @@ class CobraEcmResults(Results):
         """net fluxes of a solution"""
         net_fluxes = defaultdict(float)
         for rid, val in solution.fluxes.items():
-            if re.search(f'{pf.V}_', rid) is None and re.search('_arm', rid) is None:
+            if re.match(f'{pf.V}_', rid) is None and re.search('_arm', rid) is None:
                 fwd_rid = re.sub('_REV$', '', rid)
                 net_rid = re.sub(r'_iso\d*', '', fwd_rid)
                 if re.search('_REV', rid):

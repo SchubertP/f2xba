@@ -40,9 +40,9 @@ class SbmlSpecies(SbmlSBase):
         """
         super().__init__(s_species)
         self.compartment = s_species['compartment']
-        self.constant = s_species['constant']
-        self.boundary_condition = s_species['boundaryCondition']
-        self.has_only_substance_units = s_species['hasOnlySubstanceUnits']
+        self.constant = s_species.get('constant', False)
+        self.boundary_condition = s_species.get('boundaryCondition', False)
+        self.has_only_substance_units = s_species.get('hasOnlySubstanceUnits', False)
 
         if 'fbcCharge' in s_species:
             self.charge = s_species['fbcCharge']
