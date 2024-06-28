@@ -64,8 +64,8 @@ class CobraEcmResults(Results):
         prot_data = {}
         enz_sat = self.optim.avg_enz_saturation
         for rid, mg_active_per_gdw in solution.fluxes.items():
-            if re.match(f'{pf.V_PC}_', rid) and rid != pf.V_PC_total_active:
-                uid = re.sub(f'{pf.V_PC}_', '', rid)
+            if re.match(pf.V_PC_, rid) and rid != pf.V_PC_total_active:
+                uid = re.sub(pf.V_PC_, '', rid)
                 if uid in self.optim.uid2gene:
                     label, name = self.optim.uid2gene[uid]
                 else:
@@ -109,7 +109,7 @@ class CobraEcmResults(Results):
     def get_fluxes(self, solution):
         fluxes = {}
         for rid, mmol_per_gdwh in solution.fluxes.items():
-            if re.match(f'{pf.V}_', rid) is None and re.search('_arm', rid) is None:
+            if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
                 reaction_str = self.optim.rdata[rid]['reaction_str']
                 gpr = self.optim.rdata[rid]['gpr']
                 fluxes[rid] = [reaction_str, gpr, mmol_per_gdwh, abs(mmol_per_gdwh)]
@@ -122,7 +122,7 @@ class CobraEcmResults(Results):
         """net fluxes of a solution"""
         net_fluxes = defaultdict(float)
         for rid, val in solution.fluxes.items():
-            if re.match(f'{pf.V}_', rid) is None and re.search('_arm', rid) is None:
+            if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
                 fwd_rid = re.sub('_REV$', '', rid)
                 net_rid = re.sub(r'_iso\d*', '', fwd_rid)
                 if re.search('_REV', rid):

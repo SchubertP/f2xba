@@ -47,12 +47,12 @@ class CobraRbaResults(Results):
         :rtype: pandas DataFrame
         """
         # remove 'R_' prefix to align with CobraPy reaction ids
-        pf_prod = re.sub('^' + f'{pf.R}_', '', f'{pf.R_PROD}_')
-        pf_degr = re.sub('^' + f'{pf.R}_', '', f'{pf.R_DEGR}_')
+        pf_prod = re.sub(f'^{pf.R_}', '', pf.R_PROD_)
+        pf_degr = re.sub(f'^{pf.R_}', '', pf.R_DEGR_)
 
         fluxes = {}
         for rid, flux in solution.fluxes.items():
-            if re.match(f'{pf.V}_', rid) is None:
+            if re.match(pf.V_, rid) is None:
                 # check for macromolecule synthesis/degradation fluxes that might be scaled
                 if re.match(pf_prod, rid) or re.match(pf_degr, rid):
                     if re.match(pf_prod, rid):
@@ -87,12 +87,12 @@ class CobraRbaResults(Results):
         :rtype: pandas DataFrame
         """
         # remove 'R_' prefix to align with CobraPy reaction ids
-        pf_prod = re.sub('^' + f'{pf.R}_', '', f'{pf.R_PROD}_')
-        pf_degr = re.sub('^' + f'{pf.R}_', '', f'{pf.R_DEGR}_')
+        pf_prod = re.sub(f'^{pf.R_}', '', pf.R_PROD_)
+        pf_degr = re.sub(f'^{pf.R_}', '', pf.R_DEGR_)
 
         net_fluxes = defaultdict(float)
         for rid, val in solution.fluxes.items():
-            if re.match(f'{pf.V}_', rid) is None:
+            if re.match(pf.V_, rid) is None:
                 # check for macromolecule synthesis/degradation fluxes that might be scaled
                 if re.match(pf_prod, rid) or re.match(pf_degr, rid):
                     if re.match(pf_prod, rid):
@@ -141,15 +141,15 @@ class CobraRbaResults(Results):
         protein_mmol_per_gdw = defaultdict(float)
         for var_id, conc in solution.fluxes.items():
             # iterate through all enzyme concentration reactions
-            if re.match(f'{pf.V_EC}_', var_id) or re.match(f'{pf.V_PMC}_', var_id):
+            if re.match(pf.V_EC_, var_id) or re.match(pf.V_PMC_, var_id):
                 scale = self.optim.df_enz_data.at[var_id, 'scale']
                 for pid, stoic in self.optim.enz_mm_composition[var_id].items():
                     # exclude any RNAs (e.g. in ribosome)
                     if self.optim.df_mm_data.at[pid, 'uniprot']:
                         protein_mmol_per_gdw[pid] += stoic * conc / scale
             # include protein concentrations from concentration targets (proteins not included in enzymes)
-            elif re.match(f'{pf.V_TMMC}', var_id):
-                pid = re.sub(f'{pf.V_TMMC}_', '', var_id)
+            elif re.match(pf.V_TMMC_, var_id):
+                pid = re.sub(pf.V_TMMC_, '', var_id)
                 if self.optim.df_mm_data.at[pid, 'type'] == 'proteins':
                     scale = self.optim.df_mm_data.at[pid, 'scale']
                     protein_mmol_per_gdw[pid] += conc / scale
@@ -208,12 +208,12 @@ class CobraRbaResults(Results):
     def get_predicted_enzyme_usage(self, solution):
         enz_usage = {}
         for vid, flux in solution.fluxes.items():
-            if re.match(f'{pf.V_EC}_', vid) or re.match(f'{pf.V_PMC}_', vid):
+            if re.match(pf.V_EC_, vid) or re.match(pf.V_PMC_, vid):
                 mw_kda = self.optim.df_enz_data.at[vid, 'mw_kDa']
                 scale = self.optim.df_enz_data.at[vid, 'scale']
                 mmf = flux * mw_kda / scale * 1000.0
                 conc_umol_gdw = flux / scale * 1000.0
-                name = re.sub(f'({pf.V_EC}_)|{pf.V_PMC}_', '', vid)
+                name = re.sub(f'^({pf.V_EC_}|{pf.V_PMC_})', '', vid)
                 enz_usage[name] = [mw_kda, conc_umol_gdw, mmf]
 
         cols = ['mw_kDa', 'µmol_per_gDW', 'mg_per_gDW']
@@ -242,15 +242,15 @@ class CobraRbaResults(Results):
         rna_mmol_per_gdw = defaultdict(float)
         for var_id, conc in solution.fluxes.items():
             # get rRNAs from process machines concentrations
-            if re.match(f'{pf.V_PMC}_', var_id):
+            if re.match(pf.V_PMC_, var_id):
                 scale = self.optim.df_enz_data.at[var_id, 'scale']
                 for rna_id, stoic in self.optim.enz_mm_composition[var_id].items():
                     # exclude any proteins (which have uniprot)
                     if self.optim.df_mm_data.at[rna_id, 'uniprot'] is None:
                         rna_mmol_per_gdw[rna_id] += stoic * conc / scale
             # get tRNAs, mRNA from target macromolecule concentrations
-            elif re.match(f'{pf.V_TMMC}_', var_id) and 'rna' in var_id.lower():
-                rna_id = re.sub(f'{pf.V_TMMC}_', '', var_id)
+            elif re.match(pf.V_TMMC_, var_id) and 'rna' in var_id.lower():
+                rna_id = re.sub(f'^{pf.V_TMMC_}', '', var_id)
                 scale = self.optim.df_mm_data.at[rna_id, 'scale']
                 rna_mmol_per_gdw[rna_id] += conc / scale
 
@@ -305,9 +305,9 @@ class CobraRbaResults(Results):
         """
         occupancy = {}
         for var_id, val in solution.fluxes.items():
-            if re.match(f'{pf.V_SLACK}_', var_id):
-                cid = re.sub(f'{pf.V_SLACK}_', '', var_id)
-                capacity = solution.density_constraints[f'{pf.C_D}_{cid}']
+            if re.match(pf.V_SLACK_, var_id):
+                cid = re.sub(f'^{pf.V_SLACK_}', '', var_id)
+                capacity = solution.density_constraints[f'{pf.C_D_}{cid}']
                 occ = capacity - val
                 occupancy[cid] = [occ / capacity, occ, capacity]
         cols = ['utilization', 'used mmolAA_per_gDW', 'capacity mmolAA_per_gDW']

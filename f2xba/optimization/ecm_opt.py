@@ -37,8 +37,8 @@ class CobraEcmOptimization(Optimize):
         # get mapping from UniProt Id to gene label via gene reaction rule in protein concentration variables
         self.uid2gene = {}
         for rid, row in self.m_dict['reactions'].iterrows():
-            if re.match(f'{pf.V_PC}_', rid) and type(row['fbcGeneProdAssoc']) is str:
-                uid = re.sub(f'{pf.V_PC}_', '', rid)
+            if re.match(pf.V_PC_, rid) and type(row['fbcGeneProdAssoc']) is str:
+                uid = re.sub(f'^{pf.V_PC_}', '', rid)
                 gpid = re.sub('^assoc=', '', row['fbcGeneProdAssoc'])
                 if gpid in self.m_dict['fbcGeneProducts'].index:
                     gp_data = self.m_dict['fbcGeneProducts'].loc[gpid]
@@ -52,7 +52,7 @@ class CobraEcmOptimization(Optimize):
         """configure constraints related to MOMENT modelling
         """
         for constr in self.model.constraints:
-            constr_id = re.sub('^' + f'{pf.M}_', '', f'{pf.M_prot}')
+            constr_id = re.sub(f'^{pf.M_}', '', pf.M_prot_)
             if re.match(constr_id, constr.name):
                 constr.ub = 1000.0
         print(f'MOMENT protein constraint configured (upper_bound: 0 -> 1000)')

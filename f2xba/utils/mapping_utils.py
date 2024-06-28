@@ -10,6 +10,31 @@ from collections import defaultdict
 import sbmlxdf
 
 
+def valid_sbml_sid(component_id):
+    """Make component id compliant to SBML SId.
+
+    ensure that id starts with letter or '_'
+    replace invalid characters by '_'
+
+    Ref: The Systems Biology Markup Language (SBML):
+    Language Specification for Level 3 Version 2 Core
+
+    Definition of SiD
+        letter ::= ’a’..’z’,’A’..’Z’
+        digit ::= ’0’..’9’
+        idChar ::= letter | digit | ’_’
+        SId ::= ( letter | ’_’ ) idChar*
+
+    :param component_id: component id
+    :type component_id: str
+    :return: valid SBML SId
+    :rtype: str
+    """
+    if re.match('[^a-zA-Z_]', component_id):
+        component_id = '_' + component_id
+    return re.sub('[^a-zA-Z0-9_]', '_', component_id)
+
+
 def get_srefs(srefs_str):
     """Extract composition from srefs string (component and stoichiometry).
 
@@ -23,10 +48,9 @@ def get_srefs(srefs_str):
     :rtype: dict (key: species id, value: stoichiometry (float)
     """
     srefs = {}
-    if type(srefs_str) == str:
-        for sref_str in sbmlxdf.record_generator(srefs_str):
-            params = sbmlxdf.extract_params(sref_str)
-            srefs[params['species']] = float(params['stoic'])
+    for sref_str in sbmlxdf.record_generator(srefs_str):
+        params = sbmlxdf.extract_params(sref_str)
+        srefs[params['species']] = float(params['stoic'])
     return srefs
 
 

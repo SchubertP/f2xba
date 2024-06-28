@@ -18,6 +18,8 @@ from .biocyc import BiocycData
 from .uniprot import UniprotData
 from .ncbi import NcbiData
 
+from .gp_optimization.gp_fba_opt import GurobiFbaOptimization
+
 from .optimization.ecm_opt import CobraEcmOptimization
 from .optimization.ecm_results import CobraEcmResults
 

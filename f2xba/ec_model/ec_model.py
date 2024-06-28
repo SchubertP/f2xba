@@ -8,6 +8,7 @@ import re
 import numpy as np
 import pandas as pd
 import f2xba.prefixes as pf
+from ..utils.mapping_utils import valid_sbml_sid
 
 MAX_CONC_PROT = 100  # mg/gDW maximum protein concentration in kpmf (kilo protein mass fraction)
 
@@ -180,11 +181,10 @@ class EcModel:
         protein_sids = {}
         for gpid in used_enz_gps:
             uid = self.model.gps[gpid].uid
-            checked_uid = re.sub(r'\W', '', uid)
             p = self.model.proteins[uid]
-            prot_sid = f'{pf.M_prot}_{checked_uid}_{p.cid}'
+            prot_sid = pf.M_prot_ + valid_sbml_sid(uid) + f'_{p.cid}'
             p.link_sid(prot_sid)
-            prot_metaid = f'meta_prot_{checked_uid}'
+            prot_metaid = f'meta_prot_{valid_sbml_sid(uid)}'
             prot_annot = f'bqbiol:is, uniprot/{uid}'
             protein_sids[prot_sid] = [p.name, p.cid, False, False, False, prot_metaid, prot_annot]
 
@@ -213,11 +213,10 @@ class EcModel:
                 enz = self.model.enzymes[r.enzymes[0]]
                 for locus in enz.composition:
                     uid = self.model.locus2uid[locus]
-                    checked_uid = re.sub(r'\W', '', uid)
                     p = self.model.proteins[uid]
-                    prot_sid = f'{pf.M_prot}_{checked_uid}_{rid}_{p.cid}'
+                    prot_sid = pf.M_prot_ + valid_sbml_sid(uid) + f'_{rid}_{p.cid}'
                     p.link_sid(prot_sid)
-                    prot_metaid = f'meta_prot_{checked_uid}_{rid}'
+                    prot_metaid = f'meta_prot_{valid_sbml_sid(uid)}_{rid}'
                     prot_annot = f'bqbiol:is, uniprot/{uid}'
                     protein_sids[prot_sid] = [p.name, p.cid, False, False, False, prot_metaid, prot_annot]
 
@@ -313,8 +312,7 @@ class EcModel:
         for gpid in used_enz_gps:
             uid = self.model.gps[gpid].uid
             p = self.model.proteins[uid]
-            checked_uid = re.sub(r'\W', '', uid)
-            draw_rid = f'{pf.V_PC}_{checked_uid}'
+            draw_rid = pf.V_PC_ + valid_sbml_sid(uid)
             draw_name = f'conc_prot_{uid}'
             # supporting MOMENT model with protein split into protein species per reaction
             products = ' + '.join([sid for sid in p.linked_sids])

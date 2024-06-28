@@ -95,8 +95,8 @@ class CobraRbaOptimization(Optimize):
         """
         ex_rid2mid = {}
         for rid, row in df_reactions.iterrows():
-            if re.match(f'{pf.R}_EX_', rid):
-                ridx = re.sub('^' + f'{pf.R}_', '', rid)
+            if re.match(f'{pf.R_}EX_', rid):
+                ridx = re.sub(f'^{pf.R_}', '', rid)
                 sref_str = row['reactants'].split(';')[0]
                 sid = sbmlxdf.extract_params(sref_str)['species']
                 sidcx = sid.rsplit('_', 1)[0]
@@ -106,7 +106,7 @@ class CobraRbaOptimization(Optimize):
     def configure_rba_model_constraints(self):
         """configure constraints related to RBA modelling
         """
-        modify_constr_bounds = {f'{pf.C_EF}_': [None, 0.0], f'{pf.C_ER}_': [None, 0.0]}
+        modify_constr_bounds = {pf.C_EF_: [None, 0.0], pf.C_ER_: [None, 0.0]}
         for constr in self.model.constraints:
             for cprefix, bounds in modify_constr_bounds.items():
                 if re.match(cprefix, constr.name):
@@ -118,8 +118,8 @@ class CobraRbaOptimization(Optimize):
     def get_macromolecule_data(df_species):
         mms = {}
         for sid, row in df_species.iterrows():
-            if re.match(f'{pf.MM}_', sid):
-                mm_id = re.sub(f'{pf.MM}_', '', sid)
+            if re.match(pf.MM_, sid):
+                mm_id = re.sub(f'^{pf.MM_}', '', sid)
                 refs = sbmlxdf.misc.get_miriam_refs(row.get('miriamAnnotation'), 'uniprot', 'bqbiol:is')
                 uniprot = refs[0] if len(refs) > 0 else None
                 xml_attrs = sbmlxdf.misc.extract_xml_attrs(row.get('xmlAnnotation'), ns=XML_SPECIES_NS)
@@ -145,7 +145,7 @@ class CobraRbaOptimization(Optimize):
         """
         enz_data = {}
         for vid, row in df_reactions.iterrows():
-            if re.match(f'{pf.V_EC}_', vid) or re.match(f'{pf.V_PMC}_', vid):
+            if re.match(pf.V_EC_, vid) or re.match(pf.V_PMC_, vid):
                 xml_attrs = sbmlxdf.misc.extract_xml_attrs(row.get('xmlAnnotation'), ns=XML_SPECIES_NS)
                 mw_kda = float(xml_attrs['weight_kDa']) if 'weight_kDa' in xml_attrs else None
                 scale = float(xml_attrs['scale']) if 'scale' in xml_attrs else 1.0
@@ -159,10 +159,10 @@ class CobraRbaOptimization(Optimize):
         enz_mm_composition = defaultdict(dict)
         # metabolites in enzyme and pm concentration variables are scaled by the growth rate,
         for rxn in self.model.reactions:
-            if re.match(f'{pf.V_EC}_', rxn.id) or re.match(f'{pf.V_PMC}_', rxn.id):
+            if re.match(pf.V_EC_, rxn.id) or re.match(pf.V_PMC_, rxn.id):
                 for metab, stoic in rxn.metabolites.items():
-                    if re.match(f'{pf.MM}_', metab.id):
-                        enz_mm_composition[rxn.id][re.sub(f'{pf.MM}_', '', metab.id)] = -stoic / model_gr
+                    if re.match(pf.MM_, metab.id):
+                        enz_mm_composition[rxn.id][re.sub(f'^{pf.MM_}', '', metab.id)] = -stoic / model_gr
         return dict(enz_mm_composition)
 
     # MODEL RBA OPTIMIZATION SUPPORT
@@ -175,7 +175,7 @@ class CobraRbaOptimization(Optimize):
         """
         medium_conc = {mid: 0.0 for mid in self.ex_rid2mid.values()}
         for rxn in self.model.exchanges:
-            if re.match(f'{pf.V}_', rxn.id) is None:
+            if re.match(pf.V_, rxn.id) is None:
                 if rxn.id in ex_fluxes:
                     rxn.lower_bound = -1000.0
                     medium_conc[self.ex_rid2mid[rxn.id]] = default_conc

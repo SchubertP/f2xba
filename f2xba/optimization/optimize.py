@@ -1,5 +1,8 @@
 """Implementation of Optimize Base Class.
 
+Support Optimization via CobraPy or via gurobipy
+
+
 Peter Schubert, HHU Duesseldorf, CCB, Mai 2024
 """
 
@@ -13,8 +16,10 @@ import f2xba.prefixes as pf
 class Optimize(ABC):
 
     @abstractmethod
-    def __init__(self, cobra_model, fname):
-        self.model = cobra_model
+    def __init__(self, cobra_or_gurobipy_model, fname):
+        self.model = cobra_or_gurobipy_model
+        # 'gurobipy' or 'cobra.core.model'
+        self.m_type = type(cobra_or_gurobipy_model).__module__
         self.report_model_size()
 
         # load SBML model into sbmlxdf for data extraction
@@ -25,19 +30,22 @@ class Optimize(ABC):
         self.gpid2label = {re.sub('^G_', '', gpid): row['label']
                            for gpid, row in self.m_dict['fbcGeneProducts'].iterrows()}
 
-        self.rdata = self.get_reaction_data()
-        self.net_rdata = self.extract_net_reaction_data(self.rdata)
+        if self.m_type == 'gurobipy':
+            pass
+        else:
+            self.rdata = self.get_reaction_data()
+            self.net_rdata = self.extract_net_reaction_data(self.rdata)
 
     def report_model_size(self):
         n_vars_drg = 0
         n_vars_ec = 0
         n_vars_pmc = 0
         for rxn in self.model.reactions:
-            if re.match(f'{pf.V_DRG}_', rxn.id):
+            if re.match(pf.V_DRG_, rxn.id):
                 n_vars_drg += 1
-            elif re.match(f'{pf.V_EC}_', rxn.id):
+            elif re.match(pf.V_EC_, rxn.id):
                 n_vars_ec += 1
-            elif re.match(f'{pf.V_PMC}_', rxn.id):
+            elif re.match(pf.V_PMC_, rxn.id):
                 n_vars_pmc += 1
         print(f'{len(self.model.variables)} variables, {len(self.model.constraints)} constraints')
         print(f'{n_vars_ec} enzymes, {n_vars_pmc} process machines, {n_vars_drg} TD reaction constraints')
@@ -58,9 +66,9 @@ class Optimize(ABC):
         """
         lparts = []
         rparts = []
-        constr_prot = re.sub('^' + f'{pf.M}_', '', f'{pf.M_prot}') + '_'
+        constr_prot = re.sub(pf.M_, '', pf.M_prot_)
         for m, stoic in rxn.metabolites.items():
-            if re.match(f'{pf.C}_', m.id) is None and re.match(constr_prot, m.id) is None:
+            if re.match(pf.C_, m.id) is None and re.match(constr_prot, m.id) is None:
                 # drop stoichiometric coefficients that are 1.0
                 stoic_str = str(abs(stoic)) + ' ' if abs(stoic) != 1.0 else ''
                 if stoic < 0.0:
@@ -95,7 +103,7 @@ class Optimize(ABC):
         """
         rxn_data = {}
         for rxn in self.model.reactions:
-            if re.match(f'{pf.V}_', rxn.id) is None and re.search('_arm', rxn.id) is None:
+            if re.match(pf.V_, rxn.id) is None and re.search('_arm', rxn.id) is None:
                 drxn = 'rev' if re.search('_REV$', rxn.id) else 'fwd'
                 fwd_rid = re.sub('_REV$', '', rxn.id)
                 base_rid = re.sub(r'_iso\d+', '', fwd_rid)
@@ -109,7 +117,8 @@ class Optimize(ABC):
                         item = self.gpid2label[item]
                     parts.append(item)
                 gpr = ' '.join(parts)
-                rxn_data[rxn.id] = {'base_rid': base_rid, 'drxn': drxn, 'reaction_str': reaction_str, 'gpr': gpr}
+                rxn_data[rxn.id] = {'base_rid': base_rid, 'drxn': drxn, 'reaction_str': reaction_str,
+                                    'gpr': gpr}
         return rxn_data
 
     @staticmethod
@@ -141,15 +150,15 @@ class Optimize(ABC):
     def configure_td_model_constraints(self):
         # configure thermodynamic related model constraints and variables
         is_td = False
-        modify_var_types = {f'{pf.V_FU}_': 'binary', f'{pf.V_RU}_': 'binary'}
+        modify_var_types = {pf.V_FU_: 'binary', pf.V_RU_: 'binary'}
         for var in self.model.variables:
             for vprefix, vtype in modify_var_types.items():
                 if re.match(vprefix, var.name) and 'reverse' not in var.name:
                     is_td = True
                     var.type = vtype
-        modify_constr_bounds = {f'{pf.C_FFC}_': [None, 0.0], f'{pf.C_FRC}_': [None, 0.0],
-                                f'{pf.C_GFC}_': [None, 0.0], f'{pf.C_GRC}_': [None, 0.0],
-                                f'{pf.C_SU}_': [None, 0.0]}
+        modify_constr_bounds = {pf.C_FFC_: [None, 0.0], pf.C_FRC_: [None, 0.0],
+                                pf.C_GFC_: [None, 0.0], pf.C_GRC_: [None, 0.0],
+                                pf.C_SU_: [None, 0.0]}
         for constr in self.model.constraints:
             for cprefix, bounds in modify_constr_bounds.items():
                 if re.match(cprefix, constr.name):

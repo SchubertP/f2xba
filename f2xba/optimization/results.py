@@ -7,7 +7,7 @@ import os
 import re
 import numpy as np
 import pandas as pd
-from scipy.stats import pearsonr
+import scipy
 import json
 from abc import ABC, abstractmethod
 
@@ -100,8 +100,8 @@ class Results(ABC):
         """
         species_conc = {}
         for vid, val in solution.fluxes.items():
-            if re.match(f'{pf.V_LC}_', vid):
-                mid = re.sub(f'{pf.V_LC}_', '', vid)
+            if re.match(pf.V_LC_, vid):
+                mid = re.sub(f'^{pf.V_LC_}', '', vid)
                 name = self.optim.model.metabolites.get_by_id(mid).name
                 species_conc[mid] = [name, np.exp(val) * 1e3]
         cols = ['name', 'mmol_per_l']
@@ -144,8 +144,8 @@ class Results(ABC):
         for condition in self.results:
             if condition in self.df_mpmf.columns:
                 genes = list(self.df_mpmf.index.intersection(df_proteins.index))
-                r_value, p_value = pearsonr(df_proteins.loc[genes][condition].values,
-                                            self.df_mpmf.loc[genes][condition].values)
+                r_value, p_value = scipy.stats.pearsonr(df_proteins.loc[genes][condition].values,
+                                                        self.df_mpmf.loc[genes][condition].values)
                 print(f'{condition:25s}: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}')
 
     def save_fluxes_to_escher(self, escher_dir, model_name):

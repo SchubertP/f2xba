@@ -88,7 +88,7 @@ class InitialAssignments:
         self.ia_functions = {symbol: IaFunction(symbol, row['math'])
                              for symbol, row in m_dict['initAssign'].iterrows()}
         for symbol, iaf in self.ia_functions.items():
-            iaf.is_medium_dependent = True if re.search(r'\b' + f'{pf.M}_', iaf.math) else False
+            iaf.is_medium_dependent = True if re.search(r'\b' + pf.M_, iaf.math) else False
             iaf.is_growth_rate_dependent = True if 'growth_rate' in iaf.math else False
             iaf.set_expanded_math(func_defs, unit_ids)
         self.target_rids = self.get_target_rids(m_dict['reactions'])
@@ -143,7 +143,7 @@ class InitialAssignments:
         ia_reactants = defaultdict(dict)
         ia_products = defaultdict(dict)
         for rid, row in df_reactions.iterrows():
-            ridx = re.sub('^' + f'{pf.R}_', '', rid)
+            ridx = re.sub(f'^{pf.R_}', '', rid)
             if row['fbcLowerFluxBound'] in ia_symbols:
                 ia_flux_bounds[ridx]['lb'] = row['fbcLowerFluxBound']
             if row['fbcUpperFluxBound'] in ia_symbols:
@@ -151,11 +151,11 @@ class InitialAssignments:
             for sref_str in sbmlxdf.record_generator(row['reactants']):
                 params = sbmlxdf.extract_params(sref_str)
                 if 'id' in params and params['id'] in ia_symbols:
-                    ia_reactants[ridx].update({re.sub('^' + f'{pf.M}_', '', params['species']): params['id']})
+                    ia_reactants[ridx].update({re.sub(f'^{pf.M_}', '', params['species']): params['id']})
             for sref_str in sbmlxdf.record_generator(row['products']):
                 params = sbmlxdf.extract_params(sref_str)
                 if 'id' in params and params['id'] in ia_symbols:
-                    ia_products[ridx].update({re.sub('^' + f'{pf.M}_', '', params['species']): params['id']})
+                    ia_products[ridx].update({re.sub(f'^{pf.M_}', '', params['species']): params['id']})
 
         # create target rids
         ridxs = set(ia_flux_bounds) | set(ia_reactants) | set(ia_products)
@@ -213,6 +213,8 @@ class InitialAssignments:
             if ((param_type == 'medium' and tr.is_medium_dependent is True) or
                     (param_type == 'growth_rate' and tr.is_growth_rate_dependent is True)):
                 rxn = self.model.reactions.get_by_id(ridx)
+
+                # configure variable bounds that deped on growth rate and medium
                 if len(tr.flux_bounds) > 0:
                     if 'lb' in tr.flux_bounds and 'ub' in tr.flux_bounds:
                         new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env)
@@ -224,28 +226,26 @@ class InitialAssignments:
                     elif 'ub' in tr.flux_bounds:
                         new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env)
                         rxn.lower_bound = new_ub
-                # update reaction data references
+
+                # configure stoichiometric coefficients that depend on growth rate or medium
                 old_mids = {met.id for met in rxn.metabolites}
+                new_coefs = {}
                 if len(tr.reactants) > 0:
-                    update_srefs = {sidx: -self.ia_functions[symbol_id].get_value(self.local_env)
-                                    for sidx, symbol_id in tr.reactants.items()}
-                    # in case of deletions, we need to check that metabolite exists in reaction to support contexts
-                    srefs = {}
-                    for sidx, stoic in update_srefs.items():
-                        if stoic != 0.0:
-                            srefs[sidx] = stoic
-                        else:
-                            if sidx in old_mids:
-                                srefs[sidx] = stoic
-                    rxn.add_metabolites(srefs, combine=False)
+                    new_coefs = {sidx: -self.ia_functions[symbol_id].get_value(self.local_env)
+                                 for sidx, symbol_id in tr.reactants.items()}
                 if len(tr.products) > 0:
-                    update_srefs = {sidx: self.ia_functions[symbol_id].get_value(self.local_env)
-                                    for sidx, symbol_id in tr.products.items()}
-                    srefs = {}
-                    for sidx, stoic in update_srefs.items():
-                        if stoic != 0.0:
-                            srefs[sidx] = stoic
-                        else:
-                            if sidx in old_mids:
-                                srefs[sidx] = stoic
-                    rxn.add_metabolites(srefs, combine=False)
+                    new_coefs |= {sidx: self.ia_functions[symbol_id].get_value(self.local_env)
+                                  for sidx, symbol_id in tr.products.items()}
+
+                # in case of newly added metabolites (i.e. currently not existing in the reaction)
+                #  use combine=True in rxn.add_metabolites(), otherwise use combine=False to improve accuracy.
+                # Note: CobraPy 0.27.0 does not support adding new metabolites with combine=False wrt contexts
+                #   mets_to_reset = { key: old_coefficients[model.metabolites.get_by_any(key)[0]]
+                #                     for key in metabolites_to_add.keys()}
+                #   will result in a key_error for metabolites that were not part of the reaction
+                new_srefs = {sidx: coef for sidx, coef in new_coefs.items() if sidx not in old_mids}
+                modified_srefs = {sidx: coef for sidx, coef in new_coefs.items() if sidx in old_mids}
+                if len(new_srefs) > 0:
+                    rxn.add_metabolites(new_srefs, combine=True)
+                if len(modified_srefs) > 0:
+                    rxn.add_metabolites(modified_srefs, combine=False)

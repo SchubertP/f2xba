@@ -18,7 +18,7 @@ from .rba_densities import RbaDensities
 from .rba_targets import RbaTargets
 from .rba_medium import RbaMedium
 from ..utils.calc_mw import protein_mw_from_aa_comp, rna_mw_from_nt_comp, ssdna_mw_from_dnt_comp
-
+from ..utils.mapping_utils import valid_sbml_sid
 from .initital_assignments import InitialAssignments
 import f2xba.prefixes as pf
 
@@ -268,7 +268,7 @@ class RbaModel:
         """
         if os.path.exists(rba_params_fname) is False:
             print('RBA model NOT created. RBA parameter file not found: ' + rba_params_fname)
-            return
+            return False
 
         # load RBA parameter data
         rba_params_sheets = ['general', 'trna2locus', 'compartments', 'targets',
@@ -278,6 +278,14 @@ class RbaModel:
             for sheet in xlsx.sheet_names:
                 if sheet in rba_params_sheets:
                     rba_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+
+        if self.check_rba_params_functions(rba_params) is False:
+            print('ERRORs in RBA Parameter file')
+            return False
+
+        if self.check_rba_params_labels(rba_params) is False:
+            print('ERRORs in RBA Parameter file')
+            return False
 
         general_params = rba_params['general']['value'].to_dict()
 
@@ -308,6 +316,7 @@ class RbaModel:
 
         growth_rate = general_params.get('growth_rate', DEFAULT_GROWTH_RATE)
         self.update_xba_model(growth_rate)
+        return True
 
     def update_xba_model(self, growth_rate):
         """Based on configured RBA model implement a corresponding XBA model.
@@ -393,6 +402,91 @@ class RbaModel:
 
         print('XBA model updated with RBA configuration')
 
+    @staticmethod
+    def check_rba_params_functions(rba_params):
+        """Check functions used in RBA Parameters file
+
+        Functions used in aggregates of 'compartments', 'targets'
+        of 'processes' sheets must also be defined in 'functions'
+
+        :param rba_params:
+        :return: success
+        :rtype: bool
+        """
+        ok_flag = True
+
+        # check defined functions
+        defined_functions = set()
+        if 'functions' in rba_params:
+            defined_functions = set(rba_params['functions'].index)
+
+        # collect functions used in 'compartments', 'targets' sheet
+        used_functions = defaultdict(set)
+        if 'compartments' in rba_params:
+            for cid, row in rba_params['compartments'].iterrows():
+                agg = row.get('translation_target_aggregate')
+                if type(agg) is str:
+                    for fid in [item.strip() for item in agg.split(',')]:
+                        used_functions[fid].add(f'compartments: {cid}')
+                agg = row.get('density_constraint_aggregate')
+                if type(agg) is str:
+                    for fid in [item.strip() for item in agg.split(',')]:
+                        used_functions[fid].add(f'compartments: {cid}')
+
+        if 'targets' in rba_params:
+            for tgid, row in rba_params['targets'].iterrows():
+                agg = row.get('target_aggregate')
+                if type(agg) is str:
+                    for fid in [item.strip() for item in agg.split(',')]:
+                        used_functions[fid].add(f'targets: {tgid}')
+
+        if 'processes' in rba_params:
+            for pid, row in rba_params['processes'].iterrows():
+                agg = row.get('capacity_aggregate')
+                if type(agg) is str:
+                    for fid in [item.strip() for item in agg.split(',')]:
+                        used_functions[fid].add('processes: {pid}')
+
+        # check that functions have been defined
+        for fid, xids in used_functions.items():
+            if fid not in defined_functions:
+                print(f'{fid:35} function not defined, but used in {xids}')
+                ok_flag = False
+
+        default_fids = {'zero', 'default_spontaneous'}
+        for fid in defined_functions:
+            if fid not in used_functions and fid not in default_fids:
+                print(f'{fid:35s} function defined, but not used')
+        return ok_flag
+
+    def check_rba_params_labels(self, rba_params):
+        """Check gene labels used in RBA Parameters file.
+
+        Labels used 'trna2locus' and 'machineries' must exist
+        in model uniprot data or ncbi-data (for rnas)
+
+        :param rba_params:
+        :return:
+        """
+        ok_flag = True
+        if 'trna2locus' in rba_params:
+            for rna_id, row in rba_params['trna2locus'].iterrows():
+                if row['label'] not in self.model.ncbi_data.locus2record:
+                    print(f"{row['label']:35s} not found in ncbi data")
+                    ok_flag = False
+
+        if 'machineries' in rba_params:
+            for pid, row in rba_params['machineries'].iterrows():
+                if row.get('macromolecules', '') == 'proteins':
+                    if row['label'] not in self.model.uniprot_data.locus2uid:
+                        print(f"{row['label']:35s} not found in uniprot data")
+                        ok_flag = False
+                elif row.get('macromolecules', '') == 'rnas':
+                    if row['label'] not in self.model.ncbi_data.locus2record:
+                        print(f"{row['label']:35s} not found in ncbi data")
+                        ok_flag = False
+        return ok_flag
+
     def _xba_add_macromolecule_species(self):
         """Add macromolecules to XBA model species (proteins, dna, rna)
 
@@ -413,7 +507,7 @@ class RbaModel:
         mm_species = {}
         # create protein species and configure scale
         for mm_id, mm in self.proteins.macromolecules.items():
-            mm.sid = f'{pf.MM}_{mm_id}'
+            mm.sid = pf.MM_ + valid_sbml_sid(mm_id)
             mm.scale = 1000.0 if mm.weight > 10 else 1.0
             # for indiviually modeled proteins (Uniprot data is collected)
             if mm_id in self.model.locus2uid:
@@ -432,7 +526,7 @@ class RbaModel:
                                   f'meta_{mm.sid}', miriam_annot, xml_annot]
 
         for mm_id, mm in self.rnas.macromolecules.items():
-            mm.sid = f'{pf.MM}_{mm_id}'
+            mm.sid = pf.MM_ + valid_sbml_sid(mm_id)
             mm.scale = 1000.0 if mm.weight > 10 else 1.0
             mw_kda = rna_mw_from_nt_comp(mm.composition) / 1000.0
             name = f'macromolecule {mm_id}'
@@ -441,7 +535,7 @@ class RbaModel:
             mm_species[mm.sid] = [name, mm.compartment, False, False, False, f'meta_{mm.sid}', None, xml_annot]
 
         for mm_id, mm in self.dna.macromolecules.items():
-            mm.sid = f'{pf.MM}_{mm_id}'
+            mm.sid = pf.MM_ + valid_sbml_sid(mm_id)
             mm.scale = 1000.0 if mm.weight > 10 else 1.0
             mw_kda = ssdna_mw_from_dnt_comp(mm.composition) / 1000.0
             name = f'macromolecule {mm_id}'
@@ -467,7 +561,7 @@ class RbaModel:
         constraints = {}
         for proc_id, proc in self.processes.processes.items():
             if 'capacity' in proc.machinery:
-                constr_id = f'{pf.C_PMC}_{proc_id}'
+                constr_id = pf.C_PMC_ + valid_sbml_sid(proc_id)
                 constraints[constr_id] = [f'capacity {proc_id}', self.cid_mappings['cytoplasm_cid'],
                                           False, False, False]
                 proc.constr_id = constr_id
@@ -477,18 +571,18 @@ class RbaModel:
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
                 eidx = re.sub(r'_enzyme$', '', eid)
                 if e.forward_eff != self.parameters.f_name_zero:
-                    constr_id = f'{pf.C_EF}_{eidx}'
+                    constr_id = pf.C_EF_ + valid_sbml_sid(eidx)
                     constraints[constr_id] = [f'fwd efficiency {eid}', self.cid_mappings['cytoplasm_cid'],
                                               False, False, False]
                     e.constr_id_fwd = constr_id
                 if e.backward_eff != self.parameters.f_name_zero:
-                    constr_id = f'{pf.C_ER}_{eidx}'
+                    constr_id = pf.C_ER_ + valid_sbml_sid(eidx)
                     constraints[constr_id] = [f'rev efficiency {eid}', self.cid_mappings['cytoplasm_cid'],
                                               False, False, False]
                     e.constr_id_rev = constr_id
 
         for cid, d in self.densities.densities.items():
-            constr_id = f'{pf.C_D}_{cid}'
+            constr_id = pf.C_D_ + valid_sbml_sid(cid)
             constraints[constr_id] = [f'compartment density for {cid}', cid, False, False, False]
             d.constr_id = constr_id
 
@@ -576,7 +670,6 @@ class RbaModel:
                 if mm2maps.get(mm_id):
                     # if there is any production/degradation process create combined production/degradation fluxes
                     for pm_id in mm2maps.get(mm_id):
-
                         pm = self.processes.processes[pm_id]
                         pm_map_id = pm.productions['processingMap'] if proc_type == 'PROD' \
                             else pm.degradations['processingMap']
@@ -607,7 +700,7 @@ class RbaModel:
                             products[pm.constr_id] = round(pm_costs / mm.scale, 8)
 
                     if proc_type == 'PROD':
-                        rid = f'{pf.R_PROD}_{mm_id}'
+                        rid = pf.R_PROD_ + valid_sbml_sid(mm_id)
                         products[mm.sid] += 1.0
                         if mm.scale == 1.0:
                             prod_reactions[rid] = [f'production reaction for {mm_id} (mmol)', False,
@@ -620,7 +713,7 @@ class RbaModel:
                                                    lb_pid_umol, ub_pid_umol,
                                                    'RBA_pm_reaction', 'RBA macromolecule processing']
                     else:
-                        rid = f'{pf.R_DEGR}_{mm_id}'
+                        rid = pf.R_DEGR_ + valid_sbml_sid(mm_id)
                         reactants[mm.sid] += 1.0
                         if mm.scale == 1.0:
                             degr_reactions[rid] = [f'degradation reaction for {mm_id} (mmol)', False,
@@ -747,8 +840,8 @@ class RbaModel:
         conc_vars = {}
         for eid, e in self.enzymes.enzymes.items():
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
-                eidx = re.sub(r'_enzyme$', '', eid)
-                var_id = f'{pf.V_EC}_{eidx}'
+                eidx = re.sub(r'_enzyme$', '', valid_sbml_sid(eid))
+                var_id = pf.V_EC_ + eidx
                 name = f'{eid} concentration (µmol)'
 
                 # Determine reactants/products and sref ids for enzyme concentration variable
@@ -815,7 +908,7 @@ class RbaModel:
         conc_vars = {}
         for pm_id, pm in self.processes.processes.items():
             if 'capacity' in pm.machinery:
-                var_id = f'{pf.V_PMC}_{pm_id}'
+                var_id = pf.V_PMC_ + valid_sbml_sid(pm_id)
                 name = f'{pm_id} concentration'
 
                 # Determine reactants/products and sref ids for PM concentration variable
@@ -876,7 +969,7 @@ class RbaModel:
         for tg_id, tg in self.targets.target_groups.items():
             for tid, t in tg.concentrations.items():
                 if tid in self.mmid2mm:
-                    var_id = f'{pf.V_TMMC}_{tid}'
+                    var_id = pf.V_TMMC_ + valid_sbml_sid(tid)
                     mm = self.mmid2mm[tid]
 
                     # macromolecule dilution with growth rate
@@ -929,10 +1022,11 @@ class RbaModel:
         reactants_tsmc = {}
         for tg_id, tg in self.targets.target_groups.items():
             for sid, t in tg.concentrations.items():
+                sbml_sid = valid_sbml_sid(sid)
                 if sid not in self.mmid2mm:
                     assert sid in self.model.species, f'targets: metabolite {sid} is not included in model species'
-                    reactants_tsmc[sid] = growth_rate * self.parameter_values[t.value] * scale
-                    self.initial_assignments.add_sref_ia(var_id, sid, rba_pid=t.value,
+                    reactants_tsmc[sbml_sid] = growth_rate * self.parameter_values[t.value] * scale
+                    self.initial_assignments.add_sref_ia(var_id, sbml_sid, rba_pid=t.value,
                                                          math_var=f'growth_rate * {scale} hour')
         conc_targets[var_id] = [f'small molecules concentration targets (mmol)', False, reactants_tsmc, {},
                                 scale, one_umol_pid, one_umol_pid, 'RBA_sm_conc']
@@ -978,8 +1072,8 @@ class RbaModel:
         ub_pid = self.model.get_fbc_bnd_pid(MAX_DENSITY_SLACK, 'mmol_per_gDW', 'density_slack_max', reuse=False)
         for cid, d in self.densities.densities.items():
             products = {d.constr_id: 1.0}
-            density_vars[f'{pf.V_SLACK}_{cid}'] = [f'Positive Slack on {cid} density', False, {}, products,
-                                                   lb_pid, ub_pid, 'slack_variable']
+            density_vars[pf.V_SLACK_ + cid] = [f'Positive Slack on {cid} density', False, {}, products,
+                                               lb_pid, ub_pid, 'slack_variable']
 
         cols = ['name', 'reversible', 'reactants', 'products',
                 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind']
