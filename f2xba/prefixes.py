@@ -40,8 +40,8 @@ C_D_ = f'{C_}D_'         # compartment density
 # variable prefixes - TD modeling related
 V_DRG_ = f'{V_}DRG_'    # ∆rG', transformed Gibbs Free Energy of Reaction
 V_DRG0_ = f'{V_}DRG0_'  # ∆rGo', standard transformed Gibbs Free Energy of Reaction
-V_FU_ = f'{V_}FU_'      # forward reaction use variable
-V_RU_ = f'{V_}RU_'      # reverse reaction use variable
+V_FU_ = f'{V_}FU_'      # forward reaction use variable (binary)
+V_RU_ = f'{V_}RU_'      # reverse reaction use variable (binary)
 V_LC_ = f'{V_}LC_'      # log concentration variable for metabolite
 V_PS_ = f'{V_}PS_'      # positive slack on log concentration
 V_NS_ = f'{V_}NS_'      # negative slack on log concentration

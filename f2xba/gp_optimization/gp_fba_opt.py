@@ -8,7 +8,7 @@ Peter Schubert, HHU Duesseldorf, CCB, June 2024
 """
 import numpy as np
 
-from .gp_optimization import GurobiOptimize
+from .gp_optimize import GurobiOptimize
 
 
 class GurobiFbaOptimization(GurobiOptimize):

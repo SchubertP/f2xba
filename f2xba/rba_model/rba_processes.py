@@ -90,7 +90,7 @@ class RbaProcesses:
                 machinery['capacity'] = RbaTargetValue.get_target_value('value', p_name)
                 machinery['reactants'] = {}
                 machinery['products'] = {}
-                # note: df_mach_data.loc[[proc_id]] with double angular brackets to enfoce dataframe being returned
+                # note: df_mach_data.loc[[proc_id]] with double angular brackets to enforce dataframe being returned
                 for _, mach_comp in df_mach_data.loc[[proc_id]].iterrows():
                     if mach_comp['stoic'] < 0.0:
                         machinery['reactants'][mach_comp['id']] = -mach_comp['stoic']

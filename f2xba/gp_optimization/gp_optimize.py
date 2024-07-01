@@ -86,22 +86,23 @@ class GurobiOptimize(ABC):
         self.gpm = self.create_gurobipy_model()
         self.report_model_size()
 
-        self.rdatas = self.get_reaction_data()
-        self.net_rdatas = self.extract_net_reaction_data()
-        self.uptake_rids = [rid for rid, rdata in self.rdatas.items() if rdata['is_exchange'] is True]
+        df_fbc_objs = self.m_dict['fbcObjectives']
+        active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
+        sref_str = active_odata['fluxObjectives'].split(';')[0]
+        self.biomass_rid = re.sub(pf.R_, '', sbmlxdf.extract_params(sref_str)['reac'])
 
-        self.cp_rdatas = {}
-        for rid, rdata in self.rdatas.items():
-            cp_rdata = rdata.copy()
-            cp_rdata['base_rid'] = re.sub(f'^{pf.R_}', '', rdata['base_rid'])
-            cp_rdata['reaction_str'] = re.sub(r'\b' + f'{pf.M_}', '', rdata['reaction_str'])
-            self.cp_rdatas[re.sub(f'^{pf.R_}', '', rid)] = cp_rdata
-
-        self.cp_net_rdatas = {}
-        for rid, rdata in self.net_rdatas.items():
-            cp_rdata = rdata.copy()
-            cp_rdata['reaction_str'] = re.sub(r'\b' + pf.M_, '', rdata['reaction_str'])
-            self.cp_net_rdatas[re.sub(f'^{pf.R_}', '', rid)] = cp_rdata
+        self.mid2name = {re.sub(f'^{pf.M_}', '', sid): row['name']
+                         for sid, row in self.m_dict['species'].iterrows()}
+        self.rdata_model = self.get_reaction_data()
+        self.uptake_rids = [rid for rid, rdata in self.rdata_model.items() if rdata['is_exchange'] is True]
+        # rdata and net_rdata used in results processing (CobraPy ids, without 'R_', 'M_'
+        self.rdata = {}
+        for rid, record in self.rdata_model.items():
+            cp_rdata = record.copy()
+            cp_rdata['base_rid'] = re.sub(f'^{pf.R_}', '', record['base_rid'])
+            cp_rdata['reaction_str'] = re.sub(r'\b' + f'{pf.M_}', '', record['reaction_str'])
+            self.rdata[re.sub(f'^{pf.R_}', '', rid)] = cp_rdata
+        self.net_rdata = self.extract_net_reaction_data(self.rdata)
 
         self.rids_catalyzed = self.get_rids_catalyzed()
 
@@ -126,6 +127,7 @@ class GurobiOptimize(ABC):
         n_binary = 0
         self.var_id2gpm = {}
         for var_id, row in self.m_dict['reactions'].iterrows():
+            # configure TD forward/reverse use variables as binary
             if re.match(pf.V_FU_, var_id) or re.match(pf.V_RU_, var_id):
                 self.var_id2gpm[var_id] = gpm.addVar(lb=0.0, ub=1.0, vtype='B', name=var_id)
                 n_binary += 1
@@ -146,12 +148,13 @@ class GurobiOptimize(ABC):
                 else:
                     constrs[constr_id] += self.var_id2gpm[var_id] * coeff
         # adding linear constraints to the model, with support of Thermodynamic constraints
+        # Some TD modeling constraints are defined as LHS <= 0.0
         td_constr_prefixes = f'({pf.C_FFC_}|{pf.C_FRC_}|{pf.C_GFC_}|{pf.C_GRC_}|{pf.C_SU_})'
         n_td_constrs = 0
         self.constr_id2gpm = {}
         for constr_id, constr in constrs.items():
             if re.match(td_constr_prefixes, constr_id):
-                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '<=', 0.0, constr_id)
+                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '<', 0.0, constr_id)
                 n_td_constrs += 1
             else:
                 self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '=', 0.0, constr_id)
@@ -216,11 +219,11 @@ class GurobiOptimize(ABC):
         for sid, stoic in get_srefs(rdata['reactants']).items():
             if re.match(pf.C_, sid) is None and re.match(pf.M_prot_, sid) is None:
                 # drop stoichiometric coefficients that are 1.0
-                stoic_str = f'{stoic} ' if stoic != 1.0 else ''
+                stoic_str = f'{round(stoic, 4)} ' if stoic != 1.0 else ''
                 lparts.append(f'{stoic_str}{sid}')
         for sid, stoic in get_srefs(rdata['products']).items():
             if re.match(pf.C_, sid) is None and re.match(pf.M_prot_, sid) is None:
-                stoic_str = f'{stoic} ' if stoic != 1.0 else ''
+                stoic_str = f'{round(stoic, 4)} ' if stoic != 1.0 else ''
                 rparts.append(f'{stoic_str}{sid}')
         dirxn = ' -> ' if rdata['reversible'] else ' => '
         return ' + '.join(lparts) + dirxn + ' + '.join(rparts)
@@ -285,31 +288,33 @@ class GurobiOptimize(ABC):
                                'gpr': gpr, 'is_exchange': exchange}
         return rdatas
 
-    def extract_net_reaction_data(self):
+    @staticmethod
+    def extract_net_reaction_data(rdata):
         """Extract net reaction data, i.e. unsplit reactions
 
         Net reaction is a reaction with reaction string in forward direction
         Reversibility arrow is adjusted if there exists a corresponding reaction in reverse
         Gene Product Associations are combined using 'or' for iso-reactions
 
+        :param rdata
+        :type rdata: dict
         :return: reaction data with isoreactions combined
         :rtype: dict
         """
         # determine 'net' reaction data (i.e. unsplit the reaction)
-        # determine 'net' reaction data (i.e. unsplit the reaction)
-        rev_base_rids = {rdata['base_rid'] for rid, rdata in self.rdatas.items() if rdata['drxn'] == 'rev'}
-        net_rdatas = {}
-        for rid, rdata in self.rdatas.items():
-            if rdata['drxn'] == 'fwd':
-                base_rid = rdata['base_rid']
-                if base_rid not in net_rdatas:
-                    reaction_str = rdata['reaction_str']
+        rev_base_rids = {record['base_rid'] for rid, record in rdata.items() if record['drxn'] == 'rev'}
+        net_rdata = {}
+        for rid, record in rdata.items():
+            if record['drxn'] == 'fwd':
+                base_rid = record['base_rid']
+                if base_rid not in net_rdata:
+                    reaction_str = record['reaction_str']
                     if base_rid in rev_base_rids:
                         reaction_str = re.sub('=>', '->', reaction_str)
-                    net_rdatas[base_rid] = {'reaction_str': reaction_str, 'gpr': rdata['gpr']}
+                    net_rdata[base_rid] = {'reaction_str': reaction_str, 'gpr': record['gpr']}
                 else:
-                    net_rdatas[base_rid]['gpr'] += ' or ' + rdata['gpr']
-        return net_rdatas
+                    net_rdata[base_rid]['gpr'] += ' or ' + record['gpr']
+        return net_rdata
 
     def get_rids_catalyzed(self):
         """Get reactions that are catalyzed with enzyme composition (gene labels).
@@ -380,11 +385,6 @@ class GurobiOptimize(ABC):
 
     # OPTIMIZATION RELATED
 
-    def optimize(self):
-        self.gpm.optimize()
-        fba_solution = self.get_solution()
-        return fba_solution
-
     def set_medium(self, medium):
         """set medium (compatible with CobraPy)
         assume: 1. medium condition defined through exchange reaction, exchange direction is metabolite
@@ -393,7 +393,7 @@ class GurobiOptimize(ABC):
                 4. modification of lower variable bound, i.e. assigning - value of uptake or 0 value
                 5. limit updates only to variable where lower bound will change
         :param medium: nutrients in medium, i.e. exchange reactions with max allowed uptake
-        :type medium: dict, key = sidx of exchange reaction, val=max uptake (positive value)
+        :type medium: dict, key = ridx of exchange reaction, val=max uptake (positive value)
         """
         for rid in self.uptake_rids:
             ridx = re.sub(f'^{pf.R_}', '', rid)
@@ -401,6 +401,61 @@ class GurobiOptimize(ABC):
             cur_lb = self.gpm.getVarByName(rid).lb
             if new_lb != cur_lb:
                 self.gpm.getVarByName(rid).lb = new_lb
+
+    def optimize(self, alt_model=None):
+
+        model = self.gpm if alt_model is None else alt_model
+
+        if model.ismip:
+            solution = self.optimize_milp(model)
+        else:
+            model.optimize()
+            solution = self.get_solution(model)
+        return solution
+
+    def optimize_milp(self, model):
+        """Optimize MILP with non-neg variables only.
+
+        Copy original model, make all variables non-negative by
+        adding additional negative variables in reverse
+
+        Make variable bounds non-negative
+        - for variables with negative lower bound, create new variables
+          with updated bounds and sign changed coefficients.
+
+        tuned solver parameters (switch off presolve and set numeric focus)
+
+        :return: solution
+        """
+        model.update()
+        irr_gpm = model.copy()
+        irr_gpm.params.numericfocus = 3
+        irr_gpm.params.presolve = 0
+
+        for var in irr_gpm.getVars():
+            if var.lb < 0:
+                fwd_col = irr_gpm.getCol(var)
+                rev_coeffs = [-fwd_col.getCoeff(idx) for idx in range(fwd_col.size())]
+                constrs = [fwd_col.getConstr(idx) for idx in range(fwd_col.size())]
+                rev_col = gp.Column(coeffs=rev_coeffs, constrs=constrs)
+                irr_gpm.addVar(lb=max(0.0, -var.ub), ub=-var.lb, vtype=var.vtype,
+                               name=f'{var.varname}_REV', column=rev_col)
+                var.lb = 0.0
+            if var.ub < 0:
+                var.ub = 0.0
+        irr_gpm.optimize()
+        irr_solution = self.get_solution(irr_gpm)
+
+        # aggregate fluxes (net flux accross fwd/rev reactions)
+        if irr_solution.fluxes is not None:
+            net_fluxes = defaultdict(float)
+            for rid, flux in irr_solution.fluxes.items():
+                if re.match('.*_REV$', rid):
+                    net_fluxes[re.sub('_REV$', '', rid)] -= flux
+                else:
+                    net_fluxes[rid] += flux
+            irr_solution.fluxes = pd.Series(net_fluxes, name='fluxes')
+        return irr_solution
 
     def get_solution(self, alt_model=None):
         """Retrieve optimization solution for gp model.
@@ -434,10 +489,11 @@ class GurobiOptimize(ABC):
                                                       for constr in model.getConstrs()}, name='shadow_prices')
         return Solution(**results_dict)
 
-    def pfba(self, frac_of_optimum=1.0):
+    def pfba(self, fraction_of_optimum=1.0):
         """pFBA optimization
 
-        :param frac_of_optimum:
+        :param fraction_of_optimum: factor to scale fba objective value
+        :type fraction_of_optimum: float between 0 and 1.0
         :return:
         """
         # determine fba growth rate
@@ -448,7 +504,6 @@ class GurobiOptimize(ABC):
         if np.isfinite(fba_gr):
 
             # create an pFBA model based on FBA model and make reactions irreversible
-            self.gpm.update()
             pfba_gpm = self.gpm.copy()
 
             for var in pfba_gpm.getVars():
@@ -462,7 +517,7 @@ class GurobiOptimize(ABC):
 
             # create temporary constraint for FBA objective
             fba_objective = pfba_gpm.getObjective()
-            pfba_gpm.addLConstr(fba_objective, '=', fba_gr * frac_of_optimum, 'FBA objective')
+            pfba_gpm.addLConstr(fba_objective, '=', fba_gr * fraction_of_optimum, 'FBA objective')
 
             # New Objective: minimize sum of all non-negative reactions
             pfba_gpm.update()
@@ -483,3 +538,73 @@ class GurobiOptimize(ABC):
                     net_fluxes[rid] += flux
             pfba_solution.fluxes = pd.Series(net_fluxes, name='fluxes')
         return pfba_solution
+
+    def fva(self, rids=None, fraction_of_optimum=1.0):
+        """Running Flux Variability Analysis across selected or all reactions.
+
+        :param rids: optional reaction ids (without 'R_')
+        :type rids: list of str or None (default)
+        :param fraction_of_optimum: optional scaling of wt objective value
+        :type fraction_of_optimum: float (between 0.0 and 1.0), default 1.0
+        :return:
+        """
+        ridx2rid = {re.sub('R_', '', rid): rid
+                    for rid in self.m_dict['reactions'].index if re.match('^R_', rid)}
+        selected_rids = list(ridx2rid.values()) if rids is None else [ridx2rid[ridx] for ridx in rids]
+
+        # determine wildtype growth rate
+        wt_gr = self.optimize().objective_value
+
+        results = {}
+        if np.isfinite(wt_gr):
+
+            # create a temporary FVA model based on FBA model
+            fva_gpm = self.gpm.copy()
+
+            # add wt objective as constraint
+            wt_objective = fva_gpm.getObjective()
+            fva_gpm.addLConstr(wt_objective, '=', wt_gr * fraction_of_optimum, 'wild type objective')
+            fva_gpm.update()
+
+            for rid in selected_rids:
+                var = fva_gpm.getVarByName(rid)
+
+                fva_gpm.setObjective(var, 1)
+                min_flux = self.optimize(fva_gpm).objective_value
+
+                fva_gpm.setObjective(var, -1)
+                max_flux = self.optimize(fva_gpm).objective_value
+                results[re.sub('^R_', '', rid)] = [min_flux, max_flux]
+
+        return pd.DataFrame(results.values(), list(results.keys()), columns=['minimum', 'maximum'])
+
+    def gene_deletions(self, labels):
+        """Simulate gene deletions (one or several genes, identified by label)
+
+        :param labels: individual gene label of set/list of gene labels
+        :type labels: str, of set/list of str
+        :return: optimization solution
+        :return: class Solution
+        """
+        self.gpm.update()
+        rids_blocked = self.get_rids_blocked_by(labels)
+
+        # block affected reactions
+        old_bounds = {}
+        for rid in rids_blocked:
+            var = self.gpm.getVarByName(rid)
+            old_bounds[rid] = (var.lb, var.ub)
+            var.lb = 0.0
+            var.ub = 0.0
+
+        # optimize
+        solution = self.optimize()
+
+        # unblock reactions
+        for rid, (lb, ub) in old_bounds.items():
+            var = self.gpm.getVarByName(rid)
+            var.lb = lb
+            var.ub = ub
+        self.gpm.update()
+
+        return solution

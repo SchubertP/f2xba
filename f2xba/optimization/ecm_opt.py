@@ -50,9 +50,13 @@ class CobraEcmOptimization(Optimize):
 
     def configure_moment_model_constraints(self):
         """configure constraints related to MOMENT modelling
+            in MOMENT formalism, promiscuous enszymes can catalyze alternative reactions
+            without additional cost. Only most costly reacions flux need to be supported
+            and all alternative reactions come for free
         """
         for constr in self.model.constraints:
-            constr_id = re.sub(f'^{pf.M_}', '', pf.M_prot_)
-            if re.match(constr_id, constr.name):
+            constr_id = re.sub(pf.M_, '', pf.M_prot_)
+            prot_pool_id = re.sub(pf.M_, '', pf.M_prot_pool)
+            if re.match(constr_id, constr.name) and re.match(prot_pool_id, constr.name) is None:
                 constr.ub = 1000.0
         print(f'MOMENT protein constraint configured (upper_bound: 0 -> 1000)')
