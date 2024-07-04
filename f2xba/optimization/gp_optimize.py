@@ -26,7 +26,6 @@ import os
 import numpy as np
 import pandas as pd
 from collections import defaultdict
-from abc import ABC, abstractmethod
 import sbmlxdf
 import f2xba.prefixes as pf
 from f2xba.utils.mapping_utils import get_srefs
@@ -56,9 +55,8 @@ class Solution:
         self.shadow_prices = shadow_prices
 
 
-class GurobiOptimize(ABC):
+class GurobiOptimize:
 
-    @abstractmethod
     def __init__(self, fname):
         """Instantiate GpOptimization base class
 
@@ -106,8 +104,7 @@ class GurobiOptimize(ABC):
 
         self.rids_catalyzed = self.get_rids_catalyzed()
 
-    # MODEL CONSTRUCTION RELATED
-
+    # GUROBI_PY MODEL CONSTRUCTION RELATED
     def create_gurobipy_model(self):
         """Create and configure a GurobiPy model with data from metabolic model.
 
@@ -406,15 +403,19 @@ class GurobiOptimize(ABC):
 
         model = self.gpm if alt_model is None else alt_model
 
-        if model.ismip:
-            solution = self.optimize_milp(model)
-        else:
-            model.optimize()
-            solution = self.get_solution(model)
+        model.optimize()
+        solution = self.get_solution(model)
+
+        # if model.ismip:
+        #    solution = self.optimize_non_negative_vars(model)
+        # else:
+        #    model.optimize()
+        #    solution = self.get_solution(model)
+
         return solution
 
-    def optimize_milp(self, model):
-        """Optimize MILP with non-neg variables only.
+    def optimize_non_negative_vars(self, model):
+        """Convert problem to non-negative variables only and solve
 
         Copy original model, make all variables non-negative by
         adding additional negative variables in reverse

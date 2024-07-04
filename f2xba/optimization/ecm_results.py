@@ -18,7 +18,7 @@ import f2xba.prefixes as pf
 from .results import Results
 
 
-class CobraEcmResults(Results):
+class EcmResults(Results):
 
     def __init__(self, optim, results, df_mpmf=None):
         """Instantiation
@@ -65,7 +65,7 @@ class CobraEcmResults(Results):
         enz_sat = self.optim.avg_enz_saturation
         for rid, mg_active_per_gdw in solution.fluxes.items():
             if re.match(pf.V_PC_, rid) and rid != pf.V_PC_total_active:
-                uid = re.sub(pf.V_PC_, '', rid)
+                uid = re.sub(f'^{pf.V_PC_}', '', rid)
                 if uid in self.optim.uid2gene:
                     label, name = self.optim.uid2gene[uid]
                 else:

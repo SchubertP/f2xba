@@ -18,17 +18,15 @@ from .biocyc import BiocycData
 from .uniprot import UniprotData
 from .ncbi import NcbiData
 
-from .gp_optimization.gp_fba_opt import GurobiFbaOptimization
-from .gp_optimization.gp_ecm_opt import GurobiEcmOptimization
-from .gp_optimization.gp_ecm_results import GurobiEcmResults
-from .gp_optimization.gp_rba_opt import GurobiRbaOptimization
-from .gp_optimization.gp_rba_results import GurobiRbaResults
+from .optimization.cp_ecm_opt import CobraEcmOptimization
+from .optimization.cp_rba_opt import CobraRbaOptimization
 
-from .optimization.ecm_opt import CobraEcmOptimization
-from .optimization.ecm_results import CobraEcmResults
+from .optimization.gp_fba_opt import GurobiFbaOptimization
+from .optimization.gp_ecm_opt import GurobiEcmOptimization
+from .optimization.gp_rba_opt import GurobiRbaOptimization
 
-from .optimization.rba_opt import CobraRbaOptimization
-from .optimization.rba_results import CobraRbaResults
+from .optimization.ecm_results import EcmResults
+from .optimization.rba_results import RbaResults
 
 
 __all__ = []

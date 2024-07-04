@@ -102,7 +102,8 @@ class Results(ABC):
         for vid, val in solution.fluxes.items():
             if re.match(pf.V_LC_, vid):
                 mid = re.sub(f'^{pf.V_LC_}', '', vid)
-                name = self.optim.model.metabolites.get_by_id(mid).name
+                name = self.optim.mid2name[mid]
+                # name = self.optim.model.metabolites.get_by_id(mid).name
                 species_conc[mid] = [name, np.exp(val) * 1e3]
         cols = ['name', 'mmol_per_l']
         df_conc = pd.DataFrame(species_conc.values(), index=list(species_conc), columns=cols)

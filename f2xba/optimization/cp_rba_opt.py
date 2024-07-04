@@ -26,18 +26,18 @@ from collections import defaultdict
 
 import sbmlxdf
 import f2xba.prefixes as pf
-from .gp_rba_initial_assignments import GurobiInitialAssignments
-from .gp_optimize import GurobiOptimize
+from .rba_initial_assignments import InitialAssignments
+from .cp_optimize import CobraOptimize
 
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
 XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
 
 
-class GurobiRbaOptimization(GurobiOptimize):
+class CobraRbaOptimization(CobraOptimize):
 
-    def __init__(self, fname):
-        super().__init__(fname)
+    def __init__(self, cobra_model, fname):
+        super().__init__(cobra_model, fname)
 
         required = {'species', 'reactions', 'unitDefs', 'funcDefs', 'initAssign', 'parameters', 'compartments'}
         missing = required.difference(set(self.m_dict))
@@ -45,72 +45,79 @@ class GurobiRbaOptimization(GurobiOptimize):
             print(f'Missing components {missing} in SBML document!')
             raise AttributeError
 
-        # TODO we could have a general function Xba Optimization that collects all available data per default
-        self.df_mm_data = self.get_macromolecule_data()
-        self.df_enz_data = self.get_enzyme_data()
-        self.enz_mm_composition = self.get_enzyme_mm_composition()
-        # check if we should use CobraPy rid/sid or model rid/sid
-        # TODO check how to implement for CobarPy where 'R_' and 'M_' are stripped of
-        self.ex_rid2sid = self.get_ex_rid2sid()
+        self.df_mm_data = self.get_macromolecule_data(self.m_dict['species'])
+        self.df_enz_data = self.get_enzyme_data(self.m_dict['reactions'])
+        self.initial_assignments = InitialAssignments(self.model, self.m_dict)
 
-        self.initial_assignments = GurobiInitialAssignments(self.gpm, self.m_dict)
+        medium_cid = self.get_medium_cid(self.m_dict['compartments'])
+        self.ex_rid2mid = self.get_ex_rid2mid(self.m_dict['reactions'], medium_cid)
+
+        model_gr = self.m_dict['parameters'].loc['growth_rate'].value
+        self.enz_mm_composition = self.get_enzyme_mm_composition(model_gr)
 
         self.configure_rba_model_constraints()
+        self.configure_td_model_constraints()
+
         # in case of cplex interface, switch off scaling
-        # if 'cplex' in self.model.solver.interface.__name__:
-        #    self.model.solver.problem.parameters.read.scale.set(-1)
-        # return
+        if 'cplex' in self.model.solver.interface.__name__:
+            self.model.solver.problem.parameters.read.scale.set(-1)
+        return
 
-    def get_ex_rid2sid(self):
-        """Get mapping of cobra exchange reaction ids to RBA uptake metabolites
+    @staticmethod
+    def get_medium_cid(df_compartments):
+        """Determine medium compartment id from compartment annotation.
 
-            From XML annotation of compartments identify the compartent for media uptake
-            Note: RBA allows other compartments than external compartment to
-            be used in Michaelis Menten saturation terms for medium uptake,
-            e.g. periplasm (however, this may block reactions in periplasm)
+        Note: RBA allows other compartments than external compartment to
+        be used in michaelis menten saturation terms for medium uptake,
+        e.g. periplasm (this may block however reactions in periplasm)
 
-            replace compartment postfix of exchanged metabolited by medium cid of RBA model.
-
-           Create mapping table from exchange reaction to medium
+        :param df_compartments: compartment data from sbml model
+        :type df_compartments: pandas DataFrame
+        :return: medium compartment id
+        :rtype: str
         """
         medium_cid = 'e'
-        for cid, row in self.m_dict['compartments'].iterrows():
+        for cid, row in df_compartments.iterrows():
             xml_annots = row.get('xmlAnnotation')
             xml_attrs = sbmlxdf.misc.extract_xml_attrs(xml_annots, ns=XML_COMPARTMENT_NS)
             if 'medium' in xml_attrs and xml_attrs['medium'].lower == 'true':
                 medium_cid = cid
                 break
+        return medium_cid
 
-        ex_rid2sid = {}
-        for uptake_rid in self.uptake_rids:
-            row = self.m_dict['reactions'].loc[uptake_rid]
-            # ridx = re.sub(f'^{pf.R_}', '', uptake_rid)
-            sref_str = row['reactants'].split(';')[0]
-            sid = sbmlxdf.extract_params(sref_str)['species']
-            mid = sid.rsplit('_', 1)[0]
-            ex_rid2sid[uptake_rid] = f'{mid}_{medium_cid}'
-        return ex_rid2sid
+    @staticmethod
+    def get_ex_rid2mid(df_reactions, medium_cid):
+        """Get mapping of cobra exchange reaction ids to RBA uptake metabolites
+
+        :param df_reactions:
+        :param medium_cid:
+        :return:
+        """
+        ex_rid2mid = {}
+        for rid, row in df_reactions.iterrows():
+            if re.match(f'{pf.R_}EX_', rid):
+                ridx = re.sub(f'^{pf.R_}', '', rid)
+                sref_str = row['reactants'].split(';')[0]
+                sid = sbmlxdf.extract_params(sref_str)['species']
+                sidcx = sid.rsplit('_', 1)[0]
+                ex_rid2mid[ridx] = f'{sidcx}_{medium_cid}'
+        return ex_rid2mid
 
     def configure_rba_model_constraints(self):
-        """Configure constraints related to RBA modelling
-
-        I.e. Enzyme forward and reverse efficiencies configured at ≤ 0.0
+        """configure constraints related to RBA modelling
         """
-        for constr in self.gpm.getConstrs():
-            if re.match(pf.C_EF_, constr.ConstrName) or re.match(pf.C_ER_, constr.ConstrName):
-                constr.sense = '<'
-        # CobraPy model support
-        # modify_constr_bounds = {pf.C_EF_: [None, 0.0], pf.C_ER_: [None, 0.0]}
-        # for constr in self.model.constraints:
-        #     for cprefix, bounds in modify_constr_bounds.items():
-        #         if re.match(cprefix, constr.name):
-        #             constr.lb, constr.ub = bounds
+        modify_constr_bounds = {pf.C_EF_: [None, 0.0], pf.C_ER_: [None, 0.0]}
+        for constr in self.model.constraints:
+            for cprefix, bounds in modify_constr_bounds.items():
+                if re.match(cprefix, constr.name):
+                    constr.lb, constr.ub = bounds
         print(f'RBA enzyme efficiency constraints configured (C_EF_xxx, C_ER_xxx) ≤ 0')
 
     # INITIAL DATA COLLECTION PART
-    def get_macromolecule_data(self):
+    @staticmethod
+    def get_macromolecule_data(df_species):
         mms = {}
-        for sid, row in self.m_dict['species'].iterrows():
+        for sid, row in df_species.iterrows():
             if re.match(pf.MM_, sid):
                 mm_id = re.sub(f'^{pf.MM_}', '', sid)
                 refs = sbmlxdf.misc.get_miriam_refs(row.get('miriamAnnotation'), 'uniprot', 'bqbiol:is')
@@ -125,16 +132,19 @@ class GurobiRbaOptimization(GurobiOptimize):
         df_mms.index.name = 'mm_id'
         return df_mms
 
-    def get_enzyme_data(self):
+    @staticmethod
+    def get_enzyme_data(df_reactions):
         """Extract molecular weights of enzymes and process machines.
 
         From xmlAnnotation of reactions corresponding of related concentration variables
 
+        :param df_reactions: Reaction data extracted from model with usind sbmlxdf
+        :type df_reactions: pandas DataFrame
         :return: Enzyme data with name, molecular weight and scaling.
         :rtype: pandas DataFrame
         """
         enz_data = {}
-        for vid, row in self.m_dict['reactions'].iterrows():
+        for vid, row in df_reactions.iterrows():
             if re.match(pf.V_EC_, vid) or re.match(pf.V_PMC_, vid):
                 xml_attrs = sbmlxdf.misc.extract_xml_attrs(row.get('xmlAnnotation'), ns=XML_SPECIES_NS)
                 mw_kda = float(xml_attrs['weight_kDa']) if 'weight_kDa' in xml_attrs else None
@@ -145,51 +155,32 @@ class GurobiRbaOptimization(GurobiOptimize):
         df_enz_data.index.name = 'id'
         return df_enz_data
 
-    def get_enzyme_mm_composition(self):
-        """Determine Enzyme stoiciometry wrt gene products from model stoichiometry.
-
-        Note: stoichiometry wrt Enzyme and process machine concentrations
-        are configured in initial model considering a given model growth rate (e.g. 1.0 h-1)
-        From stoichiometric coefficients we can derive enzyme/process machine composition
-        wrt to macro molecules
-
-        :return: enzyme/process machine composition wrt macromolecules
-        :rtype: dict
-        """
-        model_gr = self.m_dict['parameters'].loc['growth_rate'].value
+    def get_enzyme_mm_composition(self, model_gr):
         enz_mm_composition = defaultdict(dict)
-        for rid, row in self.m_dict['reactions'].iterrows():
-            if re.match(pf.V_EC_, rid) or re.match(pf.V_PMC_, rid):
-                for sref_str in sbmlxdf.record_generator(row['reactants']):
-                    params = sbmlxdf.extract_params(sref_str)
-                    if re.match(pf.MM_, params['species']):
-                        mm_id = re.sub(f'^{pf.MM_}', '', params['species'])
-                        enz_mm_composition[rid][mm_id] = float(params['stoic']) / model_gr
+        # metabolites in enzyme and pm concentration variables are scaled by the growth rate,
+        for rxn in self.model.reactions:
+            if re.match(pf.V_EC_, rxn.id) or re.match(pf.V_PMC_, rxn.id):
+                for metab, stoic in rxn.metabolites.items():
+                    if re.match(pf.MM_, metab.id):
+                        enz_mm_composition[rxn.id][re.sub(f'^{pf.MM_}', '', metab.id)] = -stoic / model_gr
         return dict(enz_mm_composition)
 
     # MODEL RBA OPTIMIZATION SUPPORT
-    def set_medium(self, medium):
+    def set_medium(self, ex_fluxes, default_conc=10):
         """Set model exchange fluxes and rba uptake metabolite concentrations
 
-        1. open up related exchange reactions
-        2. configure related medium concentrations via initial assignments
-
-        :param medium: nutrients in medium, i.e. exchange reactions with max allowed uptake
-        :type medium: dict, key = ridx of exchange reaction, val=metabolite concentration in mmol/l
+        :param ex_fluxes:
+        :param default_conc:
+        :return:
         """
-        # open up exchange reactions as per medium
-        super().set_medium({ex_ridx: 1000 for ex_ridx in medium})
-
-        # configure RBA related medium concentrations
-        medium_conc = {sid: medium.get(re.sub(f'^{pf.R_}', '', ex_rid), 0.0)
-                       for ex_rid, sid in self.ex_rid2sid.items()}
-
-        # for rid in self.uptake_rids:
-        #     if rxn.id in ex_fluxes:
-        #         rxn.lower_bound = -1000.0
-        #         medium_conc[self.ex_rid2sid[rid]] = default_conc
-        #     else:
-        #         rxn.lower_bound = 0.0
+        medium_conc = {mid: 0.0 for mid in self.ex_rid2mid.values()}
+        for rxn in self.model.exchanges:
+            if re.match(pf.V_, rxn.id) is None:
+                if rxn.id in ex_fluxes:
+                    rxn.lower_bound = -1000.0
+                    medium_conc[self.ex_rid2mid[rxn.id]] = default_conc
+                else:
+                    rxn.lower_bound = 0.0
         self.initial_assignments.set_medium(medium_conc)
 
     def set_growth_rate(self, growth_rate):
@@ -215,15 +206,16 @@ class GurobiRbaOptimization(GurobiOptimize):
         # first, check feasibility a minimal (or zero) growth
         # with self.model:
         self.set_growth_rate(gr_min)
-        opt_value = self.optimize().objective_value
+        opt_value = self.model.slim_optimize()
 
         # bisection algorithm to narrow in on maximum growth rate
         if math.isfinite(opt_value):
             n_iter = 1
             while ((gr_max - gr_min) > bisection_tol) and (n_iter < max_iter):
                 gr_test = gr_min + 0.5 * (gr_max - gr_min)
+                # with self.model:
                 self.set_growth_rate(gr_test)
-                opt_value = self.optimize().objective_value
+                opt_value = self.model.slim_optimize()
                 if math.isfinite(opt_value):
                     gr_min = gr_test
                 else:
@@ -233,14 +225,13 @@ class GurobiRbaOptimization(GurobiOptimize):
             # collect optimiziation solution at optimum growth rate
             if (gr_max - gr_min) < bisection_tol:
                 gr_opt = gr_min
+                # with self.model:
                 self.set_growth_rate(gr_opt)
-                solution = self.optimize()
+                solution = self.model.optimize()
                 solution.gr_opt = gr_opt
                 solution.n_iter = n_iter
-                # determine final density constraint
-                col = self.gpm.getCol(self.gpm.getVarByName('V_TCD'))
-                solution.density_constraints = {col.getConstr(idx).constrname: -col.getCoeff(idx)
-                                                for idx in range(col.size())}
+                solution.density_constraints = {met.id: -val for met, val
+                                                in self.model.reactions.get_by_id(pf.V_TCD).metabolites.items()}
                 return solution
             else:
                 print('no optimal growth rate')

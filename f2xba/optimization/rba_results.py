@@ -18,7 +18,7 @@ import f2xba.prefixes as pf
 from .results import Results
 
 
-class CobraRbaResults(Results):
+class RbaResults(Results):
 
     def __init__(self, optim, results, df_mpmf=None):
         """Instantiation

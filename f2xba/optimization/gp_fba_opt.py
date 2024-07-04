@@ -1,4 +1,4 @@
-"""Implementation of GbFbaOptimization class.
+"""Implementation of GurobiFbaOptimization class.
 
 Optimization of gurobipy model, LP and MILP, also FBA
 Support functions for optimization of FBA and TFA (thermodynamic FBA) models
@@ -6,7 +6,6 @@ Support functions for optimization of FBA and TFA (thermodynamic FBA) models
 
 Peter Schubert, HHU Duesseldorf, CCB, June 2024
 """
-import numpy as np
 
 from .gp_optimize import GurobiOptimize
 
@@ -20,4 +19,3 @@ class GurobiFbaOptimization(GurobiOptimize):
         :type fname: str
         """
         super().__init__(fname)
-

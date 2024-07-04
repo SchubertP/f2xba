@@ -1,4 +1,6 @@
-"""Implementation initial assignments required for RBA optimization.
+"""Implementation InitialAssignments required for RBA optimization.
+
+Supporting both CobraPy or GurobiPy models
 
 Class IaFunction
 Class IaTargetRid
@@ -59,15 +61,28 @@ class IaTargetRid:
     def __init__(self, rid):
         self.rid = rid
         self.flux_bounds = {}
-        self.products = {}
         self.reactants = {}
+        self.products = {}
         self.is_medium_dependent = False
         self.is_growth_rate_dependent = False
+
+    def is_affected_by(self, reason):
+        """Determine if TargetRid is affected by the update_type
+
+        update_type is 'medium' or 'growth_rate'
+
+        :param reason: reason of update, 'medium' or 'growth_rate'
+        :type reason: str
+        :return: Result of dependency check
+        :rtype: bool
+        """
+        return ((reason == 'medium' and self.is_medium_dependent) or
+                (reason == 'growth_rate' and self.is_growth_rate_dependent))
 
 
 class InitialAssignments:
 
-    def __init__(self, cobra_model, m_dict):
+    def __init__(self, cobra_or_gurobi_model, m_dict):
         """Instantiate Initial Assigments
 
         Handles SBML initial assignments
@@ -75,18 +90,21 @@ class InitialAssignments:
         Initial assignment math gets expanded so resulting math can be evaluated using 'eval'
         Units, required in SBML for proper math formulation, get stripped
 
-        :param cobra_model: SBML model loaded in CobraPy
-        :type cobra_model: cobra.core.model.Model
+        :param cobra_or_gurobi_model: Cobrapy or Gurobipy model
+        :type cobra_or_gurobi_model: cobra.core.model.Model or gurobipy.Model
         :param m_dict: SBML model configuration data
         :type m_dict: dict of pandas DataFrames
         """
-        self.model = cobra_model
+        self.model = cobra_or_gurobi_model
+        self.is_gpm = True if type(self.model).__module__ == 'gurobipy' else False
         self.local_env = {'np': np, 'growth_rate': 1.0}
 
         unit_ids = set(m_dict['unitDefs'].index) | {'dimensionless', 'second', 'hour', 'substance'}
         func_defs = self.get_function_defs(m_dict['funcDefs'], unit_ids)
         self.ia_functions = {symbol: IaFunction(symbol, row['math'])
                              for symbol, row in m_dict['initAssign'].iterrows()}
+
+        # flag InitialAssignments which are growth and/or media dependent and expand function definition
         for symbol, iaf in self.ia_functions.items():
             iaf.is_medium_dependent = True if re.search(r'\b' + pf.M_, iaf.math) else False
             iaf.is_growth_rate_dependent = True if 'growth_rate' in iaf.math else False
@@ -130,8 +148,10 @@ class InitialAssignments:
     def get_target_rids(self, df_reactions):
         """Map reaction ids affected by initial assignment to related parameters
 
-        we convert reaction ids and metabolite ids to cobra ids,
-        i.e. removing leading R_ on reaction ids and M_ on metabolite ids
+        matrix coefficients modified through initial assignment have
+        'id' parameter set on respective species reference of reactants/products
+
+        !! using original IDs
 
         :param df_reactions: reaction data of SBML model
         :type df_reactions: pandas Dataframe
@@ -143,29 +163,28 @@ class InitialAssignments:
         ia_reactants = defaultdict(dict)
         ia_products = defaultdict(dict)
         for rid, row in df_reactions.iterrows():
-            ridx = re.sub(f'^{pf.R_}', '', rid)
             if row['fbcLowerFluxBound'] in ia_symbols:
-                ia_flux_bounds[ridx]['lb'] = row['fbcLowerFluxBound']
+                ia_flux_bounds[rid]['lb'] = row['fbcLowerFluxBound']
             if row['fbcUpperFluxBound'] in ia_symbols:
-                ia_flux_bounds[ridx]['ub'] = row['fbcUpperFluxBound']
+                ia_flux_bounds[rid]['ub'] = row['fbcUpperFluxBound']
             for sref_str in sbmlxdf.record_generator(row['reactants']):
                 params = sbmlxdf.extract_params(sref_str)
                 if 'id' in params and params['id'] in ia_symbols:
-                    ia_reactants[ridx].update({re.sub(f'^{pf.M_}', '', params['species']): params['id']})
+                    ia_reactants[rid].update({params['species']: params['id']})
             for sref_str in sbmlxdf.record_generator(row['products']):
                 params = sbmlxdf.extract_params(sref_str)
                 if 'id' in params and params['id'] in ia_symbols:
-                    ia_products[ridx].update({re.sub(f'^{pf.M_}', '', params['species']): params['id']})
+                    ia_products[rid].update({params['species']: params['id']})
 
         # create target rids
-        ridxs = set(ia_flux_bounds) | set(ia_reactants) | set(ia_products)
-        target_rids = {ridx: IaTargetRid(ridx) for ridx in ridxs}
-        for ridx, data in ia_flux_bounds.items():
-            target_rids[ridx].flux_bounds = data
-        for ridx, data in ia_reactants.items():
-            target_rids[ridx].reactants = data
-        for ridx, data in ia_products.items():
-            target_rids[ridx].products = data
+        rids = set(ia_flux_bounds) | set(ia_reactants) | set(ia_products)
+        target_rids = {rid: IaTargetRid(rid) for rid in rids}
+        for rid, data in ia_flux_bounds.items():
+            target_rids[rid].flux_bounds = data
+        for rid, data in ia_reactants.items():
+            target_rids[rid].reactants = data
+        for rid, data in ia_products.items():
+            target_rids[rid].products = data
 
         # set medium / growth rate dependency on reaction targeted by initial assignments
         for trid, tr in target_rids.items():
@@ -175,7 +194,6 @@ class InitialAssignments:
                     target_rids[trid].is_medium_dependent = True
                 if self.ia_functions[symbol].is_growth_rate_dependent:
                     target_rids[trid].is_growth_rate_dependent = True
-
         return target_rids
 
     def set_medium(self, medium_concs):
@@ -184,11 +202,11 @@ class InitialAssignments:
         Medium dependent model parameters have sids as variable names in
         their initial assignment math string.
 
-        :param medium_concs: species concentrations in mmol/gDW
+        :param medium_concs: species concentrations in mmol/l
         :type medium_concs: dict (key: sid, val: float)
         """
-        for mid, conc in medium_concs.items():
-            self.local_env[mid] = conc
+        for sid, conc in medium_concs.items():
+            self.local_env[sid] = conc
         self.update_model_parameters('medium')
 
     def set_growth_rate(self, growth_rate):
@@ -197,21 +215,63 @@ class InitialAssignments:
         Growth rate dependent model parameters have 'growth_rate' as variable name in
         their initial assignment math string.
 
+        Only update of problem parameters when values have changed
+
         :param growth_rate: selected growth rate in h-1
         :type growth_rate: float
         """
         self.local_env['growth_rate'] = growth_rate
         self.update_model_parameters('growth_rate')
 
-    def update_model_parameters(self, param_type):
-        """Update model parameter depending on param type using initial assignment data.
+    def update_model_parameters(self, reason):
+        if self.is_gpm:
+            self.gp_update_model_parameters(reason)
+        else:
+            self.cp_update_model_parameters(reason)
 
-        :param param_type: parameter type ('medium' or 'growth_rate')
-        :type param_type: str
+    def gp_update_model_parameters(self, reason):
+        """GurobiPy model: modify flux bounds, coefficients based on initial assignments.
+
+        :param reason: reason for update ('medium' or 'growth_rate')
+        :type reason: str
         """
-        for ridx, tr in self.target_rids.items():
-            if ((param_type == 'medium' and tr.is_medium_dependent is True) or
-                    (param_type == 'growth_rate' and tr.is_growth_rate_dependent is True)):
+        self.model.update()
+
+        for rid, tr in self.target_rids.items():
+            if tr.is_affected_by(reason):
+                var = self.model.getVarByName(rid)
+
+                # configure variable bounds that depend on growth rate and medium
+                if len(tr.flux_bounds) > 0:
+                    if 'lb' in tr.flux_bounds:
+                        new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env)
+                        if new_lb != var.lb:
+                            var.lb = new_lb
+                    if 'ub' in tr.flux_bounds:
+                        new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env)
+                        if new_ub != var.ub:
+                            var.ub = new_ub
+
+                for sid, symbol_id in tr.reactants.items():
+                    new_val = -self.ia_functions[symbol_id].get_value(self.local_env)
+                    constr = self.model.getConstrByName(sid)
+                    if new_val != self.model.getCoeff(constr, var):
+                        self.model.chgCoeff(constr, var, new_val)
+                for sid, symbol_id in tr.products.items():
+                    new_val = self.ia_functions[symbol_id].get_value(self.local_env)
+                    constr = self.model.getConstrByName(sid)
+                    if new_val != self.model.getCoeff(constr, var):
+                        self.model.chgCoeff(constr, var, new_val)
+
+    def cp_update_model_parameters(self, reason):
+        """CobraPy model: modify flux bounds, coefficients based on initial assignments.
+
+        :param reason: reason for update ('medium' or 'growth_rate')
+        :type reason: str
+        """
+        for rid, tr in self.target_rids.items():
+            if tr.is_affected_by(reason):
+                ridx = re.sub(f'^{pf.R_}', '', rid)
                 rxn = self.model.reactions.get_by_id(ridx)
 
                 # configure variable bounds that deped on growth rate and medium
@@ -231,11 +291,11 @@ class InitialAssignments:
                 old_mids = {met.id for met in rxn.metabolites}
                 new_coefs = {}
                 if len(tr.reactants) > 0:
-                    new_coefs = {sidx: -self.ia_functions[symbol_id].get_value(self.local_env)
-                                 for sidx, symbol_id in tr.reactants.items()}
+                    new_coefs = {re.sub(f'^{pf.M_}', '', sid): -self.ia_functions[symbol_id].get_value(self.local_env)
+                                 for sid, symbol_id in tr.reactants.items()}
                 if len(tr.products) > 0:
-                    new_coefs |= {sidx: self.ia_functions[symbol_id].get_value(self.local_env)
-                                  for sidx, symbol_id in tr.products.items()}
+                    new_coefs |= {re.sub(f'^{pf.M_}', '', sid): self.ia_functions[symbol_id].get_value(self.local_env)
+                                  for sid, symbol_id in tr.products.items()}
 
                 # in case of newly added metabolites (i.e. currently not existing in the reaction)
                 #  use combine=True in rxn.add_metabolites(), otherwise use combine=False to improve accuracy.
