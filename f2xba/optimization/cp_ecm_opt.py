@@ -13,13 +13,13 @@ import re
 import numpy as np
 
 import f2xba.prefixes as pf
-from .cp_optimize import CobraOptimize
+from .optimize import Optimize
 
 
-class CobraEcmOptimization(CobraOptimize):
+class CobraEcmOptimization(Optimize):
 
     def __init__(self, cobra_model, fname):
-        super().__init__(cobra_model, fname)
+        super().__init__(fname, cobra_model)
 
         # collect some parameters from sbml model
         self.ecm_type = self.m_dict['modelAttrs'].get('id', '_GECKO').rsplit('_', 1)[1]
@@ -46,7 +46,6 @@ class CobraEcmOptimization(CobraOptimize):
 
         if self.ecm_type.endswith('MOMENT'):
             self.configure_moment_model_constraints()
-        self.configure_td_model_constraints()
 
     def configure_moment_model_constraints(self):
         """configure constraints related to MOMENT modelling

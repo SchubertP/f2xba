@@ -7,10 +7,10 @@ Support functions for optimization of FBA and TFA (thermodynamic FBA) models
 Peter Schubert, HHU Duesseldorf, CCB, June 2024
 """
 
-from .gp_optimize import GurobiOptimize
+from .optimize import Optimize
 
 
-class GurobiFbaOptimization(GurobiOptimize):
+class GurobiFbaOptimization(Optimize):
 
     def __init__(self, fname):
         """Instantiate GurobiFbaOptimization from SBML model

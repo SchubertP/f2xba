@@ -13,10 +13,10 @@ import re
 import numpy as np
 
 import f2xba.prefixes as pf
-from .gp_optimize import GurobiOptimize
+from .optimize import Optimize
 
 
-class GurobiEcmOptimization(GurobiOptimize):
+class GurobiEcmOptimization(Optimize):
 
     def __init__(self, fname):
         super().__init__(fname)

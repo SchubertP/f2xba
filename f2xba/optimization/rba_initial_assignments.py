@@ -82,7 +82,7 @@ class IaTargetRid:
 
 class InitialAssignments:
 
-    def __init__(self, cobra_or_gurobi_model, m_dict):
+    def __init__(self, cobra_or_gurobi_model, m_dict, is_gpm=False):
         """Instantiate Initial Assigments
 
         Handles SBML initial assignments
@@ -94,9 +94,11 @@ class InitialAssignments:
         :type cobra_or_gurobi_model: cobra.core.model.Model or gurobipy.Model
         :param m_dict: SBML model configuration data
         :type m_dict: dict of pandas DataFrames
+        :param is_gpm: Flag if supplied model is a GurobiPy model
+        :type is_gpm: bool (default: False)
         """
         self.model = cobra_or_gurobi_model
-        self.is_gpm = True if type(self.model).__module__ == 'gurobipy' else False
+        self.is_gpm = is_gpm
         self.local_env = {'np': np, 'growth_rate': 1.0}
 
         unit_ids = set(m_dict['unitDefs'].index) | {'dimensionless', 'second', 'hour', 'substance'}

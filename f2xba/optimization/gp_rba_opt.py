@@ -27,14 +27,14 @@ from collections import defaultdict
 import sbmlxdf
 import f2xba.prefixes as pf
 from .rba_initial_assignments import InitialAssignments
-from .gp_optimize import GurobiOptimize
+from .optimize import Optimize
 
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
 XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
 
 
-class GurobiRbaOptimization(GurobiOptimize):
+class GurobiRbaOptimization(Optimize):
 
     def __init__(self, fname):
         super().__init__(fname)
@@ -53,7 +53,7 @@ class GurobiRbaOptimization(GurobiOptimize):
         # TODO check how to implement for CobarPy where 'R_' and 'M_' are stripped of
         self.ex_rid2sid = self.get_ex_rid2sid()
 
-        self.initial_assignments = InitialAssignments(self.gpm, self.m_dict)
+        self.initial_assignments = InitialAssignments(self.gpm, self.m_dict, is_gpm=True)
         self.configure_rba_model_constraints()
 
     def get_ex_rid2sid(self):
@@ -94,12 +94,6 @@ class GurobiRbaOptimization(GurobiOptimize):
         for constr in self.gpm.getConstrs():
             if re.match(pf.C_EF_, constr.ConstrName) or re.match(pf.C_ER_, constr.ConstrName):
                 constr.sense = '<'
-        # CobraPy model support
-        # modify_constr_bounds = {pf.C_EF_: [None, 0.0], pf.C_ER_: [None, 0.0]}
-        # for constr in self.model.constraints:
-        #     for cprefix, bounds in modify_constr_bounds.items():
-        #         if re.match(cprefix, constr.name):
-        #             constr.lb, constr.ub = bounds
         print(f'RBA enzyme efficiency constraints configured (C_EF_xxx, C_ER_xxx) ≤ 0')
 
     # INITIAL DATA COLLECTION PART

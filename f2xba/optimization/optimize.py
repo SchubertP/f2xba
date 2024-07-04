@@ -1,22 +1,16 @@
-"""Implementation of GurobiOptimize Base Class.
+"""Implementation of Optimize Base Class.
 
-Support Optimization using gurobipy
+Support Optimization using gurobipy and cobrapy
 
-Instantiated with empty gurobipy.Model (gp.Model) and file name of SBML coded metabolic model
-
+Instantiated with file name of SBML coded metabolic model
 
 Load SBML coded metabolic model via sbmlxdf
-Configure gp model:
+in case of GurobiPy mode: Configure gp model:
     - variables
     - constraints
     - objective function
-collect data structures required during optimization and results processing
 
-Note: try implementing gp.Model as per CobraPy model
-    - e.g. 'R_' prefix stripped off reaction ids, 'M_' stripped for metabolite ids, 'G_' of gene product ids
-    - growth medium configured by providing exchange reaction ids with positive (max uptake) values
-    - however we will not split reactions in irreversible forward and reverse directions, as in CobraPy
-(possibly this could be merged with CobraPy optimization ?) to ensure common code development
+collect data structures required during optimization and results processing
 
 Peter Schubert, HHU Duesseldorf, CCB, June 2024
 """
@@ -55,18 +49,22 @@ class Solution:
         self.shadow_prices = shadow_prices
 
 
-class GurobiOptimize:
+class Optimize:
 
-    def __init__(self, fname):
-        """Instantiate GpOptimization base class
+    def __init__(self, fname, cobra_model=None):
+        """Instantiate Optimize base class
 
         load SBML coded metabolic model
-        create gurobipy model (gpm)
-        configure gpm based on metabolic model data
+        in case a cobra model is supplied, used CobraPy
+        else create and configure a gurobipy model (gpm)
         collect data required for optimization and results analysis
+
         :param fname: path name of SBML coded metabolic model
         :type fname: str
+        :param cobra_model: (optional) the corresponding cobra model
+        :type cobra_model: cobra.core.model.Model if supplied
         """
+
         if not os.path.exists(fname):
             print(f'Error: {fname} not found!')
             return
@@ -75,19 +73,18 @@ class GurobiOptimize:
         sbml_model = sbmlxdf.Model(fname)
         print(f'SBML model loaded by sbmlxdf')
         self.m_dict = sbml_model.to_df()
-        # remove 'G_' prefix to align with CobraPy gene product ids
-        # self.gpid2label = {re.sub('^G_', '', gpid): row['label']
-        #                   for gpid, row in self.m_dict['fbcGeneProducts'].iterrows()}
 
-        self.var_id2gpm = {}
-        self.constr_id2gpm = {}
-        self.gpm = self.create_gurobipy_model()
-        self.report_model_size()
-
-        df_fbc_objs = self.m_dict['fbcObjectives']
-        active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
-        sref_str = active_odata['fluxObjectives'].split(';')[0]
-        self.biomass_rid = re.sub(pf.R_, '', sbmlxdf.extract_params(sref_str)['reac'])
+        if cobra_model is not None:
+            self.is_gpm = False
+            self.model = cobra_model
+            self.cp_configure_td_model_constraints()
+            self.cp_report_model_size()
+        else:
+            self.is_gpm = True
+            self.var_id2gpm = {}
+            self.constr_id2gpm = {}
+            self.gpm = self.gp_create_model()
+            self.gp_report_model_size()
 
         self.mid2name = {re.sub(f'^{pf.M_}', '', sid): row['name']
                          for sid, row in self.m_dict['species'].iterrows()}
@@ -104,8 +101,44 @@ class GurobiOptimize:
 
         self.rids_catalyzed = self.get_rids_catalyzed()
 
-    # GUROBI_PY MODEL CONSTRUCTION RELATED
-    def create_gurobipy_model(self):
+    # COBRAPY MODEL RELATED
+    def cp_report_model_size(self):
+        n_vars_drg = 0
+        n_vars_ec = 0
+        n_vars_pmc = 0
+        for rxn in self.model.reactions:
+            if re.match(pf.V_DRG_, rxn.id):
+                n_vars_drg += 1
+            elif re.match(pf.V_EC_, rxn.id):
+                n_vars_ec += 1
+            elif re.match(pf.V_PMC_, rxn.id):
+                n_vars_pmc += 1
+        print(f'{len(self.model.variables)} variables, {len(self.model.constraints)} constraints')
+        print(f'{n_vars_ec} enzymes, {n_vars_pmc} process machines, {n_vars_drg} TD reaction constraints')
+
+    def cp_configure_td_model_constraints(self):
+        # configure thermodynamic related model constraints and variables
+        is_td = False
+        modify_var_types = {pf.V_FU_: 'binary', pf.V_RU_: 'binary'}
+        for var in self.model.variables:
+            for vprefix, vtype in modify_var_types.items():
+                if re.match(vprefix, var.name) and 'reverse' not in var.name:
+                    is_td = True
+                    var.type = vtype
+        modify_constr_bounds = {pf.C_FFC_: [None, 0.0], pf.C_FRC_: [None, 0.0],
+                                pf.C_GFC_: [None, 0.0], pf.C_GRC_: [None, 0.0],
+                                pf.C_SU_: [None, 0.0]}
+        for constr in self.model.constraints:
+            for cprefix, bounds in modify_constr_bounds.items():
+                if re.match(cprefix, constr.name):
+                    constr.lb, constr.ub = bounds
+
+        if is_td is True:
+            print(f'Thermodynamic use variables (V_FU_xxx and V_RU_xxx) as binary')
+            print(f'Thermodynamic constraints (C_F[FR]C_xxx, C_G[FR]C_xxx, C_SU_xxx) ≤ 0')
+
+    # GUROBIPY MODEL CONSTRUCTION RELATED
+    def gp_create_model(self):
         """Create and configure a GurobiPy model with data from metabolic model.
 
         - create empty gp.model:
@@ -175,7 +208,7 @@ class GurobiOptimize:
 
         return gpm
 
-    def report_model_size(self):
+    def gp_report_model_size(self):
         """Report on model type and model size.
         """
         self.gpm.update()
@@ -195,6 +228,17 @@ class GurobiOptimize:
         print(f'{self.gpm.numvars} variables, {self.gpm.numconstrs} constraints, '
               f'{self.gpm.numnzs} non-zero matrix coefficients')
         print(f'{n_vars_ec} enzymes, {n_vars_pmc} process machines, {n_vars_drg} TD reaction constraints')
+
+    def get_biomass_rid(self):
+        """Extract biomass reaction id from model fbcObjectives.
+
+        :return: biomass reaction id (without 'R_')
+        :rtype: str
+        """
+        df_fbc_objs = self.m_dict['fbcObjectives']
+        active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
+        sref_str = active_odata['fluxObjectives'].split(';')[0]
+        return re.sub(pf.R_, '', sbmlxdf.extract_params(sref_str)['reac'])
 
     # RETRIEVING DATA REQUIRED FOR RESULTS ANALYSIS
     @staticmethod
@@ -339,7 +383,6 @@ class GurobiOptimize:
         return rids_catalyzed
 
     # SUPPORT FUNCTIONS FOR GENE DELETION STUDY
-
     def get_rids_blocked_by(self, labels):
         """Identify reactions blocked by deletion of gene/genes.
 
@@ -381,7 +424,6 @@ class GurobiOptimize:
         return rids_catalalyzed_by
 
     # OPTIMIZATION RELATED
-
     def set_medium(self, medium):
         """set medium (compatible with CobraPy)
         assume: 1. medium condition defined through exchange reaction, exchange direction is metabolite

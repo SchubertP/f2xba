@@ -27,17 +27,17 @@ from collections import defaultdict
 import sbmlxdf
 import f2xba.prefixes as pf
 from .rba_initial_assignments import InitialAssignments
-from .cp_optimize import CobraOptimize
+from .optimize import Optimize
 
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
 XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
 
 
-class CobraRbaOptimization(CobraOptimize):
+class CobraRbaOptimization(Optimize):
 
     def __init__(self, cobra_model, fname):
-        super().__init__(cobra_model, fname)
+        super().__init__(fname, cobra_model)
 
         required = {'species', 'reactions', 'unitDefs', 'funcDefs', 'initAssign', 'parameters', 'compartments'}
         missing = required.difference(set(self.m_dict))
@@ -56,7 +56,6 @@ class CobraRbaOptimization(CobraOptimize):
         self.enz_mm_composition = self.get_enzyme_mm_composition(model_gr)
 
         self.configure_rba_model_constraints()
-        self.configure_td_model_constraints()
 
         # in case of cplex interface, switch off scaling
         if 'cplex' in self.model.solver.interface.__name__:
