@@ -82,7 +82,7 @@ class IaTargetRid:
 
 class InitialAssignments:
 
-    def __init__(self, cobra_or_gurobi_model, m_dict, is_gpm=False):
+    def __init__(self, optim):
         """Instantiate Initial Assigments
 
         Handles SBML initial assignments
@@ -90,17 +90,13 @@ class InitialAssignments:
         Initial assignment math gets expanded so resulting math can be evaluated using 'eval'
         Units, required in SBML for proper math formulation, get stripped
 
-        :param cobra_or_gurobi_model: Cobrapy or Gurobipy model
-        :type cobra_or_gurobi_model: cobra.core.model.Model or gurobipy.Model
-        :param m_dict: SBML model configuration data
-        :type m_dict: dict of pandas DataFrames
-        :param is_gpm: Flag if supplied model is a GurobiPy model
-        :type is_gpm: bool (default: False)
+        :param optim: Optimization Instance with Cobra or Gurobi Model
+        :type optim: Class Optimize
         """
-        self.model = cobra_or_gurobi_model
-        self.is_gpm = is_gpm
-        self.local_env = {'np': np, 'growth_rate': 1.0}
+        self.optim = optim
+        m_dict = optim.m_dict
 
+        self.local_env = {'np': np, 'growth_rate': 1.0}
         unit_ids = set(m_dict['unitDefs'].index) | {'dimensionless', 'second', 'hour', 'substance'}
         func_defs = self.get_function_defs(m_dict['funcDefs'], unit_ids)
         self.ia_functions = {symbol: IaFunction(symbol, row['math'])
@@ -226,7 +222,7 @@ class InitialAssignments:
         self.update_model_parameters('growth_rate')
 
     def update_model_parameters(self, reason):
-        if self.is_gpm:
+        if self.optim.is_gpm:
             self.gp_update_model_parameters(reason)
         else:
             self.cp_update_model_parameters(reason)
@@ -237,11 +233,12 @@ class InitialAssignments:
         :param reason: reason for update ('medium' or 'growth_rate')
         :type reason: str
         """
-        self.model.update()
+        gpm = self.optim.gpm
+        gpm.update()
 
         for rid, tr in self.target_rids.items():
             if tr.is_affected_by(reason):
-                var = self.model.getVarByName(rid)
+                var = gpm.getVarByName(rid)
 
                 # configure variable bounds that depend on growth rate and medium
                 if len(tr.flux_bounds) > 0:
@@ -256,14 +253,14 @@ class InitialAssignments:
 
                 for sid, symbol_id in tr.reactants.items():
                     new_val = -self.ia_functions[symbol_id].get_value(self.local_env)
-                    constr = self.model.getConstrByName(sid)
-                    if new_val != self.model.getCoeff(constr, var):
-                        self.model.chgCoeff(constr, var, new_val)
+                    constr = gpm.getConstrByName(sid)
+                    if new_val != gpm.getCoeff(constr, var):
+                        gpm.chgCoeff(constr, var, new_val)
                 for sid, symbol_id in tr.products.items():
                     new_val = self.ia_functions[symbol_id].get_value(self.local_env)
-                    constr = self.model.getConstrByName(sid)
-                    if new_val != self.model.getCoeff(constr, var):
-                        self.model.chgCoeff(constr, var, new_val)
+                    constr = gpm.getConstrByName(sid)
+                    if new_val != gpm.getCoeff(constr, var):
+                        gpm.chgCoeff(constr, var, new_val)
 
     def cp_update_model_parameters(self, reason):
         """CobraPy model: modify flux bounds, coefficients based on initial assignments.
@@ -271,10 +268,11 @@ class InitialAssignments:
         :param reason: reason for update ('medium' or 'growth_rate')
         :type reason: str
         """
+        model = self.optim.model
         for rid, tr in self.target_rids.items():
             if tr.is_affected_by(reason):
                 ridx = re.sub(f'^{pf.R_}', '', rid)
-                rxn = self.model.reactions.get_by_id(ridx)
+                rxn = model.reactions.get_by_id(ridx)
 
                 # configure variable bounds that deped on growth rate and medium
                 if len(tr.flux_bounds) > 0:

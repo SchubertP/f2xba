@@ -1,4 +1,4 @@
-"""Implementation of utilitys for RBA model.
+"""Implementation of utilities for RBA model.
 
 Peter Schubert, HHU Duesseldorf, September 2023
 """

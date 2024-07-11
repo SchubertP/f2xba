@@ -47,7 +47,7 @@ class CobraRbaOptimization(Optimize):
 
         self.df_mm_data = self.get_macromolecule_data(self.m_dict['species'])
         self.df_enz_data = self.get_enzyme_data(self.m_dict['reactions'])
-        self.initial_assignments = InitialAssignments(self.model, self.m_dict)
+        self.initial_assignments = InitialAssignments(self)
 
         medium_cid = self.get_medium_cid(self.m_dict['compartments'])
         self.ex_rid2mid = self.get_ex_rid2mid(self.m_dict['reactions'], medium_cid)

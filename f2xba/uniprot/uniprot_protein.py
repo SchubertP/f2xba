@@ -99,36 +99,40 @@ literal2float = {'one': 1.0, 'two': 2.0, 'three': 3.0, 'four': 4.0, 'five': 5.0,
 
 
 def get_cofactors(cofactor_str):
-    """Extract cofactors with stoichiometry from Uniprot cofactors parameter.
+    """Extract cofactors with stoichiometry and Chebi id from Uniprot cofactors parameter.
 
-    Example for P09831
+    Example for P09831:
         - "COFACTOR: Name=[3Fe-4S] cluster; Xref=ChEBI:CHEBI:21137; Evidence={ECO:0000250};
            Note=Binds 1 [3Fe-4S] cluster. {ECO:0000250}; COFACTOR: Name=FAD; Xref=ChEBI:CHEBI:57692;
            Evidence={ECO:0000269|PubMed:4565085}; COFACTOR: Name=FMN; Xref=ChEBI:CHEBI:58210;
            Evidence={ECO:0000269|PubMed:4565085};"
 
+    return: {'[3Fe-4S] cluster': {'stoic': 1.0, 'chebi': '21137'},
+             'FAD': {'stoic': 1.0, 'chebi': '57692'},
+             'FMN': {'stoic': 1.0, 'chebi': '58210'}}
+
     :param cofactor_str: value of Uniprot 'Cofactor'
     :type cofactor_str: str
-    :return: cofactors with stoichiometry and cofactor to CHEBI mapping
-    :rtype: dict, dict
+    :return: cofactors with stoichiometry CHEBI mapping
+    :rtype: dict of dict
     """
     cofactors = {}
-    cofactor2chebi = {}
     if type(cofactor_str) == str:
-        cofactor = ''
-        for item in [item.strip() for item in cofactor_str.split(';')]:
-            if re.match('COFACTOR: Name=', item):
-                cofactor = item.split('=')[1]
-                cofactors[cofactor] = 1.0
-            if re.match('Xref=ChEBI:CHEBI:', item):
-                cofactor2chebi[cofactor] = item.split(':')[2]
-            if re.match('Note=Binds ', item):
-                stoic_str = item.split(' ')[1]
-                if stoic_str.isnumeric():
-                    cofactors[cofactor] = float(stoic_str)
-                else:
-                    cofactors[cofactor] = literal2float.get(stoic_str, 1.0)
-    return cofactors, cofactor2chebi
+        for cf_data in cofactor_str.split('COFACTOR: Name='):
+            if len(cf_data) > 0:
+                name = cf_data.split(';')[0]
+                m = re.search(r'Xref=ChEBI:CHEBI:(\d*)', cf_data)
+                chebi = m.group(1) if m else None
+                stoic = 1.0
+                m = re.search(r'Note=Binds (\w*)', cf_data)
+                if m:
+                    stoic_str = m.group(1)
+                    if stoic_str.isnumeric():
+                        stoic = float(stoic_str)
+                    else:
+                        stoic = literal2float.get(stoic_str, 1.0)
+                cofactors[name] = {'stoic': stoic, 'chebi': chebi}
+    return cofactors
 
 
 def get_aa_composition(aa_seq_str):
@@ -161,7 +165,7 @@ class UniprotProtein:
         self.mass = s_data['Mass']
         self.aa_composition = get_aa_composition(s_data['Sequence'])
         self.signal_peptide = s_data.get('Signal peptide')
-        self.cofactors, self.cofactor2chebi = get_cofactors(s_data.get('Cofactor'))
+        self.cofactors = get_cofactors(s_data.get('Cofactor'))
 
     def modify_attribute(self, attribute, value):
         """modify attribute value.

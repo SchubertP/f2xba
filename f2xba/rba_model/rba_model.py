@@ -250,7 +250,7 @@ class RbaModel:
         n_isor = len(self.model.reactions)
         print(f'{n_r} reactions -> {n_isor} isoreactions, including pseudo reactions')
 
-    def configure(self, rba_params_fname):
+    def configure(self, fname):
         """Create RBA model from xba model using RBA parameters from Excel doc.
 
         The Excel parameter document should contain the sheets:
@@ -263,21 +263,22 @@ class RbaModel:
         - 'processes'
         - 'machineries'
 
-        :param rba_params_fname: file name of Excel document with RBA specific parameters
-        :type rba_params_fname: str
+        :param fname: file name of Excel document with RBA specific parameters
+        :type fname: str
         """
-        if os.path.exists(rba_params_fname) is False:
-            print('RBA model NOT created. RBA parameter file not found: ' + rba_params_fname)
+        if os.path.exists(fname) is False:
+            print('RBA model NOT created. RBA parameter file not found: ' + fname)
             return False
 
         # load RBA parameter data
         rba_params_sheets = ['general', 'trna2locus', 'compartments', 'targets',
                              'functions', 'processing_maps', 'processes', 'machineries']
         rba_params = {}
-        with pd.ExcelFile(rba_params_fname) as xlsx:
+        with pd.ExcelFile(fname) as xlsx:
             for sheet in xlsx.sheet_names:
                 if sheet in rba_params_sheets:
                     rba_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+            print(f'{len(rba_params)} tables with RBA model configuration parameters loaded from {fname}')
 
         if self.check_rba_params_functions(rba_params) is False:
             print('ERRORs in RBA Parameter file')
@@ -312,7 +313,7 @@ class RbaModel:
         self.processes.from_xba(rba_params, self)
 
         print(f'{len(self.parameters.functions):4d} functions, {len(self.parameters.aggregates):4d} aggregates')
-        print(f'>>> RBA model created from xba_model with parameters from {rba_params_fname}')
+        print(f'>>> RBA model created')
 
         growth_rate = general_params.get('growth_rate', DEFAULT_GROWTH_RATE)
         self.update_xba_model(growth_rate)

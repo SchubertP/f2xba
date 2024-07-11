@@ -118,7 +118,7 @@ class TfaModel:
         self.td_reactants = {}
         self.td_units = None
 
-    def configure(self, tfa_params_fname):
+    def configure(self, fname):
         """Convert the xba model to TFA model using parameters in fname.
 
         to be executed after xba model has been configured
@@ -129,22 +129,23 @@ class TfaModel:
         - 'td_compartments'
         - 'modify_td_sids'
 
-        :param tfa_params_fname: file name for configuration parameters
-        :type tfa_params_fname: str
+        :param fname: file name for configuration parameters
+        :type fname: str
         :return: success/failure of model configuration
         :rtype: bool
         """
         # load TFA parameter data
-        if os.path.exists(tfa_params_fname) is False:
-            print(f'{tfa_params_fname} does not exist')
+        if os.path.exists(fname) is False:
+            print(f'{fname} does not exist')
             raise FileNotFoundError
         tfa_params_sheets = ['general', 'td_compartments', 'modify_td_sids',
                              'modify_thermo_data', 'modify_drg0_bounds']
         tfa_params = {}
-        with pd.ExcelFile(tfa_params_fname) as xlsx:
+        with pd.ExcelFile(fname) as xlsx:
             for sheet in xlsx.sheet_names:
                 if sheet in tfa_params_sheets:
                     tfa_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+            print(f'{len(tfa_params)} tables with thermodynamics model configuration parameters loaded from {fname}')
 
         self.td_params = tfa_params['general']['value'].to_dict()
 

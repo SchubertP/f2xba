@@ -48,6 +48,17 @@ class Solution:
         self.reduced_costs = reduced_costs
         self.shadow_prices = shadow_prices
 
+    def get_net_fluxes(self):
+        if self.fluxes is not None:
+            net_fluxes = defaultdict(float)
+            for rid, flux in self.fluxes.items():
+                if re.match('.*_REV$', rid):
+                    net_fluxes[re.sub('_REV$', '', rid)] -= flux
+                else:
+                    net_fluxes[rid] += flux
+            self.fluxes = pd.Series(net_fluxes, name='fluxes')
+        return self
+
 
 class Optimize:
 
@@ -73,6 +84,7 @@ class Optimize:
         sbml_model = sbmlxdf.Model(fname)
         print(f'SBML model loaded by sbmlxdf')
         self.m_dict = sbml_model.to_df()
+        self.orig_gpm = None
 
         if cobra_model is not None:
             self.is_gpm = False
@@ -153,18 +165,13 @@ class Optimize:
         gpm.setParam('OutputFlag', 0)
 
         # add variables to the gurobi model, with suppport of binary variables
-        n_continuous = 0
-        n_binary = 0
         self.var_id2gpm = {}
         for var_id, row in self.m_dict['reactions'].iterrows():
             # configure TD forward/reverse use variables as binary
             if re.match(pf.V_FU_, var_id) or re.match(pf.V_RU_, var_id):
                 self.var_id2gpm[var_id] = gpm.addVar(lb=0.0, ub=1.0, vtype='B', name=var_id)
-                n_binary += 1
             else:
                 self.var_id2gpm[var_id] = gpm.addVar(lb=row['fbcLb'], ub=row['fbcUb'], vtype='C', name=var_id)
-                n_continuous += 1
-        print(f'{len(self.var_id2gpm)} variables added to the model (contiuous: {n_continuous}, binary: {n_binary})')
 
         # collect constraints with mapping to gp variables
         constrs = {}
@@ -180,16 +187,12 @@ class Optimize:
         # adding linear constraints to the model, with support of Thermodynamic constraints
         # Some TD modeling constraints are defined as LHS <= 0.0
         td_constr_prefixes = f'({pf.C_FFC_}|{pf.C_FRC_}|{pf.C_GFC_}|{pf.C_GRC_}|{pf.C_SU_})'
-        n_td_constrs = 0
         self.constr_id2gpm = {}
         for constr_id, constr in constrs.items():
             if re.match(td_constr_prefixes, constr_id):
                 self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '<', 0.0, constr_id)
-                n_td_constrs += 1
             else:
                 self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '=', 0.0, constr_id)
-        print(f'{len(self.constr_id2gpm):5d} mass balance constraints added to the model')
-        print(f'{n_td_constrs:5d} thermodynamic constraints included')
 
         # configure optimization objective
         df_fbc_objs = self.m_dict['fbcObjectives']
@@ -228,6 +231,37 @@ class Optimize:
         print(f'{self.gpm.numvars} variables, {self.gpm.numconstrs} constraints, '
               f'{self.gpm.numnzs} non-zero matrix coefficients')
         print(f'{n_vars_ec} enzymes, {n_vars_pmc} process machines, {n_vars_drg} TD reaction constraints')
+
+    def gp_model_non_negative_vars(self):
+        """Decomposition of variables unrestricted in sign.
+
+        in Gurobipy make all varialbes non-negative, by adding non-neg '_REV' variables.
+        X = X - X_REV
+        retain copy of original model in self.orig_gpm
+        """
+        self.gpm.update()
+        self.orig_gpm = self.gpm.copy()
+        self.orig_gpm.update()
+        # gro.gpm.params.numericfocus = 3
+        # gro.gpm.params.presolve = 0
+
+        for var in self.gpm.getVars():
+            if var.lb < 0:
+                fwd_col = self.gpm.getCol(var)
+                rev_coeffs = [-fwd_col.getCoeff(idx) for idx in range(fwd_col.size())]
+                constrs = [fwd_col.getConstr(idx) for idx in range(fwd_col.size())]
+                rev_col = gp.Column(coeffs=rev_coeffs, constrs=constrs)
+                self.gpm.addVar(lb=max(0.0, -var.ub), ub=-var.lb, vtype=var.vtype,
+                                name=f'{var.varname}_REV', column=rev_col)
+                var.lb = 0.0
+            if var.ub < 0:
+                var.ub = 0.0
+
+    def gp_model_original(self):
+        """Switch back to original Gurobipy Model
+
+        """
+        self.gpm = self.orig_gpm
 
     def get_biomass_rid(self):
         """Extract biomass reaction id from model fbcObjectives.
@@ -442,7 +476,13 @@ class Optimize:
                 self.gpm.getVarByName(rid).lb = new_lb
 
     def optimize(self, alt_model=None):
+        """Optimize the gurobipy model and return solution.
 
+        :param alt_model: (optional) alternative model
+        :type alt_model: gurobipy.Model, if provided
+        :return: optimization solution
+        :rtype: Class Solution
+        """
         model = self.gpm if alt_model is None else alt_model
 
         model.optimize()
@@ -456,7 +496,7 @@ class Optimize:
 
         return solution
 
-    def optimize_non_negative_vars(self, model):
+    def optimize_non_negative_vars(self, alt_model=None):
         """Convert problem to non-negative variables only and solve
 
         Copy original model, make all variables non-negative by
@@ -468,8 +508,12 @@ class Optimize:
 
         tuned solver parameters (switch off presolve and set numeric focus)
 
+        :param alt_model: (optional) alternative model
+        :type alt_model: gurobipy.Model, if provided
         :return: solution
         """
+        model = self.gpm if alt_model is None else alt_model
+
         model.update()
         irr_gpm = model.copy()
         irr_gpm.params.numericfocus = 3
@@ -511,8 +555,8 @@ class Optimize:
         - reduced costs
         - shadow prices
 
-        :param alt_model: alternative (e.g. a pFBA solution)
-        :type alt_model: gurobipy.Model
+        :param alt_model: (optional) alternative model (e.g. pFBA model)
+        :type alt_model: gurobipy.Model, if provided
         :return: Optimization solution
         :rtype: Class Solution
         """

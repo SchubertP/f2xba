@@ -241,7 +241,7 @@ class RbaFunction:
         if len(self.parameters) > 0:
             parameters = SubElement(function, 'listOfParameters')
             for parameter, value in self.parameters.items():
-                SubElement(parameters, 'parameter', {'id': parameter, 'value': str(value)})
+                SubElement(parameters, 'parameter', {'id': parameter, 'value': str(round(value, 8))})
         return function
 
     def set_value(self, params):
