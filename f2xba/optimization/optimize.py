@@ -75,7 +75,6 @@ class Optimize:
         :param cobra_model: (optional) the corresponding cobra model
         :type cobra_model: cobra.core.model.Model if supplied
         """
-
         if not os.path.exists(fname):
             print(f'Error: {fname} not found!')
             return
@@ -110,8 +109,11 @@ class Optimize:
             cp_rdata['reaction_str'] = re.sub(r'\b' + f'{pf.M_}', '', record['reaction_str'])
             self.rdata[re.sub(f'^{pf.R_}', '', rid)] = cp_rdata
         self.net_rdata = self.extract_net_reaction_data(self.rdata)
-
         self.rids_catalyzed = self.get_rids_catalyzed()
+
+        sbml_parameters = self.m_dict['parameters']['value'].to_dict()
+        self.avg_enz_saturation = sbml_parameters.get('frac_enzyme_sat')
+        self.protein_per_gdw = sbml_parameters.get('frac_totprot_cdw')
 
     # COBRAPY MODEL RELATED
     def cp_report_model_size(self):

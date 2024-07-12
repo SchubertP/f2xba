@@ -46,9 +46,9 @@ class EcmResults(Results):
         super().__init__(optim, results, df_mpmf)
 
     def get_predicted_protein_data(self, solution):
-        """Extract relative protein mpmf wrt to total active protein for single solution
+        """Extract protein mass wrt to total protein mass for single solution
 
-        mpmf: 1000.0 * protein mass fraction i.e. (mg_protein/g_total_active)
+        mpmf: 1000.0 * protein mass fraction i.e. (mg_protein/g_total_protein)
 
         Protein concentration variables are in mg/gDW
         total_active_protein is a constraint imposed by an upper bound
@@ -66,13 +66,13 @@ class EcmResults(Results):
         for rid, mg_active_per_gdw in solution.fluxes.items():
             if re.match(pf.V_PC_, rid) and rid != pf.V_PC_total_active:
                 uid = re.sub(f'^{pf.V_PC_}', '', rid)
-                if uid in self.optim.uid2gene:
-                    label, name = self.optim.uid2gene[uid]
+                if uid in self.uid2gene:
+                    label, name = self.uid2gene[uid]
                 else:
                     label, name = [None, None]
-                mg_per_gdw = mg_active_per_gdw / enz_sat
-                prot_data[label] = [name, uid, mg_per_gdw]
-        cols = ['gene_name', 'uniprot', 'mg_per_gDW']
+                mpmf = mg_active_per_gdw / enz_sat / self.optim.protein_per_gdw
+                prot_data[label] = [name, uid, mpmf]
+        cols = ['gene_name', 'uniprot', 'mg_per_gP']
         df_prot_data = pd.DataFrame(prot_data.values(), index=list(prot_data), columns=cols)
         df_prot_data.index.name = 'gene'
         return df_prot_data
@@ -91,21 +91,21 @@ class EcmResults(Results):
                     exp_mpmf_cols = ['description', 'avg_mpmf', 'rank']
                     df_proteins = df[['uniprot', 'gene_name']].join(self.df_mpmf[exp_mpmf_cols])
                     df_proteins.rename(columns={'avg_mpmf': 'exp_avg_mpmf', 'rank': 'exp_rank'}, inplace=True)
-                    df_proteins = pd.concat([df_proteins, df['mg_per_gDW']], axis=1)
+                    df_proteins = pd.concat([df_proteins, df['mg_per_gP']], axis=1)
                     info_cols = 5
                 else:
-                    df_proteins = df[['uniprot', 'gene_name', 'mg_per_gDW']].copy()
+                    df_proteins = df[['uniprot', 'gene_name', 'mg_per_gP']].copy()
                     info_cols = 2
             else:
-                df_proteins = pd.concat([df_proteins, df['mg_per_gDW']], axis=1)
-            df_proteins.rename(columns={'mg_per_gDW': f'{condition}'}, inplace=True)
+                df_proteins = pd.concat([df_proteins, df['mg_per_gP']], axis=1)
+            df_proteins.rename(columns={'mg_per_gP': f'{condition}'}, inplace=True)
 
         mean = df_proteins.iloc[:, info_cols:].mean(axis=1).values
         stdev = df_proteins.iloc[:, info_cols:].std(axis=1).values
-        df_proteins.insert(info_cols, 'mean mg_per_gDW', mean)
+        df_proteins.insert(info_cols, 'mean mg_per_gP', mean)
         df_proteins.insert(info_cols + 1, 'stdev', stdev)
         df_proteins.index.name = 'gene'
-        df_proteins.sort_values(by='mean mg_per_gDW', ascending=False, inplace=True)
+        df_proteins.sort_values(by='mean mg_per_gP', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_proteins)+1))
         df_proteins.insert(info_cols, 'pred_rank', rank)
         return df_proteins

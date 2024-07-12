@@ -18,11 +18,9 @@ from .biocyc import BiocycData
 from .uniprot import UniprotData
 from .ncbi import NcbiData
 
-from .optimization.cp_ecm_opt import CobraEcmOptimization
-from .optimization.cp_rba_opt import CobraRbaOptimization
+from .optimization.ecm_opt import EcmOptimization
 
 from .optimization.gp_fba_opt import GurobiFbaOptimization
-from .optimization.gp_ecm_opt import GurobiEcmOptimization
 from .optimization.gp_rba_opt import GurobiRbaOptimization
 
 from .optimization.ecm_results import EcmResults

@@ -37,12 +37,23 @@ class Results(ABC):
         :type optim: CobraEcmOptimization or CobraRbaOptimization
         :param results: CobraPy optimization results across different media
         :type results: dict (key: str, val: cobra.core.solution.Solution)
-        :param df_mpmf: protein mass fractions in mg/g_total_active_protein
+        :param df_mpmf: protein mass fractions in mg/g_total_protein
         :type df_mpmf: pandas dataframe
         """
         self.optim = optim
         self.results = results
         self.df_mpmf = df_mpmf
+
+        if hasattr(optim, 'ecm_type'):
+            # get mapping from UniProt Id to gene label via gene reaction rule in protein concentration variables
+            self.uid2gene = {}
+            for rid, row in self.optim.m_dict['reactions'].iterrows():
+                if re.match(pf.V_PC_, rid) and type(row['fbcGeneProdAssoc']) is str:
+                    uid = re.sub(f'^{pf.V_PC_}', '', rid)
+                    gpid = re.sub('^assoc=', '', row['fbcGeneProdAssoc'])
+                    if gpid in self.optim.m_dict['fbcGeneProducts'].index:
+                        gp_data = self.optim.m_dict['fbcGeneProducts'].loc[gpid]
+                        self.uid2gene[uid] = [gp_data['label'], gp_data.get('name')]
 
     @abstractmethod
     def get_fluxes(self, solution):
@@ -137,7 +148,7 @@ class Results(ABC):
         return df_conc
 
     def report_proteomics_correlation(self):
-        """Report on correlation with experimental proteomics pmf.
+        """Report on correlation predicted vs experimental protein mass fraction (log scale).
 
         :return: Protein mass fractions for several conditions
         :rtype: pandas DataFrame
@@ -145,11 +156,17 @@ class Results(ABC):
         """
         df_proteins = self.collect_protein_results()
         for condition in self.results:
-            if condition in self.df_mpmf.columns:
-                genes = list(self.df_mpmf.index.intersection(df_proteins.index))
-                r_value, p_value = scipy.stats.pearsonr(df_proteins.loc[genes][condition].values,
-                                                        self.df_mpmf.loc[genes][condition].values)
-                print(f'{condition:25s}: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}')
+            if condition in self.df_mpmf:
+                exp_mpmfs = self.df_mpmf[condition].to_dict()
+                pred_mpmfs = df_proteins[condition].to_dict()
+                log_exp_mpmfs = []
+                log_pred_mpmfs = []
+                for gene, mpmf in pred_mpmfs.items():
+                    if mpmf != 0.0 and exp_mpmfs.get(gene, 0.0) != 0.0:
+                        log_exp_mpmfs.append(np.log(exp_mpmfs[gene]))
+                        log_pred_mpmfs.append(np.log(mpmf))
+                r_value, p_value = scipy.stats.pearsonr(log_exp_mpmfs, log_pred_mpmfs)
+                print(f'{condition:25s}: R\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} (pmf log scale)')
 
     def save_fluxes_to_escher(self, escher_dir, model_name):
         """Export net metabolic reaction fluxes (mmol/gDWh) to Escher compliant files.

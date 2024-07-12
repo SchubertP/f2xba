@@ -2,13 +2,11 @@
 
 Peter Schubert, 18.04.2024 (HHU, CCB)
 """
-from .cp_ecm_opt import CobraEcmOptimization
-from .cp_rba_opt import CobraRbaOptimization
+from .ecm_opt import EcmOptimization
 from .ecm_results import EcmResults
-from .rba_results import RbaResults
-from .gp_ecm_opt import GurobiEcmOptimization
+from .cp_rba_opt import CobraRbaOptimization
 from .gp_rba_opt import GurobiRbaOptimization
+from .rba_results import RbaResults
 
 
-__all__ = ['CobraEcmOptimization', 'EcmResults', 'CobraRbaOptimization', 'RbaResults',
-GurobiEcmOptimization, CobraRbaOptimization]
+__all__ = ['EcmOptimization', 'EcmResults', 'GurobiRbaOptimization',  CobraRbaOptimization, 'RbaResults']
