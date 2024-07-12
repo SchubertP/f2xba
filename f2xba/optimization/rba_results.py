@@ -182,27 +182,31 @@ class RbaResults(Results):
         """
         col_name = 'µmol_per_gDW' if conc else 'mg_per_gDW'
         df_proteins = None
+        info_cols = 0
         for condition, solution in self.results.items():
             df = self.get_predicted_protein_data(solution)
             if df_proteins is None:
                 if conc is False and self.df_mpmf is not None:
                     exp_mpmf_cols = ['gene_name', 'avg_mpmf', 'rank']
                     df_proteins = df[['uniprot', 'mw_kDa']].join(self.df_mpmf[exp_mpmf_cols])
+                    df_proteins.rename(columns={'avg_mpmf': 'exp_avg_mpmf', 'rank': 'exp_rank'}, inplace=True)
                     df_proteins = pd.concat([df_proteins, df[col_name]], axis=1)
+                    info_cols = 5
                 else:
                     df_proteins = df[['uniprot', 'mw_kDa', col_name]].copy()
+                    info_cols = 2
             else:
                 df_proteins = pd.concat([df_proteins, df[col_name]], axis=1)
             df_proteins.rename(columns={col_name: f'{condition}'}, inplace=True)
 
-        avg = df_proteins.iloc[:, -self.n_media:].sum(axis=1).values/self.n_media
-        stdev = df_proteins.iloc[:, -self.n_media:].std(axis=1).values
-        df_proteins.insert(len(df_proteins.columns) - self.n_media, f'mean {col_name}', avg)
-        df_proteins.insert(len(df_proteins.columns) - self.n_media, 'stdev', stdev)
+        mean = df_proteins.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_proteins.iloc[:, info_cols:].std(axis=1).values
+        df_proteins.insert(info_cols, f'mean {col_name}', mean)
+        df_proteins.insert(info_cols + 1, 'stdev', stdev)
         df_proteins.index.name = 'gene'
         df_proteins.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_proteins)+1))
-        df_proteins.insert(loc=len(df_proteins.columns)-self.n_media, column='predicted_rank', value=rank)
+        df_proteins.insert(info_cols, column='pred_rank', value=rank)
         return df_proteins
 
     def get_predicted_enzyme_usage(self, solution):
@@ -223,6 +227,7 @@ class RbaResults(Results):
     def collect_enzyme_results(self, conc=False):
         col_name = 'µmol_per_gDW' if conc else 'mg_per_gDW'
         df_enzymes = None
+        info_cols = 1
         for condition, solution in self.results.items():
             df = self.get_predicted_enzyme_usage(solution)
             if df_enzymes is None:
@@ -230,10 +235,10 @@ class RbaResults(Results):
             else:
                 df_enzymes = pd.concat([df_enzymes, df[col_name]], axis=1)
             df_enzymes.rename(columns={col_name: f'{condition}'}, inplace=True)
-        avg = df_enzymes.iloc[:, -self.n_media:].sum(axis=1).values / self.n_media
-        stdev = df_enzymes.iloc[:, -self.n_media:].std(axis=1).values
-        df_enzymes.insert(len(df_enzymes.columns) - self.n_media, f'mean {col_name}', avg)
-        df_enzymes.insert(len(df_enzymes.columns) - self.n_media, 'stdev', stdev)
+        mean = df_enzymes.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_enzymes.iloc[:, info_cols:].std(axis=1).values
+        df_enzymes.insert(info_cols, f'mean {col_name}', mean)
+        df_enzymes.insert(info_cols + 1, 'stdev', stdev)
         df_enzymes.index.name = 'enzyme'
         df_enzymes.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)
         return df_enzymes
@@ -275,6 +280,7 @@ class RbaResults(Results):
         """
         col_name = 'µmol_per_gDW' if conc else 'mg_per_gDW'
         df_rnas = None
+        info_cols = 1
         for condition, solution in self.results.items():
             df = self.get_predicted_rna_usage(solution)
             if df_rnas is None:
@@ -282,10 +288,10 @@ class RbaResults(Results):
             else:
                 df_rnas = pd.concat([df_rnas, df[col_name]], axis=1)
             df_rnas.rename(columns={col_name: f'{condition}'}, inplace=True)
-        avg = df_rnas.iloc[:, -self.n_media:].sum(axis=1).values / self.n_media
-        stdev = df_rnas.iloc[:, -self.n_media:].std(axis=1).values
-        df_rnas.insert(len(df_rnas.columns) - self.n_media, f'mean {col_name}', avg)
-        df_rnas.insert(len(df_rnas.columns) - self.n_media, 'stdev', stdev)
+        mean = df_rnas.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_rnas.iloc[:, info_cols:].std(axis=1).values
+        df_rnas.insert(info_cols, f'mean {col_name}', mean)
+        df_rnas.insert(info_cols + 1, 'stdev', stdev)
         df_rnas.index.name = 'rna'
         df_rnas.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)
         return df_rnas
@@ -323,6 +329,7 @@ class RbaResults(Results):
         """
         col_name = 'capacity mmolAA_per_gDW' if capacity else 'utilization'
         df_occupancy = None
+        info_cols = 0
         for condition, solution in self.results.items():
             df = self.get_occupancy(solution)
             if df_occupancy is None:
@@ -330,9 +337,9 @@ class RbaResults(Results):
             else:
                 df_occupancy = pd.concat([df_occupancy, df[col_name]], axis=1)
             df_occupancy.rename(columns={col_name: f'{condition}'}, inplace=True)
-        avg = df_occupancy.iloc[:, -self.n_media:].sum(axis=1).values / self.n_media
-        stdev = df_occupancy.iloc[:, -self.n_media:].std(axis=1).values
-        df_occupancy.insert(0, f'mean {col_name}', avg)
+        mean = df_occupancy.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_occupancy.iloc[:, info_cols:].std(axis=1).values
+        df_occupancy.insert(0, f'mean {col_name}', mean)
         df_occupancy.insert(1, 'stdev', stdev)
         df_occupancy.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)
         df_occupancy.index.name = 'cid'

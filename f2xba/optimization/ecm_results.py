@@ -83,27 +83,31 @@ class EcmResults(Results):
         :return:
         """
         df_proteins = None
+        info_cols = 0
         for condition, solution in self.results.items():
             df = self.get_predicted_protein_data(solution)
             if df_proteins is None:
                 if self.df_mpmf is not None:
                     exp_mpmf_cols = ['description', 'avg_mpmf', 'rank']
                     df_proteins = df[['uniprot', 'gene_name']].join(self.df_mpmf[exp_mpmf_cols])
+                    df_proteins.rename(columns={'avg_mpmf': 'exp_avg_mpmf', 'rank': 'exp_rank'}, inplace=True)
                     df_proteins = pd.concat([df_proteins, df['mg_per_gDW']], axis=1)
+                    info_cols = 5
                 else:
                     df_proteins = df[['uniprot', 'gene_name', 'mg_per_gDW']].copy()
+                    info_cols = 2
             else:
                 df_proteins = pd.concat([df_proteins, df['mg_per_gDW']], axis=1)
             df_proteins.rename(columns={'mg_per_gDW': f'{condition}'}, inplace=True)
 
-        avg = df_proteins.iloc[:, -self.n_media:].sum(axis=1).values/self.n_media
-        stdev = df_proteins.iloc[:, -self.n_media:].std(axis=1).values
-        df_proteins.insert(len(df_proteins.columns) - self.n_media, 'mean mg_per_gDW', avg)
-        df_proteins.insert(len(df_proteins.columns) - self.n_media, 'stdev', stdev)
+        mean = df_proteins.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_proteins.iloc[:, info_cols:].std(axis=1).values
+        df_proteins.insert(info_cols, 'mean mg_per_gDW', mean)
+        df_proteins.insert(info_cols + 1, 'stdev', stdev)
         df_proteins.index.name = 'gene'
         df_proteins.sort_values(by='mean mg_per_gDW', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_proteins)+1))
-        df_proteins.insert(len(df_proteins.columns) - self.n_media, 'predicted_rank', rank)
+        df_proteins.insert(info_cols, 'pred_rank', rank)
         return df_proteins
 
     def get_fluxes(self, solution):

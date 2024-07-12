@@ -42,7 +42,6 @@ class Results(ABC):
         """
         self.optim = optim
         self.results = results
-        self.n_media = len(results)
         self.df_mpmf = df_mpmf
 
     @abstractmethod
@@ -68,6 +67,7 @@ class Results(ABC):
         """
         cols = ['reaction_str', 'gpr', 'mmol_per_gDWh']
         df_fluxes = None
+        info_cols = 2
         for condition, solution in self.results.items():
             df = self.get_net_fluxes(solution) if net is True else self.get_fluxes(solution)
             if df_fluxes is None:
@@ -75,14 +75,14 @@ class Results(ABC):
             else:
                 df_fluxes = pd.concat([df_fluxes, df['mmol_per_gDWh']], axis=1)
             df_fluxes.rename(columns={'mmol_per_gDWh': f'{condition}'}, inplace=True)
-        avg = df_fluxes.iloc[:, -self.n_media:].sum(axis=1).values / self.n_media
-        stdev = df_fluxes.iloc[:, -self.n_media:].std(axis=1).values
-        df_fluxes.insert(len(df_fluxes.columns) - self.n_media, 'mean mmol_per_gDWh', avg)
-        df_fluxes.insert(len(df_fluxes.columns) - self.n_media, 'abs_mean mmol_per_gDWh', abs(avg))
-        df_fluxes.insert(len(df_fluxes.columns) - self.n_media, 'stdev', stdev)
+        mean = df_fluxes.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_fluxes.iloc[:, info_cols:].std(axis=1).values
+        df_fluxes.insert(info_cols, 'mean mmol_per_gDWh', mean)
+        df_fluxes.insert(info_cols + 1, 'abs_mean mmol_per_gDWh', abs(mean))
+        df_fluxes.insert(info_cols + 2, 'stdev', stdev)
         df_fluxes.sort_values(by='abs_mean mmol_per_gDWh', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_fluxes) + 1))
-        df_fluxes.insert(loc=len(df_fluxes.columns)-self.n_media, column='rank', value=rank)
+        df_fluxes.insert(info_cols, column='rank', value=rank)
         df_fluxes.index.name = 'rid'
         return df_fluxes
 
@@ -117,20 +117,22 @@ class Results(ABC):
         :rtype: pandas DataFrame
         """
         df_conc = None
+        info_cols = 0
         for condition, solution in self.results.items():
             df = self.get_predicted_species_conc(solution)
             if df_conc is None:
                 df_conc = df.copy()
+                info_cols = df_conc.shape[1] - 1
             else:
                 df_conc = pd.concat([df_conc, df['mmol_per_l']], axis=1)
             df_conc.rename(columns={'mmol_per_l': f'{condition}'}, inplace=True)
-        avg = df_conc.iloc[:, -self.n_media:].sum(axis=1).values / self.n_media
-        stdev = df_conc.iloc[:, -self.n_media:].std(axis=1).values
-        df_conc.insert(len(df_conc.columns) - self.n_media, 'mean mmol_per_l', avg)
-        df_conc.insert(len(df_conc.columns) - self.n_media, 'stdev', stdev)
+        mean = df_conc.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_conc.iloc[:, info_cols:].std(axis=1).values
+        df_conc.insert(info_cols, 'mean mmol_per_l', mean)
+        df_conc.insert(info_cols + 1, 'stdev', stdev)
         df_conc.sort_values(by='mean mmol_per_l', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_conc) + 1))
-        df_conc.insert(loc=len(df_conc.columns) - self.n_media, column='rank', value=rank)
+        df_conc.insert(info_cols, 'rank', rank)
         df_conc.index.name = 'mid'
         return df_conc
 
