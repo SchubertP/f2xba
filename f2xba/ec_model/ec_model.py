@@ -110,23 +110,24 @@ class EcModel:
             pm2totpm = self.get_modelled_protein_mass_fraction(pax_db_fname)
             print(f'modeled protein fraction {pm2totpm:.4f} g/g, based on {pax_db_fname}')
         else:
-            assert('pm2totpm' in general_params)
+            assert 'pm2totpm' in general_params, ("to determine modeled protein mass fraction, either provide in "
+                                                  "ECM parameters sheet 'general' a corresponding value in field "
+                                                  "'pm2totpm' of a PAXdb file-name in 'p_abundance_fname'")
             pm2totpm = general_params['pm2totpm']
 
-        protein_pool = p_total * pm2totpm * avg_enz_sat
-        print(f'protein constraint: {protein_pool*1000.0:.2f} mg/gDW, '
-              f'assuming avg enzyme saturation of {avg_enz_sat:.2f}')
+        protein_pool = p_total * pm2totpm
+        print(f'protein constraint: {protein_pool*1000.0:.2f} mg/gDW - modeled protein')
 
         self._add_total_protein_constraint(protein_pool)
-        self._reaction_enzyme_coupling()
+        self._reaction_enzyme_coupling(avg_enz_sat)
 
         # remove model components that are not used in the model
         self.model.clean()
 
         # add some parameter values for reference (after model.clean() so they are not removed)
-        add_params = {'frac_prot_totprot': {'value': pm2totpm, 'name': 'protein mass fraction modelled'},
-                      'frac_totprot_cdw': {'value': p_total, 'name': 'protein mass fraction of total dry mass'},
-                      'frac_enzyme_sat': {'value': avg_enz_sat, 'name': 'average enzyme saturation level'}}
+        add_params = {'gmodeledP_per_gP': {'value': pm2totpm, 'name': 'protein mass fraction modeled'},
+                      'gP_per_gDW': {'value': p_total, 'name': 'protein mass fraction of total dry mass'},
+                      'avg_enz_sat': {'value': avg_enz_sat, 'name': 'average enzyme saturation level'}}
         for pid, p_data in add_params.items():
             self.model.add_parameter(pid, p_data)
 
@@ -182,7 +183,7 @@ class EcModel:
         for gpid in used_enz_gps:
             uid = self.model.gps[gpid].uid
             p = self.model.proteins[uid]
-            prot_sid = pf.M_prot_ + valid_sbml_sid(uid) + f'_{p.cid}'
+            prot_sid = pf.C_prot_ + valid_sbml_sid(uid)
             p.link_sid(prot_sid)
             prot_metaid = f'meta_prot_{valid_sbml_sid(uid)}'
             prot_annot = f'bqbiol:is, uniprot/{uid}'
@@ -214,7 +215,7 @@ class EcModel:
                 for locus in enz.composition:
                     uid = self.model.locus2uid[locus]
                     p = self.model.proteins[uid]
-                    prot_sid = pf.M_prot_ + valid_sbml_sid(uid) + f'_{rid}_{p.cid}'
+                    prot_sid = pf.C_prot_ + valid_sbml_sid(uid) + f'_{rid}'
                     p.link_sid(prot_sid)
                     prot_metaid = f'meta_prot_{valid_sbml_sid(uid)}_{rid}'
                     prot_annot = f'bqbiol:is, uniprot/{uid}'
@@ -276,7 +277,7 @@ class EcModel:
                         dir_r.kcatsr = None
 
     def _add_total_protein_constraint(self, total_protein):
-        """add total protein constraint to the enzyme constraint model.
+        """add total modeled protein constraint to the enzyme constraint model.
 
         add protein pool species to the model
         add protein drain reactions to the model
@@ -284,28 +285,27 @@ class EcModel:
 
         protein concentration in model has units of mg/gDW (i.e. 1000.0 * pmf)
 
-        :param total_protein: total active protein mass balance in g/gDW
+        :param total_protein: total modeled protein mass in g/gDW
         :type total_protein: float
         """
         # add total protein pool species in default compartment
-        pool_cid = sorted([(count, cid) for cid, count in self.model.get_used_cids().items()])[-1][1]
-        pool_sid = f'{pf.M_prot_pool}_{pool_cid}'
+        pool_sid = f'{pf.C_prot_pool}'
         pool_name = 'total protein pool'
         cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant']
-        df_add_species = pd.DataFrame([[pool_name, pool_cid, False, False, False]],
+        df_add_species = pd.DataFrame([[pool_name, self.model.main_cid, False, False, False]],
                                       index=[pool_sid], columns=cols)
         self.model.add_species(df_add_species)
 
         # add total protein pool exchange reaction
         protein_vars = {}
-        draw_rid = pf.V_PC_total_active
-        draw_name = f'total concentration active protein'
-        zero_mg_pid = self.model.get_fbc_bnd_pid(0.0, 'mg_per_gDW', 'zero_mass_conc_mg')
-        total_prot_mg_pid = self.model.get_fbc_bnd_pid(total_protein * 1000.0, 'mg_per_gDW', 'conc_active_protein_mg')
+        draw_rid = pf.V_PC_total
+        draw_name = f'total concentration modeled protein'
+        zero_mg_pid = self.model.get_fbc_bnd_pid(0.0, 'mg_per_gDW', 'zero_mass_conc_mg_per_gDW')
+        total_prot_mg_pid = self.model.get_fbc_bnd_pid(total_protein * 1000.0, 'mg_per_gDW', 'conc_protein_mg_per_gDW')
         protein_vars[draw_rid] = [draw_name, f' => {pool_sid}', zero_mg_pid, total_prot_mg_pid, None, 'protein']
 
         # add protein drain reactions - supporting MOMENT with specific protein split in protein species per reaction
-        max_conc_mg_pid = self.model.get_fbc_bnd_pid(MAX_CONC_PROT, 'mg_per_gDW', 'max_conc_prot_mg')
+        max_conc_mg_pid = self.model.get_fbc_bnd_pid(MAX_CONC_PROT, 'mg_per_gDW', 'max_conc_prot_mg_per_gDW')
 
         # create only for used proteins
         used_enz_gps = self._get_enzyme_gene_products()
@@ -356,26 +356,33 @@ class EcModel:
                     p_rel_model += rel_mass
         return p_rel_model / p_rel_total
 
-    def _reaction_enzyme_coupling(self):
+    def _reaction_enzyme_coupling(self, avg_enz_sat):
         """Couple reactions with enzyme/protein requirement via kcats.
 
         applicable to enzyme catalyzed reactions.
         from reaction get enzyme and corresponding kcat
         convert kcat from s-1 to h-1
-        scaled total enzyme kcat by number of active sites
+        scaled total enzyme kcat by number of active sites and average enzyme saturation
 
-        protein constraints are in units of mg/gDW
-        1/kcat [s] * 1/3600 [h/s]  * 1/n_AS * enz_stoic * flux [mmol/gDWh] * MW [mg/mmol] = 1 * V_PC_xxxx [mg/gDW]
+        protein constraint for a specific protein:
+          reaction flux [mmol/gDWh] ≤ kcat [1/s] * 3600 [s/h] * n_AS * stoic * avg_enz_sat * P_conc [mg/gDW]
+                                      * 1/MW [mmol/mg]
+          - stoic: number of protein copies in the enzyme
+          - n_AS: number of active sites
+          - MW: protein molecular weight in Da = g/mol = mg/mmol
+        Except for MOMENT we assume equality to optimize protein allocation
+          constraint per protein: C_prot_uid couples reaction flux R_xxx with protein concentration V_PC_uid
+          C_prot_uid: (-1/(kcat * 3600 * n_AS * avg_enz_sat) * stoic * MW) * R_xxx + 1 * V_PC_uid = (≤) 0
 
-        from enzyme get proteins and their stoichiometry in the enzyme complex
-        add to reaction reactants the proteins with 1/kcat_per_h scaled by stoic.
+        :param avg_enz_sat: average enzyme saturation applicable to all reactions
+        :type avg_enz_sat: float
         """
-        # scale = 1e3
         for r in self.model.reactions.values():
-            assert (len(r.enzymes) <= 1)
+            assert len(r.enzymes) <= 1, ('Something went wrong, at this stage of isoreactions, we expect a maximum'
+                                         'of one enzyme catalyzing this reaction')
             if len(r.enzymes) == 1 and r.kcat is not None:
                 e = self.model.enzymes[r.enzymes[0]]
-                enz_kcat_per_h = r.kcat * 3600.0 * e.active_sites
+                enz_kcat_per_h = r.kcat * 3600.0 * e.active_sites * avg_enz_sat
 
                 for locus, stoic in e.composition.items():
                     uid = self.model.locus2uid[locus]
@@ -384,7 +391,7 @@ class EcModel:
                     # in MOMENT model, a promiscuous enzyme/protein has specific proteins per reactions
                     # e.g. b2215, ompC, P06996: this protein is linked to all (reversible) reactions it catalyzes
                     #  reactions R_23CCMPtex_iso4 and R_23CCMPtex_iso4_REV both coupled to constraint
-                    #  M_prot_P06996_R_23CAMPtex_iso4_e
+                    #  C_prot_P06996_R_23CAMPtex_iso4
                     if len(p.linked_sids) == 1:
                         prot_sid = list(p.linked_sids)[0]
                     else:
@@ -393,8 +400,7 @@ class EcModel:
                             if rev_rid in linked_sid:
                                 prot_sid = linked_sid
                                 break
-                    # r.reactants[prot_sid] = stoic / enz_kcat_per_h * scale
-                    r.reactants[prot_sid] = stoic / enz_kcat_per_h * p.mw
+                    r.reactants[prot_sid] = (stoic / enz_kcat_per_h) * p.mw
 
     def _rescale_reactions(self, df_rescale):
         """rescale reactions (e.g. Biomass) as per ecYeast7 (Sanchez, 2017)

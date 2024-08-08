@@ -147,9 +147,11 @@ class Results(ABC):
         df_conc.index.name = 'mid'
         return df_conc
 
-    def report_proteomics_correlation(self):
+    def report_proteomics_correlation(self, scale='lin'):
         """Report on correlation predicted vs experimental protein mass fraction (log scale).
 
+        :param scale: 'lin' or 'log' scale correlation (optional, default 'lin')
+        :type scale: str, optional
         :return: Protein mass fractions for several conditions
         :rtype: pandas DataFrame
         :rtype: pandas DataFrame
@@ -159,14 +161,22 @@ class Results(ABC):
             if condition in self.df_mpmf:
                 exp_mpmfs = self.df_mpmf[condition].to_dict()
                 pred_mpmfs = df_proteins[condition].to_dict()
-                log_exp_mpmfs = []
-                log_pred_mpmfs = []
-                for gene, mpmf in pred_mpmfs.items():
-                    if mpmf != 0.0 and exp_mpmfs.get(gene, 0.0) != 0.0:
-                        log_exp_mpmfs.append(np.log(exp_mpmfs[gene]))
-                        log_pred_mpmfs.append(np.log(mpmf))
-                r_value, p_value = scipy.stats.pearsonr(log_exp_mpmfs, log_pred_mpmfs)
-                print(f'{condition:25s}: R\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} (pmf log scale)')
+
+                genes = set(exp_mpmfs.keys()).intersection(set(pred_mpmfs.keys()))
+                x = []
+                y = []
+                if scale == 'lin':
+                    for gene in genes:
+                        x.append(exp_mpmfs[gene])
+                        y.append(pred_mpmfs[gene])
+                else:
+                    for gene in genes:
+                        if pred_mpmfs[gene] != 0.0 and exp_mpmfs[gene] != 0.0:
+                            x.append(np.log(exp_mpmfs[gene]))
+                            y.append(np.log(pred_mpmfs[gene]))
+                r_value, p_value = scipy.stats.pearsonr(x, y)
+                print(f'{condition:25s}: R\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
+                      f'({len(x)} proteins {scale} scale)')
 
     def save_fluxes_to_escher(self, escher_dir, model_name):
         """Export net metabolic reaction fluxes (mmol/gDWh) to Escher compliant files.

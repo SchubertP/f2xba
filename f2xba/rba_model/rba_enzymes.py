@@ -10,8 +10,6 @@ from xml.etree.ElementTree import parse, ElementTree, Element, SubElement, inden
 
 from ..utils.rba_utils import get_species_refs_from_xml, get_species_refs_from_str
 
-DEFAULT_ENZ_SATURATION = 1.0
-
 
 class RbaEnzymes:
 
@@ -124,7 +122,7 @@ class RbaEnzymes:
             fids[r_dir] = fid
         return fids
 
-    def from_xba(self, general_params, xba_model, parameters, cid_mappings, medium):
+    def from_xba(self, avg_enz_sat, xba_model, parameters, cid_mappings, medium):
         """Configure Enzymes based on RBA sepecific parameters.
 
         iso-reaction kcats (s-1) are converted to enzyme efficiencies (h-1) considering and
@@ -141,8 +139,8 @@ class RbaEnzymes:
             - RBA: C_ER_<ridx> coupled with -1 to reaction rid
             - TFBA: C_ER_<ridx> coupled with +1 to reaction rid_REV
 
-        :param general_params: gemeral RBA parameters loaded from file
-        :type general_params: dict
+        :param avg_enz_sat: everage enzyme saturation
+        :type avg_enz_sat: float
         :param xba_model: xba model based on genome scale metabolic model
         :type xba_model: Class XbaModel
         :param parameters: RBA model parameters
@@ -152,7 +150,7 @@ class RbaEnzymes:
         :param medium: Medium definition
         :type medium: class RbaMedium
         """
-        self.avg_enz_sat = general_params.get('avg_enz_sat', DEFAULT_ENZ_SATURATION)
+        self.avg_enz_sat = avg_enz_sat
         self.uptake_rcids = cid_mappings['uptake_rcids']
         medium_cid = cid_mappings['medium_cid']
 

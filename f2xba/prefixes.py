@@ -12,12 +12,14 @@ V_ = 'V_'         # general variable prefix, if not reaction
 C_ = 'C_'         # general constraint prefix
 
 # variable prefixes - ECM related
-V_PC_ = f'{V_}PC_'                             # protein concentration
-V_PC_total_active = f'{V_}PC_total_active'    # total active protein
+V_PC_ = f'{V_}PC_'                           # protein concentration
+V_PC_total = f'{V_}PC_total'                 # total protein (modeled)
+V_PSLACK_ = f'{V_}PSLACK_'                   # positive protein concentration slack
+V_NSLACK_ = f'{V_}NSLACK_'                   # negative protein concentration slack
 
 # constraint prefixes - ECM related
-M_prot_ = f'{M_}prot_'            # protein concentration
-M_prot_pool = f'{M_}prot_pool'  # total protein pool
+C_prot_ = f'{C_}prot_'            # protein concentration
+C_prot_pool = f'{C_}prot_pool'  # total protein pool
 
 # variable prefixes - RBA related
 R_PROD_ = f'{R_}PROD_'    # production machinery reaction

@@ -19,9 +19,9 @@ from .uniprot import UniprotData
 from .ncbi import NcbiData
 
 from .optimization.ecm_opt import EcmOptimization
-
 from .optimization.gp_fba_opt import GurobiFbaOptimization
 from .optimization.gp_rba_opt import GurobiRbaOptimization
+from .optimization.cp_rba_opt import CobraRbaOptimization
 
 from .optimization.ecm_results import EcmResults
 from .optimization.rba_results import RbaResults

@@ -70,6 +70,7 @@ class XbaModel:
         self.init_assigns = ({symbol_id: SbmlInitialAssignment(row)
                              for symbol_id, row in model_dict['initAssign'].iterrows()}
                              if 'initAssign' in model_dict else None)
+        self.main_cid = model_dict['species']['compartment'].value_counts().index[0]
 
         self.cofactor_flag = True
         self.uid2gp = {}

@@ -36,7 +36,7 @@ XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
 
 class CobraRbaOptimization(Optimize):
 
-    def __init__(self, cobra_model, fname):
+    def __init__(self, fname, cobra_model):
         super().__init__(fname, cobra_model)
 
         required = {'species', 'reactions', 'unitDefs', 'funcDefs', 'initAssign', 'parameters', 'compartments'}

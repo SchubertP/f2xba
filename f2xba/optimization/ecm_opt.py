@@ -39,12 +39,10 @@ class EcmOptimization(Optimize):
         """
         if self.is_gpm:
             for constr in self.gpm.getConstrs():
-                if re.match(pf.M_prot_, constr.ConstrName) and re.match(pf.M_prot_pool, constr.ConstrName) is None:
+                if re.match(pf.C_prot_, constr.ConstrName) and re.match(pf.C_prot_pool, constr.ConstrName) is None:
                     constr.sense = '>'
         else:
             for constr in self.model.constraints:
-                constr_id = re.sub(pf.M_, '', pf.M_prot_)
-                prot_pool_id = re.sub(pf.M_, '', pf.M_prot_pool)
-                if re.match(constr_id, constr.name) and re.match(prot_pool_id, constr.name) is None:
+                if re.match(pf.C_prot_, constr.name) and re.match(pf.C_prot_pool, constr.name) is None:
                     constr.ub = 1000.0
         print(f'MOMENT protein constraints configured ≥ 0')

@@ -163,12 +163,12 @@ class RbaResults(Results):
 
         cols = ['uniprot', 'mw_kDa', 'µmol_per_gDW', 'mg_per_gDW']
         df_prot_data = pd.DataFrame(prot_data.values(), index=list(prot_data), columns=cols)
-        total_gprot_per_gdw = df_prot_data['mg_per_gDW'].sum() / 1000.0
-        df_prot_data['mg_per_gProt'] = df_prot_data['mg_per_gDW'] / total_gprot_per_gdw
+        total_gp_per_gdw = df_prot_data['mg_per_gDW'].sum() / 1000.0
+        df_prot_data['mg_per_gP'] = df_prot_data['mg_per_gDW'] / total_gp_per_gdw
         df_prot_data.index.name = 'gene'
         return df_prot_data
 
-    def collect_protein_results(self, conc=False):
+    def collect_protein_results(self, units='mg_per_gP'):
         """Collect protein mass fractions across several conditions.
 
         From rba solutions, extract protein mass fractions or concentrations
@@ -177,34 +177,40 @@ class RbaResults(Results):
         In case of protein mass fractions, add information of experimental
         proteomics (if provided)
 
-        :return: Protein mass fractions for several conditions
+        :param units: concentration units, 'mg_per_gP', 'mg_per_gDW' or 'µmol_per_gDW'
+        :type units: str, optional, default 'mg_per_gP'
+        :return: Protein concentration for several conditions
         :rtype: pandas DataFrame
         """
-        col_name = 'µmol_per_gDW' if conc else 'mg_per_gDW'
+        supported_units = {'mg_per_gP', 'mg_per_gDW', 'µmol_per_gDW'}
+        if units not in supported_units:
+            print(f'{units} not support, select any of {supported_units}')
+            return None
+
         df_proteins = None
         info_cols = 0
         for condition, solution in self.results.items():
             df = self.get_predicted_protein_data(solution)
             if df_proteins is None:
-                if conc is False and self.df_mpmf is not None:
+                if units == 'mg_per_gP' and self.df_mpmf is not None:
                     exp_mpmf_cols = ['gene_name', 'avg_mpmf', 'rank']
                     df_proteins = df[['uniprot', 'mw_kDa']].join(self.df_mpmf[exp_mpmf_cols])
                     df_proteins.rename(columns={'avg_mpmf': 'exp_avg_mpmf', 'rank': 'exp_rank'}, inplace=True)
-                    df_proteins = pd.concat([df_proteins, df[col_name]], axis=1)
+                    df_proteins = pd.concat([df_proteins, df[units]], axis=1)
                     info_cols = 5
                 else:
-                    df_proteins = df[['uniprot', 'mw_kDa', col_name]].copy()
+                    df_proteins = df[['uniprot', 'mw_kDa', units]].copy()
                     info_cols = 2
             else:
-                df_proteins = pd.concat([df_proteins, df[col_name]], axis=1)
-            df_proteins.rename(columns={col_name: f'{condition}'}, inplace=True)
+                df_proteins = pd.concat([df_proteins, df[units]], axis=1)
+            df_proteins.rename(columns={units: f'{condition}'}, inplace=True)
 
         mean = df_proteins.iloc[:, info_cols:].mean(axis=1).values
         stdev = df_proteins.iloc[:, info_cols:].std(axis=1).values
-        df_proteins.insert(info_cols, f'mean {col_name}', mean)
+        df_proteins.insert(info_cols, f'mean {units}', mean)
         df_proteins.insert(info_cols + 1, 'stdev', stdev)
         df_proteins.index.name = 'gene'
-        df_proteins.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)
+        df_proteins.sort_values(by=f'mean {units}', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_proteins)+1))
         df_proteins.insert(info_cols, column='pred_rank', value=rank)
         return df_proteins
@@ -224,23 +230,37 @@ class RbaResults(Results):
         df_enz_usage = pd.DataFrame(enz_usage.values(), index=list(enz_usage), columns=cols)
         return df_enz_usage
 
-    def collect_enzyme_results(self, conc=False):
-        col_name = 'µmol_per_gDW' if conc else 'mg_per_gDW'
+    def collect_enzyme_results(self, units='mg_per_gDW'):
+        """Collect enzyme concentrations across several conditions.
+
+        From rba solutions, extract enzyme mass fractions or concentrations
+        across conditions.
+
+        :param units: concentration units, 'mg_per_gDW' or 'µmol_per_gDW'
+        :type units: str, optional, default 'mg_per_gDW'
+        :return: enzyme concentration for several conditions
+        :rtype: pandas DataFrame
+        """
+        supported_units = {'mg_per_gDW', 'µmol_per_gDW'}
+        if units not in supported_units:
+            print(f'{units} not support, select any of {supported_units}')
+            return None
+
         df_enzymes = None
         info_cols = 1
         for condition, solution in self.results.items():
             df = self.get_predicted_enzyme_usage(solution)
             if df_enzymes is None:
-                df_enzymes = df[['mw_kDa', col_name]].copy()
+                df_enzymes = df[['mw_kDa', units]].copy()
             else:
-                df_enzymes = pd.concat([df_enzymes, df[col_name]], axis=1)
-            df_enzymes.rename(columns={col_name: f'{condition}'}, inplace=True)
+                df_enzymes = pd.concat([df_enzymes, df[units]], axis=1)
+            df_enzymes.rename(columns={units: f'{condition}'}, inplace=True)
         mean = df_enzymes.iloc[:, info_cols:].mean(axis=1).values
         stdev = df_enzymes.iloc[:, info_cols:].std(axis=1).values
-        df_enzymes.insert(info_cols, f'mean {col_name}', mean)
+        df_enzymes.insert(info_cols, f'mean {units}', mean)
         df_enzymes.insert(info_cols + 1, 'stdev', stdev)
         df_enzymes.index.name = 'enzyme'
-        df_enzymes.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)
+        df_enzymes.sort_values(by=f'mean {units}', ascending=False, inplace=True)
         return df_enzymes
 
     def get_predicted_rna_usage(self, solution):
@@ -272,28 +292,37 @@ class RbaResults(Results):
         df_rna_data.index.name = 'gene'
         return df_rna_data
 
-    def collect_rna_results(self, conc=False):
-        """
+    def collect_rna_results(self, units='mg_per_gDW'):
+        """Collect RNA concentrations across several conditions.
 
-        :param conc:
-        :return:
+        From rba solutions, extract rna mass fractions or concentrations
+        across conditions.
+
+        :param units: concentration units, 'mg_per_gDW' or 'µmol_per_gDW'
+        :type units: str, optional, default 'mg_per_gDW'
+        :return: Rna concentration for several conditions
+        :rtype: pandas DataFrame
         """
-        col_name = 'µmol_per_gDW' if conc else 'mg_per_gDW'
+        supported_units = {'mg_per_gDW', 'µmol_per_gDW'}
+        if units not in supported_units:
+            print(f'{units} not support, select any of {supported_units}')
+            return None
+
         df_rnas = None
         info_cols = 1
         for condition, solution in self.results.items():
             df = self.get_predicted_rna_usage(solution)
             if df_rnas is None:
-                df_rnas = df[['mw_kDa', col_name]].copy()
+                df_rnas = df[['mw_kDa', units]].copy()
             else:
-                df_rnas = pd.concat([df_rnas, df[col_name]], axis=1)
-            df_rnas.rename(columns={col_name: f'{condition}'}, inplace=True)
+                df_rnas = pd.concat([df_rnas, df[units]], axis=1)
+            df_rnas.rename(columns={units: f'{condition}'}, inplace=True)
         mean = df_rnas.iloc[:, info_cols:].mean(axis=1).values
         stdev = df_rnas.iloc[:, info_cols:].std(axis=1).values
-        df_rnas.insert(info_cols, f'mean {col_name}', mean)
+        df_rnas.insert(info_cols, f'mean {units}', mean)
         df_rnas.insert(info_cols + 1, 'stdev', stdev)
         df_rnas.index.name = 'rna'
-        df_rnas.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)
+        df_rnas.sort_values(by=f'mean {units}', ascending=False, inplace=True)
         return df_rnas
 
     @staticmethod

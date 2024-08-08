@@ -23,6 +23,7 @@ from .initital_assignments import InitialAssignments
 import f2xba.prefixes as pf
 
 DEFAULT_GROWTH_RATE = 1.0   # h-1
+DEFAULT_ENZ_SATURATION = 1.0
 MAX_ENZ_CONC = 10           # mmol/gDW
 MAX_MM_PROCESSING_FLUX = 10  # in µmol per gDW per h
 MAX_DENSITY_SLACK = 10      # maximum denisty slack in mmol AA per gDW
@@ -77,6 +78,7 @@ class RbaModel:
         self.mmid2mm = {}
         self.initial_assignments = InitialAssignments(self.parameters)
         self.parameter_values = {}
+        self.avg_enz_sat = None
 
     def get_dummy_translation_targets(self, rba_params):
         """get translation targets for dummy proteins
@@ -289,6 +291,7 @@ class RbaModel:
             return False
 
         general_params = rba_params['general']['value'].to_dict()
+        self.avg_enz_sat = general_params.get('avg_enz_sat', DEFAULT_ENZ_SATURATION)
 
         self.prepare_xba_model(rba_params)
 
@@ -309,7 +312,7 @@ class RbaModel:
             self.rnas.from_xba(rba_params, self.model, self.cid_mappings)
         self.proteins.from_xba(rba_params, self.model, self.cid_mappings)
         self.add_dummy_proteins()
-        self.enzymes.from_xba(general_params, self.model, self.parameters, self.cid_mappings, self.medium)
+        self.enzymes.from_xba(self.avg_enz_sat, self.model, self.parameters, self.cid_mappings, self.medium)
         self.processes.from_xba(rba_params, self)
 
         print(f'{len(self.parameters.functions):4d} functions, {len(self.parameters.aggregates):4d} aggregates')
@@ -391,6 +394,11 @@ class RbaModel:
         # self._xba_unblock_exchange_reactions()
         self.initial_assignments.xba_implementation(self.model)
         self.model.clean(protect_ids)
+
+        # add some parameter values for reference (after model.clean() so they are not removed)
+        add_params = {'avg_enz_sat': {'value': self.avg_enz_sat, 'name': 'average enzyme saturation level'}}
+        for pid, p_data in add_params.items():
+            self.model.add_parameter(pid, p_data)
 
         # modify some model attributs and create L3V2 SBML model -
         #  also set fbcStrict to False to allow immediate assignments

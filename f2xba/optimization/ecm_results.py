@@ -51,26 +51,24 @@ class EcmResults(Results):
         mpmf: 1000.0 * protein mass fraction i.e. (mg_protein/g_total_protein)
 
         Protein concentration variables are in mg/gDW
-        total_active_protein is a constraint imposed by an upper bound
+        total_protein is a constraint imposed by an upper bound
         Note: total cellular protein mass is part of cell_dry_weight, e.g. 57%
                   (other major parts would be RNA, lipids, DNA)
               total modeled protein mass is part of total cellular protein mass, e.g. 52.5%
-              total active modeled protein mass is part of total modeled protein mass (scaled by avg. enz sat)
 
         :param solution: CobraPy Solution Object
         :type solution: cobra.core.solution.Solution
         :return:
         """
         prot_data = {}
-        enz_sat = self.optim.avg_enz_saturation
         for rid, mg_active_per_gdw in solution.fluxes.items():
-            if re.match(pf.V_PC_, rid) and rid != pf.V_PC_total_active:
+            if re.match(pf.V_PC_, rid) and rid != pf.V_PC_total:
                 uid = re.sub(f'^{pf.V_PC_}', '', rid)
                 if uid in self.uid2gene:
                     label, name = self.uid2gene[uid]
                 else:
                     label, name = [None, None]
-                mpmf = mg_active_per_gdw / enz_sat / self.optim.protein_per_gdw
+                mpmf = mg_active_per_gdw / self.optim.protein_per_gdw
                 prot_data[label] = [name, uid, mpmf]
         cols = ['gene_name', 'uniprot', 'mg_per_gP']
         df_prot_data = pd.DataFrame(prot_data.values(), index=list(prot_data), columns=cols)
@@ -78,9 +76,14 @@ class EcmResults(Results):
         return df_prot_data
 
     def collect_protein_results(self):
-        """
+        """Collect protein concentration across different conditions.
 
-        :return:
+        Protein concentrations in units as mg protein per g total protein (mpmf)
+        In case of proteomics data provided, average mpmf of proteomics data across
+        condition is added tho the table for reference.
+
+        :return: Protein concentratino results for different conditions
+        :rtype: pandas DataFrame
         """
         df_proteins = None
         info_cols = 0

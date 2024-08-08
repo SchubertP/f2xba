@@ -112,8 +112,9 @@ class Optimize:
         self.rids_catalyzed = self.get_rids_catalyzed()
 
         sbml_parameters = self.m_dict['parameters']['value'].to_dict()
-        self.avg_enz_saturation = sbml_parameters.get('frac_enzyme_sat')
-        self.protein_per_gdw = sbml_parameters.get('frac_totprot_cdw')
+        self.avg_enz_saturation = sbml_parameters.get('avg_enz_sat')
+        self.protein_per_gdw = sbml_parameters.get('gP_per_gDW')
+        self.modeled_protein_mf = sbml_parameters.get('gmodeledP_per_gP')
 
     # COBRAPY MODEL RELATED
     def cp_report_model_size(self):
@@ -165,6 +166,10 @@ class Optimize:
 
         # set model parameters
         gpm.setParam('OutputFlag', 0)
+        # CobraPy default Feasibility
+        gpm.params.FeasibilityTol = 1e-7  # 1e-6 default
+        gpm.params.OptimalityTol = 1e-7  # 1e-6 default
+        gpm.params.IntFeasTol = 1e-7  # 1e-5 default
 
         # add variables to the gurobi model, with suppport of binary variables
         self.var_id2gpm = {}
@@ -284,7 +289,7 @@ class Optimize:
         e.g. for PFK_iso1:     'M_2pg_c => M_adp_c + M_fdp_c + M_h_c'
         e.g. for PFK_iso1_REV: 'M_adp_c + M_fdp_c + M_h_c => M_2pg_c'
 
-        Exclude constraints (starting with 'C_') and protein constraints 'M_prot_'
+        Exclude constraints (starting with 'C_')
 
         :param rdata: reaction data
         :type rdata: pandas Series
@@ -294,12 +299,12 @@ class Optimize:
         lparts = []
         rparts = []
         for sid, stoic in get_srefs(rdata['reactants']).items():
-            if re.match(pf.C_, sid) is None and re.match(pf.M_prot_, sid) is None:
+            if re.match(pf.C_, sid) is None:
                 # drop stoichiometric coefficients that are 1.0
                 stoic_str = f'{round(stoic, 4)} ' if stoic != 1.0 else ''
                 lparts.append(f'{stoic_str}{sid}')
         for sid, stoic in get_srefs(rdata['products']).items():
-            if re.match(pf.C_, sid) is None and re.match(pf.M_prot_, sid) is None:
+            if re.match(pf.C_, sid) is None:
                 stoic_str = f'{round(stoic, 4)} ' if stoic != 1.0 else ''
                 rparts.append(f'{stoic_str}{sid}')
         dirxn = ' -> ' if rdata['reversible'] else ' => '
