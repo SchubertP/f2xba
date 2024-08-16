@@ -617,7 +617,7 @@ class Optimize:
             pfba_gpm.update()
             vars_gpm = [var for var in pfba_gpm.getVars()]
             pfba_objective = gp.LinExpr(np.ones(len(vars_gpm)), vars_gpm)
-            pfba_gpm.setObjective(pfba_objective, 1)
+            pfba_gpm.setObjective(pfba_objective, gp.GRB.MINIMIZE)
 
             # optimize and collect results (without error handling)
             pfba_gpm.optimize()
@@ -663,10 +663,10 @@ class Optimize:
             for rid in selected_rids:
                 var = fva_gpm.getVarByName(rid)
 
-                fva_gpm.setObjective(var, 1)
+                fva_gpm.setObjective(var, gp.GRB.MINIMIZE)
                 min_flux = self.optimize(fva_gpm).objective_value
 
-                fva_gpm.setObjective(var, -1)
+                fva_gpm.setObjective(var, gp.GRB.MAXIMIZE)
                 max_flux = self.optimize(fva_gpm).objective_value
                 results[re.sub('^R_', '', rid)] = [min_flux, max_flux]
 

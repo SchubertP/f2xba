@@ -13,6 +13,12 @@ import re
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+# Gurobipy should not be a hard requirement, unless used in this context
+try:
+    import gurobipy as gp
+except ImportError:
+    gp = None
+    pass
 
 import f2xba.prefixes as pf
 from .optimize import Optimize, status2text
@@ -101,7 +107,7 @@ class EcmOptimization(Optimize):
         self.gpm.update()
         self.orig_coeffs = {}
 
-    def gp_fit_kcats(self, proteins_mg_per_gdw, min_scale_factor=0.001):
+    def gp_fit_kcats(self, proteins_mg_per_gdw, max_scale_factor=1000.0):
 
         # create mapping of gene to uniprot id based on V_PC_xxxx variables
         gene2uid = {}
@@ -117,7 +123,8 @@ class EcmOptimization(Optimize):
         self.gpm.update()
         slack_gpm = self.gpm.copy()
 
-        # add slack variables (positive and negative - for now)
+        # add slack variables (positive and negative)
+        slack_vars = []
         for gene, mg_per_gdw in proteins_mg_per_gdw.items():
             uid = gene2uid[gene]
 
@@ -129,36 +136,60 @@ class EcmOptimization(Optimize):
             # create positive and negative slack variables for protein concentrations
             pslack_var = slack_gpm.addVar(lb=0.0, ub=100, vtype='C', name=f'{pf.V_PSLACK_}{uid}')
             nslack_var = slack_gpm.addVar(lb=0.0, ub=100, vtype='C', name=f'{pf.V_NSLACK_}{uid}')
+            slack_vars.append(pslack_var)
+            slack_vars.append(nslack_var)
 
             # couple pos/neg slack variable with protein concentration constraint
             constr = slack_gpm.getConstrByName(f'{pf.C_prot_}{uid}')
             slack_gpm.chgCoeff(constr, pslack_var, 1.0)
             slack_gpm.chgCoeff(constr, nslack_var, -1.0)
 
-        # optimiza slack model
+        # 1. optimize for maximum growth rate under protein constraint conditions
         slack_gpm.optimize()
         status = status2text[slack_gpm.status]
         if status.lower() != 'optimal':
-            print(f'slack model optimization return status: {status}')
+            print(f'slack model optimization (max growth rate) returned status: {status}')
             return {}
-        else:
-            print(f'successful slack optimization with growth rate of {slack_gpm.objval:.3f} h-1')
 
-            # process slack model results to determine kcat scaling factors
-            gene2scale = {}
-            for gene, exp_mg_per_gdw in proteins_mg_per_gdw.items():
-                uid = gene2uid[gene]
-                pos_slack = slack_gpm.getVarByName(f'{pf.V_PSLACK_}{uid}').x
-                neg_slack = slack_gpm.getVarByName(f'{pf.V_NSLACK_}{uid}').x
-                pred_mg_per_gdw = exp_mg_per_gdw + pos_slack - neg_slack
+        max_gr = slack_gpm.objval
+        print(f'successful slack optimization with growth rate of {max_gr:.3f} h-1')
 
-                scale = pred_mg_per_gdw / exp_mg_per_gdw
-                if scale > min_scale_factor:
-                    gene2scale[gene] = scale
-            min_scale = min(gene2scale.values())
-            max_scale = max(gene2scale.values())
-            print(f'{len(gene2scale)} genes to be scaled by factors of {min_scale:.4f} ... {max_scale:3f}')
-            return gene2scale
+        # 2. minimize sums of slack variables to avoid loops
+        # fix maximum growth rate by adding a new constraint
+        model_objective = slack_gpm.getObjective()
+        slack_gpm.addLConstr(model_objective, '=', max_gr, 'Max growth rate objective')
+
+        # New Objective: minimize sum of all non-negative reactions
+        slack_gpm.update()
+
+        slack_objective = gp.LinExpr(np.ones(len(slack_vars)), slack_vars)
+        slack_gpm.setObjective(slack_objective, gp.GRB.MINIMIZE)
+
+        # optimize and collect results (without error handling)
+        slack_gpm.optimize()
+        status = status2text[slack_gpm.status]
+        if status.lower() != 'optimal':
+            print(f'slack model optimization (minimize sum of slack) returned status: {status}')
+            return {}
+
+        # process slack model results to determine kcat scaling factors
+        gene2scale = {}
+        for gene, exp_mg_per_gdw in proteins_mg_per_gdw.items():
+            uid = gene2uid[gene]
+            pos_slack = slack_gpm.getVarByName(f'{pf.V_PSLACK_}{uid}').x
+            neg_slack = slack_gpm.getVarByName(f'{pf.V_NSLACK_}{uid}').x
+            pred_mg_per_gdw = exp_mg_per_gdw + pos_slack - neg_slack
+
+            scale = pred_mg_per_gdw / exp_mg_per_gdw
+            scale = min(scale, max_scale_factor)
+            # only capture postive >0 values for scale, i.e. predicted concentration > 0
+            if pred_mg_per_gdw > 1e-8:
+                gene2scale[gene] = scale
+
+        min_scale = min(gene2scale.values())
+        max_scale = max(gene2scale.values())
+        print(f'{len(gene2scale)} genes to be scaled by factors of {min_scale:.4f} ... {max_scale:.3f}')
+        return gene2scale
 
     @staticmethod
     def create_fitted_kcats_file(gene2scale, orig_kcats_fname, fitted_kcats_fname):

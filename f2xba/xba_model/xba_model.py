@@ -781,7 +781,7 @@ class XbaModel:
     #######################
 
     def create_proteins(self):
-        """Create proteins used in the model.
+        """Create proteins that are used in model gene product reaction rules and RBA process machines.
 
         After gene products have been created, e.g. based on fbcGeneProducts components in GEM
 
@@ -795,16 +795,19 @@ class XbaModel:
             if gp.uid not in self.uniprot_data.proteins:
                 gp.uid = self.uniprot_data.locus2uid.get(gp.label, '')
             if gp.uid not in self.proteins:
+                cid = None
                 if gp.label in self.locus2rids:
-                    # using first reaction as reference for pseudo species compartment
+                    # for gene products used in reaction gene product rules, use compartment of first reaction
                     any_rid = self.locus2rids[gp.label][0]
                     cid = self.reactions[any_rid].compartment
-                else:
+                elif gp.compartment is not None:
+                    # gene produces used in RBA process machines have a configured compartment
                     cid = gp.compartment
-                p = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
-                self.proteins[gp.uid] = p
-                gp.add_notes(f'[{p.gene_name}], {p.name}')
-                n_created += 1
+                if cid is not None:
+                    p = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
+                    self.proteins[gp.uid] = p
+                    gp.add_notes(f'[{p.gene_name}], {p.name}')
+                    n_created += 1
 
         # update mapping, in case we modified uniprot information
         self.locus2uid = {gp.label: gp.uid for gp in self.gps.values()}
