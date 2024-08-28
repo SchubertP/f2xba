@@ -22,11 +22,12 @@ from ..utils.mapping_utils import valid_sbml_sid
 from .initital_assignments import InitialAssignments
 import f2xba.prefixes as pf
 
-DEFAULT_GROWTH_RATE = 1.0   # h-1
-DEFAULT_ENZ_SATURATION = 1.0
-MAX_ENZ_CONC = 10           # mmol/gDW
-MAX_MM_PROCESSING_FLUX = 10  # in µmol per gDW per h
-MAX_DENSITY_SLACK = 10      # maximum denisty slack in mmol AA per gDW
+DEFAULT_GROWTH_RATE = 1.0         # h-1
+DEFAULT_ENZ_SATURATION = 1.0      # dimensionless, is overwritten in RBA Parameters Excel document
+DEFAULT_MICHAELIS_CONSTANT = 1.0  # mmol/l
+MAX_ENZ_CONC = 10                 # mmol/gDW
+MAX_MM_PROCESSING_FLUX = 10       # in µmol per gDW per h
+MAX_DENSITY_SLACK = 10            # maximum denisty slack in mmol AA per gDW
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
 XML_REACTION_NS = 'http://www.hhu.de/ccb/rba/reaction/ns'
@@ -312,7 +313,8 @@ class RbaModel:
             self.rnas.from_xba(rba_params, self.model, self.cid_mappings)
         self.proteins.from_xba(rba_params, self.model, self.cid_mappings)
         self.add_dummy_proteins()
-        self.enzymes.from_xba(self.avg_enz_sat, self.model, self.parameters, self.cid_mappings, self.medium)
+        self.enzymes.from_xba(self.avg_enz_sat, self.model, self.parameters, self.cid_mappings, self.medium,
+                              DEFAULT_MICHAELIS_CONSTANT)
         self.processes.from_xba(rba_params, self)
 
         print(f'{len(self.parameters.functions):4d} functions, {len(self.parameters.aggregates):4d} aggregates')
@@ -395,8 +397,17 @@ class RbaModel:
         self.initial_assignments.xba_implementation(self.model)
         self.model.clean(protect_ids)
 
+        # add additional units required for additional parameters
+        unit_id = 'mmol_per_l'
+        u_dict = {'id': unit_id, 'name': 'millimole per liter',
+                  'units': 'kind=mole, exp=1.0, scale=-3, mult=1.0; kind=litre, exp=-1.0, scale=0, mult=1.0'}
+        if unit_id not in self.model.parameters:
+            self.model.add_unit_def(u_dict)
+
         # add some parameter values for reference (after model.clean() so they are not removed)
-        add_params = {'avg_enz_sat': {'value': self.avg_enz_sat, 'name': 'average enzyme saturation level'}}
+        add_params = {'avg_enz_sat': {'value': self.avg_enz_sat, 'name': 'average enzyme saturation level'},
+                      'default_importer_km_value': {'value': DEFAULT_MICHAELIS_CONSTANT, 'name': 'importer Km value',
+                                                    'units': 'mmol_per_l'}}
         for pid, p_data in add_params.items():
             self.model.add_parameter(pid, p_data)
 

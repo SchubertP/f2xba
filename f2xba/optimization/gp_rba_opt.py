@@ -45,13 +45,13 @@ class GurobiRbaOptimization(Optimize):
             print(f'Missing components {missing} in SBML document!')
             raise AttributeError
 
-        # TODO we could have a general function Xba Optimization that collects all available data per default
         self.df_mm_data = self.get_macromolecule_data()
         self.df_enz_data = self.get_enzyme_data()
         self.enz_mm_composition = self.get_enzyme_mm_composition()
-        # check if we should use CobraPy rid/sid or model rid/sid
-        # TODO check how to implement for CobarPy where 'R_' and 'M_' are stripped of
+
         self.ex_rid2sid = self.get_ex_rid2sid()
+        self.sidx2ex_ridx = {re.sub(f'^{pf.M_}', '', sid): re.sub(f'^{pf.R_}', '', rid)
+                             for rid, sid in self.ex_rid2sid.items()}
 
         self.initial_assignments = InitialAssignments(self)
         self.configure_rba_model_constraints()
@@ -59,14 +59,14 @@ class GurobiRbaOptimization(Optimize):
     def get_ex_rid2sid(self):
         """Get mapping of cobra exchange reaction ids to RBA uptake metabolites
 
-            From XML annotation of compartments identify the compartent for media uptake
-            Note: RBA allows other compartments than external compartment to
-            be used in Michaelis Menten saturation terms for medium uptake,
-            e.g. periplasm (however, this may block reactions in periplasm)
+        From XML annotation of compartments identify the compartent for media uptake
+        Note: RBA allows other compartments than external compartment to
+        be used in Michaelis Menten saturation terms for medium uptake,
+        e.g. periplasm (however, this may block reactions in periplasm)
 
-            replace compartment postfix of exchanged metabolited by medium cid of RBA model.
+        replace compartment postfix of exchanged metabolited by medium cid of RBA model.
 
-           Create mapping table from exchange reaction to medium
+        Create mapping table from exchange reaction to medium
         """
         medium_cid = 'e'
         for cid, row in self.m_dict['compartments'].iterrows():
@@ -158,19 +158,33 @@ class GurobiRbaOptimization(Optimize):
 
     # MODEL RBA OPTIMIZATION SUPPORT
     def set_medium(self, medium):
-        """Set model exchange fluxes and rba uptake metabolite concentrations
+        """Configure external metabolite concentrations (in mmol/l) for RBA optimization.
 
-        1. open up related exchange reactions
+        Notes:
+        - for FBA and GECKO (ECM) model optimiztions, the medium is defined
+          as exchange reaction id and uptake flux rate in mmol/gDWh.
+        - In RBA we define medium as external metabolite id (without leading 'M_') and
+          external metabolite concentration in mmol/l.
+        - in RBA medium concentrations should be defined with respect ot default michaelis constant of transporter
+          (check model parameter DEFAULT_MICHAELIS_CONSTANT
+
+        e.g.: medium = {'glc__D_e': 111.0, 'o2_e': 20.0, 'ca2_e': 0.5, 'cbl1_e': 0.01,
+         'cl_e': 60.0, 'co2_e': 0.00003, ...}
+
+        SBML coded RBA model still contains exchange reactions that control exchange of metabolites
+        across the modeling environment. These need to be considered as well
+
+        1. open up exchange reactions related to metabolite concentrations
         2. configure related medium concentrations via initial assignments
 
-        :param medium: nutrients in medium, i.e. exchange reactions with max allowed uptake
-        :type medium: dict, key = ridx of exchange reaction, val=metabolite concentration in mmol/l
+        :param medium: external metabolites with respective concentrations in mmol/l
+        :type medium: dict, key = metabolite id, val = metabolite concentration in mmol/l
         """
-        # open up exchange reactions as per medium
-        super().set_medium({ex_ridx: 1000 for ex_ridx in medium})
+        # open up related exchange reactions
+        super().set_medium({self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in medium})
 
         # configure RBA related medium concentrations
-        medium_conc = {sid: medium.get(re.sub(f'^{pf.R_}', '', ex_rid), 0.0)
+        medium_conc = {sid: medium.get(re.sub(f'^{pf.M_}', '', sid), 0.0)
                        for ex_rid, sid in self.ex_rid2sid.items()}
         self.initial_assignments.set_medium(medium_conc)
 

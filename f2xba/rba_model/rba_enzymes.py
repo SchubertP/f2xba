@@ -36,16 +36,18 @@ class RbaEnzymes:
         else:
             print(f'enzymes not imported!')
 
-    def create_efficiencies(self, r, active_sites, xba_model, parameters):
+    def create_efficiencies(self, r, active_sites, xba_model, parameters, importer_km):
         """Create enzyme fwd/rev efficiencies based on iso-reaction kcats.
 
         kcat is per active site. Enzymes may have multiple active sites.
 
-        Efficiencies have units of h-1. Reaction kcats are in s-1, therefore we multiply with 3600 s/h
-        Number of active sites in the enzyme are considered
-        For transporters taking up medium, automatically Michaelis Menten saturation functions are added
-        with default Km (0.8 mmol/l) value.
-        For all other enzymes, assume an average enzyme saturation ('avg_enz_sat' in 'general' sheet.
+        - Efficiencies have units of h-1. Reaction kcats are in s-1, therefore we multiply with 3600 s/h
+          Number of active sites in the enzyme are considered.
+        - For transporters taking up medium, automatically Michaelis Menten saturation functions are added
+          with a default KM in mmol/l value as specified
+        - For all other enzymes, assume an average enzyme saturation. Define 'avg_enz_sat' in 'general' sheet.
+        Note: as import reactions all use same default Michaelis Menten Constant Km (here 1.0 mmol/l)
+          external medium should be set with respect to this Km value to allow for required transporter saturation.
 
         E.g. Average enzyme saturation of a metabolic enzyme.
           eff = kcat * avg_enz_sat * 3600 * active_sites
@@ -62,6 +64,8 @@ class RbaEnzymes:
         :type xba_model: Class XbaModel
         :param parameters: RBA model parameters
         :type parameters: Class RbaParameters
+        :param importer_km: km used for import reactions (in mmol/l)
+        :type importer_km: float
         :return: enzyme efficiencies for fwd/rev direction
         :rtype: dict (keys: 'fwd', 'rev': vals: function/aggregate ids / str)
         """
@@ -73,7 +77,7 @@ class RbaEnzymes:
         rev_reactants = {}
         if r.kcatsr is not None:
             # RBA: standard case of enzyme catalyzed reversible reaction
-            # TRBA: special case of enzyme catalyzed reversible reaction, if there is no complete TD data
+            # TRBA: special case of enzyme catalyzed reversible reaction, if there is incomplete TD data
             kcatr = r.kcatsr[0]
             rev_reactants = r.products
         elif f'{r.id}_REV' in xba_model.reactions:
@@ -89,18 +93,21 @@ class RbaEnzymes:
         fids = {}
         for r_dir, kcat in kcats.items():
             fid = None
+            # e.g. self.uptake_rcids = {'c-e'}
             if r.compartment in self.uptake_rcids and kcat is not None:
-                # for transporters taking up medium, the enzyme saturation is based on Michaelis Menten kinetics
+                # for importers, the enzyme saturation is based on Michaelis Menten kinetics
                 agg_fids = []
                 for sid in srefs[r_dir]:
+                    # e.g. self.saturation_sids = {'M_5fthf_e', 'M_ac_e', 'M_acald_e', ...} all external metabolite ids
                     if sid in self.saturation_sids:
                         agg_fid = f'saturation_{sid}'
                         if agg_fid not in parameters.functions:
-                            f_params = {'type': 'michaelisMenten', 'variable': sid, 'params': {'kmax': 1.0, 'Km': 0.8}}
+                            f_params = {'type': 'michaelisMenten', 'variable': sid,
+                                        'params': {'kmax': 1.0, 'Km': importer_km}}
                             parameters.add_function(agg_fid, f_params)
                         agg_fids.append(agg_fid)
                 if len(agg_fids) > 0:
-                    # in case of saturation terms, create an RBA aggregate parameter
+                    # in case of saturation terms (i.e. importer), create an RBA aggregate parameter
                     max_eff_fid = f'{ridx}_{r_dir}_eff'
                     f_params = {'type': 'constant', 'variable': 'growth_rate',
                                 'params': {'CONSTANT': kcat * 3600.0 * active_sites}}
@@ -111,8 +118,8 @@ class RbaEnzymes:
                     fid = agg_id
 
             if fid is None:
+                # i.e. no Importer Reaction
                 if kcat is not None:
-                    # metabolic enzymes and transporters not part of medium uptake reactions
                     fid = f'{ridx}_{r_dir}_eff'
                     f_params = {'type': 'constant', 'variable': 'growth_rate',
                                 'params': {'CONSTANT': kcat * self.avg_enz_sat * 3600.0 * active_sites}}
@@ -122,7 +129,7 @@ class RbaEnzymes:
             fids[r_dir] = fid
         return fids
 
-    def from_xba(self, avg_enz_sat, xba_model, parameters, cid_mappings, medium):
+    def from_xba(self, avg_enz_sat, xba_model, parameters, cid_mappings, medium, default_importer_km):
         """Configure Enzymes based on RBA sepecific parameters.
 
         iso-reaction kcats (s-1) are converted to enzyme efficiencies (h-1) considering and
@@ -149,6 +156,8 @@ class RbaEnzymes:
         :type cid_mappings: dict
         :param medium: Medium definition
         :type medium: class RbaMedium
+        :param default_importer_km: default km used for import reactions (in mmol/l)
+        :type default_importer_km: float
         """
         self.avg_enz_sat = avg_enz_sat
         self.uptake_rcids = cid_mappings['uptake_rcids']
@@ -179,7 +188,7 @@ class RbaEnzymes:
                 assert (len(r.enzymes) == 1)
                 e = xba_model.enzymes[r.enzymes[0]]
                 composition = e.composition
-                fids = self.create_efficiencies(r, e.active_sites, xba_model, parameters)
+                fids = self.create_efficiencies(r, e.active_sites, xba_model, parameters, default_importer_km)
             else:
                 # case of spontaneous reactions: add enzymes 1.0 to suppress warning messages in RBApy 1.0
                 ub = xba_model.parameters[r.fbc_upper_bound].value

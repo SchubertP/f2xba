@@ -165,11 +165,12 @@ class CobraRbaOptimization(Optimize):
         return dict(enz_mm_composition)
 
     # MODEL RBA OPTIMIZATION SUPPORT
-    def set_medium(self, ex_fluxes, default_conc=10):
+    def set_medium(self, ex_fluxes, default_conc=0.01):
         """Set model exchange fluxes and rba uptake metabolite concentrations
 
         :param ex_fluxes:
-        :param default_conc:
+        :param default_conc: optiona default concentration for external metabolites in mol/l
+        :type default_conc: float, default at 0.01 mol/l
         :return:
         """
         medium_conc = {mid: 0.0 for mid in self.ex_rid2mid.values()}

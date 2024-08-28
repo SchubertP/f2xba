@@ -172,8 +172,8 @@ class Results(ABC):
                 else:
                     for gene in genes:
                         if pred_mpmfs[gene] != 0.0 and exp_mpmfs[gene] != 0.0:
-                            x.append(np.log(exp_mpmfs[gene]))
-                            y.append(np.log(pred_mpmfs[gene]))
+                            x.append(np.log10(exp_mpmfs[gene]))
+                            y.append(np.log10(pred_mpmfs[gene]))
                 r_value, p_value = scipy.stats.pearsonr(x, y)
                 print(f'{condition:25s}: R\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
                       f'({len(x)} proteins {scale} scale)')

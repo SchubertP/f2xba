@@ -115,6 +115,7 @@ class Optimize:
         self.avg_enz_saturation = sbml_parameters.get('avg_enz_sat')
         self.protein_per_gdw = sbml_parameters.get('gP_per_gDW')
         self.modeled_protein_mf = sbml_parameters.get('gmodeledP_per_gP')
+        self.importer_km = sbml_parameters.get('default_importer_km_value')
 
     # COBRAPY MODEL RELATED
     def cp_report_model_size(self):
@@ -334,6 +335,31 @@ class Optimize:
         expand_pmet = parts[1] if re.search(r'\w*pmet_\w+', parts[0]) else parts[0]
         return re.sub(r'\w*pmet_\w+', expand_pmet, reaction_str)
 
+    @staticmethod
+    def get_compartments(srefs_str, sid2cid):
+        """For reaction srefs str, e.g. reactants, determine compartment ids
+
+        e.g.
+          srefs_str = 'species=M_atp_c, stoic=1.0, const=True; species=M_h2o_c, stoic=1.0, const=True'
+          sid2cid = {'M_atp_c': 'c', 'M_h2o_c': 'c', ...}
+          return: {'c'}
+
+        :param srefs_str: species srefs string as per sbmlxdf reactants/products fields in reactions
+        :type srefs_str: str
+        :param sid2cid: mapping of metabolite ids to compartment ids
+        :type sid2cid: dict (key: sid/str, value: compartment id/str)
+        :return: set of compartment ids of metabolites in srefs_str
+        :rtype: set of str
+        """
+        compartments = set()
+        if type(srefs_str) is str:
+            for sref_str in sbmlxdf.record_generator(srefs_str):
+                params = sbmlxdf.extract_params(sref_str)
+                sid = params['species']
+                if sid in sid2cid:
+                    compartments.add(sid2cid[sid])
+        return compartments
+
     def get_reaction_data(self):
         """Extract reaction related data from reactions (reaction string, gpr)
 
@@ -342,6 +368,8 @@ class Optimize:
         :return: reaction related data, indexed by reaction id
         :rtype: dict
         """
+        sid2cid = {sid: row['compartment'] for sid, row in self.m_dict['species'].iterrows() if
+                   re.match(f'{pf.M_}', sid)}
         gpid2label = self.m_dict['fbcGeneProducts']['label'].to_dict()
         rdatas = {}
         for rid, row in self.m_dict['reactions'].iterrows():
@@ -365,10 +393,28 @@ class Optimize:
                             parts.append(';')
                 gpr = ' '.join(parts)
                 exchange = False if type(row['products']) is str else True
+                rp_cids = [self.get_compartments(row.reactants, sid2cid), self.get_compartments(row.products, sid2cid)]
+                compartment = '-'.join(sorted(rp_cids[0].union(rp_cids[1])))
+                r_type = 'transport' if len(rp_cids[0].union(rp_cids[1])) > 1 else 'metabolic'
 
                 rdatas[rid] = {'base_rid': base_rid, 'drxn': drxn, 'reaction_str': reaction_str,
-                               'gpr': gpr, 'is_exchange': exchange}
+                               'gpr': gpr, 'is_exchange': exchange, 'r_type': r_type, 'compartment': compartment}
         return rdatas
+
+    def get_genes_assigned_to(self, reaction_type):
+        """Get genes assigned to a specific ('transport' or 'metabolic') reaction type
+
+        :param reaction_type: 'transport' or 'metabolic'
+        :type reaction_type: str
+        :return: set of genes assigned to specific reaction type
+        :rtype: set of str
+        """
+        genes = set()
+        for data in self.rdata.values():
+            if data['r_type'] == reaction_type:
+                for gene in re.findall(r'\b\w+\b', data['gpr']):
+                    genes.add(gene)
+        return genes
 
     @staticmethod
     def extract_net_reaction_data(rdata):
@@ -466,12 +512,17 @@ class Optimize:
 
     # OPTIMIZATION RELATED
     def set_medium(self, medium):
-        """set medium (compatible with CobraPy)
-        assume: 1. medium condition defined through exchange reaction, exchange direction is metabolite
-                2. provide dict with exchange reactions ('R_' stripped) and positive values to constrain uptake
-                3. other exchange reactions automatically to be blocked
-                4. modification of lower variable bound, i.e. assigning - value of uptake or 0 value
-                5. limit updates only to variable where lower bound will change
+        """Configure medium (compatible with CobraPy)
+
+        e.g. medium = {'EX_glc__D_e': 10.0, 'EX_o2_e': 20.0, 'EX_ca2_e': 1000.0, 'EX_cbl1_e': 0.01,
+         'EX_cl_e': 1000.0, 'EX_co2_e': 1000.0, ...}
+
+          1. medium defined through exchange reactions related to metabolies that can be taken up
+          2. provide dict with exchange reactions ('R_' stripped) and positive values to constrain uptake
+          3. exchange reactions in the model that are not included get be blocked (uptake set to 0.0)
+          4. modification of exchange reaction lower variable bound (set to -uptake_rate)
+          5. limit updates only to variable where lower bound will change
+
         :param medium: nutrients in medium, i.e. exchange reactions with max allowed uptake
         :type medium: dict, key = ridx of exchange reaction, val=max uptake (positive value)
         """
