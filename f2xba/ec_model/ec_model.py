@@ -108,13 +108,12 @@ class EcModel:
         if 'p_abundance_fname' in general_params:
             pax_db_fname = general_params['p_abundance_fname']
             pm2totpm = self.get_modelled_protein_mass_fraction(pax_db_fname)
-            print(f'modeled protein fraction {pm2totpm:.4f} g/g, based on {pax_db_fname}')
         else:
             assert 'pm2totpm' in general_params, ("to determine modeled protein mass fraction, either provide in "
                                                   "ECM parameters sheet 'general' a corresponding value in field "
                                                   "'pm2totpm' of a PAXdb file-name in 'p_abundance_fname'")
             pm2totpm = general_params['pm2totpm']
-
+        print(f'modeled protein fraction {pm2totpm:.4f} g/g')
         protein_pool = p_total * pm2totpm
         print(f'protein constraint: {protein_pool*1000.0:.2f} mg/gDW - modeled protein')
 
@@ -337,10 +336,31 @@ class EcModel:
         :return: relative pmf of model based
         :rtype: float
         """
-        # parse file
-        df_ppm = pd.read_table(fname, comment='#', header=None, usecols=[1, 2], index_col=0)
-        df_ppm.index = [locus.split('.')[1] for locus in df_ppm.index]
-        ppm_abundance = df_ppm.iloc[:, 0].to_dict()
+        # parse PacDb file
+        name = ''
+        publication = ''
+        last_comment_line = ''
+        gene_idx = None
+        ppm_abundance = {}
+        with open(fname) as file:
+            for line in file:
+                line = line.rstrip()
+                if re.match('#', line):
+                    if re.match('#name: ', line):
+                        name = line.split(': ')[1]
+                    elif re.match('#publication_year: ', line):
+                        publication = line.split(': ')[1]
+                    last_comment_line = line
+                else:
+                    if gene_idx is None:
+                        cols = re.sub('^#', '', last_comment_line).split('\t')
+                        gene_idx = cols.index('string_external_id')
+                        ppm_idx = cols.index('abundance')
+                    record = line.split('\t')
+                    gene = record[gene_idx].split('.')[1]
+                    ppm_abundance[gene] = float(record[ppm_idx])
+        print(f'PaxDb file {name}, year {publication}, covering {len(ppm_abundance)} proteins '
+              f'(total {sum(ppm_abundance.values()):.1f} ppm) loaded from {fname}')
 
         used_enz_gps = self._get_enzyme_gene_products()
         used_uids = {self.model.gps[gpid].uid for gpid in used_enz_gps}
