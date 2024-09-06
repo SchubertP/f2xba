@@ -67,10 +67,10 @@ class BiocycData:
 
         # set gene locus on direct gene product and rnas
         for protein in self.proteins.values():
-            if type(protein.gene) is str:
+            if type(protein.gene) is str and protein.gene in self.genes:
                 protein.gene_composition = {self.genes[protein.gene].locus: 1.0}
         for rna in self.rnas.values():
-            if type(rna.gene) is str:
+            if type(rna.gene) is str and rna.gene in self.genes:
                 rna.gene_composition = {self.genes[rna.gene].locus: 1.0}
 
     @staticmethod

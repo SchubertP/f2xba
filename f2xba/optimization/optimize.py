@@ -77,8 +77,9 @@ class Optimize:
         """
         if not os.path.exists(fname):
             print(f'Error: {fname} not found!')
-            return
+            raise FileNotFoundError
 
+        self.model_name = os.path.basename(fname).split('.')[0]
         # load SBML coded metabolic model into sbmlxdf for data extraction
         sbml_model = sbmlxdf.Model(fname)
         print(f'SBML model loaded by sbmlxdf')

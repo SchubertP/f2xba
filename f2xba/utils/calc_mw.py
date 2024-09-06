@@ -32,6 +32,19 @@ atomic_weights = {'H': 1.007975, 'He': 4.002602, 'Li': 6.9675,  'Be': 9.0121831,
 atom_regex_pattern = re.compile('([A-Z][a-z]*)([0-9]*)')
 
 
+def get_seq_composition(seq_str):
+    """Get composition of nucleotide or amino acid sequence string
+
+    Sequence string is a string of single chars, e.g. 'MDEIIRQ...'
+
+    :param seq_str: sequence string of single chars
+    :type seq_str: str
+    :return: sequence compostion
+    :rtype: dict (key: char, val: count)
+    """
+    return {seq_char: seq_str.count(seq_char) for seq_char in sorted(set(seq_str))}
+
+
 def extract_atoms(formula):
     """Iterator to return atom quantities in chemical formula.
     E.g. 'C6H12O6'

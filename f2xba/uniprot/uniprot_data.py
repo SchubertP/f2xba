@@ -103,12 +103,13 @@ class UniprotData:
         using pagination and compression.
 
         """
-        query = [f'(organism_id:{self.organism_id})', '(reviewed:true)']
+        # query = [f'(organism_id:{self.organism_id})', '(reviewed:true)']
+        query = [f'(organism_id:{self.organism_id})']
         fields = ['accession', 'gene_primary', 'gene_synonym', 'gene_oln', 'organism_id',
                   'ec', 'protein_name', 'cc_subunit', 'cc_subcellular_location', 'cc_cofactor',
                   'length', 'mass', 'sequence', 'ft_signal', 'cc_catalytic_activity', 'kinetics',
-                  'go_p', 'go_c', 'go_f',
-                  'protein_families', 'xref_biocyc', 'xref_refseq', 'date_modified']
+                  'go_p', 'go_c', 'go_f', 'protein_families',
+                  'xref_biocyc', 'xref_refseq', 'date_modified', 'reviewed']
         payload = {'compressed': 'true',
                    'fields': ','.join(fields),
                    'format': 'tsv',

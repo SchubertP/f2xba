@@ -13,8 +13,8 @@ class FbcGeneProduct(SbmlSBase):
     def __init__(self, s_gp):
         super().__init__(s_gp)
         self.label = s_gp['label']
-        ids = get_miriam_refs(s_gp.get('miriamAnnotation', ''), 'uniprot', 'bqbiol:is')
-        self.uid = ids[0] if len(ids) > 0 else ''
+        ids = get_miriam_refs(s_gp.get('miriamAnnotation'), 'uniprot', 'bqbiol:is')
+        self.uid = ids[0] if len(ids) > 0 else None
         self.compartment = s_gp.get('compartment')
 
     def modify_gene_label(self, pattern, replacement):

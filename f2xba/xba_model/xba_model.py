@@ -110,7 +110,7 @@ class XbaModel:
                     r.kind = 'drain'
 
     def update_gp_mappings(self):
-        self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items()}
+        self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items() if gp.uid is not None}
         self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
         self.locus2uid = {gp.label: gp.id for gp in self.gps.values()}
         self.locus2rids = self._get_locus2rids()
@@ -177,7 +177,7 @@ class XbaModel:
             print(f'{len(xba_params)} tables with XBA model configuration parameters loaded from {fname}')
 
         general_params = xba_params['general']['value'].to_dict()
-        self.cofactor_flag = general_params.get('cofactor_flag', True)
+        self.cofactor_flag = general_params.get('cofactor_flag', False)
 
         #############################
         # modify/correct components #
@@ -217,6 +217,8 @@ class XbaModel:
             for chromosome, data in self.ncbi_data.chromosomes.items():
                 print(f'{chromosome:15s}: {sum(data.nt_composition.values()):7d} nucleotides, '
                       f'{len(data.mrnas):4d} mRNAs,', f'{len(data.rrnas):2d} rRNAs, {len(data.trnas):2d} tRNAs', )
+            if 'modify_attributes' in xba_params:
+                self.modify_attributes(xba_params['modify_attributes'], 'ncbi')
 
         ####################################
         # create proteins based on Uniprot #
@@ -226,9 +228,9 @@ class XbaModel:
             if 'modify_attributes' in xba_params:
                 self.modify_attributes(xba_params['modify_attributes'], 'uniprot')
 
-        if self.uniprot_data:
+        if self.uniprot_data or self.ncbi_data:
             count = self.create_proteins()
-            print(f'{count:4d} proteins created with UniProt information')
+            print(f'{count:4d} proteins created')
 
         #################
         # map cofactors #
@@ -711,14 +713,17 @@ class XbaModel:
         :type component_type: str
         :return:
         """
-        component_mapping = {'gp': self.gps, 'species': self.species, 'reaction': self.reactions,
+        component_mapping = {'gp': self.gps,
+                             'species': self.species, 'reaction': self.reactions,
                              'protein': self.proteins, 'enzyme': self.enzymes,
                              'parameter': self.parameters, 'compartment': self.compartments}
         n_count = 0
         for _id, row in df_modify[df_modify['component'] == component_type].iterrows():
             n_count += 1
-            if component_type == 'uniprot':
-                self.uniprot_data.proteins[_id].modify_attribute(row['attribute'], row['value'])
+            if component_type == 'ncbi':
+                self.ncbi_data.modify_attribute(row['attribute'], row['value'])
+            elif component_type == 'uniprot':
+                self.uniprot_data.proteins.modify_attribute(row['attribute'], row['value'])
             else:
                 component_mapping[component_type][_id].modify_attribute(row['attribute'], row['value'])
         if n_count > 0:
@@ -781,37 +786,65 @@ class XbaModel:
     #######################
 
     def create_proteins(self):
-        """Create proteins that are used in model gene product reaction rules and RBA process machines.
+        """Create proteins related to gene products used in the model.
 
-        After gene products have been created, e.g. based on fbcGeneProducts components in GEM
-
-        First we try getting a valid uniprot id from gp Miriam annotation.
-        Alternatively we check if gene locus is found in Uniprot proteins
+        For each gene product create related protein
+        - if related uniprot record exists (loaded from UniProt file), used uniprot id
+          as reference and configure model protein with data from uniprot record
+          - extract uniprot id from gene product record, if uniprot has been configured
+          - alternatively check uniprot lookup table locus2uid to find uniprot id from gene product label
+            - also update uid in gene product structure
+        - if uniprot record does not exists, collect protein data from NCBI protein record sequence
 
         We also configure gene id and gene name 'notes'-field of gene product
         """
+        proteins_not_found = []
         n_created = 0
         for gp in self.gps.values():
+
+            # in case of invalid uniprot id, assigne uid based on uniprot_data, alternatively create dummy id
             if gp.uid not in self.uniprot_data.proteins:
-                gp.uid = self.uniprot_data.locus2uid.get(gp.label, '')
+                if gp.label in self.uniprot_data.locus2uid:
+                    gp.uid = self.uniprot_data.locus2uid[gp.label]
+                else:
+                    gp.uid = f'GP{gp.label}'
+
+            # add protein related to gene product to model proteins
             if gp.uid not in self.proteins:
                 cid = None
+
+                # for gene products used in reaction gene product rules, use compartment of first reaction
                 if gp.label in self.locus2rids:
-                    # for gene products used in reaction gene product rules, use compartment of first reaction
                     any_rid = self.locus2rids[gp.label][0]
                     cid = self.reactions[any_rid].compartment
                 elif gp.compartment is not None:
-                    # gene produces used in RBA process machines have a configured compartment
+                    # gene products used in RBA process machines have compartment already configured
                     cid = gp.compartment
+
                 if cid is not None:
-                    p = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
-                    self.proteins[gp.uid] = p
-                    gp.add_notes(f'[{p.gene_name}], {p.name}')
-                    n_created += 1
+                    p = None
+                    # try retrieving protein data from Uniprot Proteins (normal case)
+                    if gp.uid in self.uniprot_data.proteins:
+                        p = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
+
+                    # as fallback, retrieve protein data from NCBI Proteins
+                    elif gp.label in self.ncbi_data.label2locus:
+                        ncbi_locus = self.ncbi_data.label2locus[gp.label]
+                        p = Protein(self.ncbi_data.locus2protein[ncbi_locus], gp.label, cid)
+                    else:
+                        proteins_not_found.append(gp.id)
+                    if p:
+                        self.proteins[gp.uid] = p
+                        gp.add_notes(f'[{p.gene_name}], {p.name}')
+                        n_created += 1
 
         # update mapping, in case we modified uniprot information
         self.locus2uid = {gp.label: gp.uid for gp in self.gps.values()}
         self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items()}
+        if len(proteins_not_found) > 0:
+            examples = min(5, len(proteins_not_found))
+            print(f'{len(proteins_not_found)} proteins not found for gene products, ',
+                  f'e.g.: {proteins_not_found[:examples]}')
 
         return n_created
 

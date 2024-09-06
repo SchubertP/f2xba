@@ -5,6 +5,7 @@ Holds protein related information extracted from Uniprot export.
 Peter Schubert, CCB, HHU Duesseldorf, January 2023
 """
 import re
+from ..utils.calc_mw import get_seq_composition
 
 
 def get_loci(loci_str):
@@ -135,18 +136,6 @@ def get_cofactors(cofactor_str):
     return cofactors
 
 
-def get_aa_composition(aa_seq_str):
-    """Get composition in terms of amino acids
-
-    :param aa_seq_str: amino acid sequence
-    :type aa_seq_str: str
-    :return: amino acid compostion
-    :rtype: dict (key: aa short code, val: count)
-    """
-    amino_acids = sorted(aa_seq_str)
-    return {aa: aa_seq_str.count(aa) for aa in amino_acids}
-
-
 class UniprotProtein:
 
     def __init__(self, s_data):
@@ -163,7 +152,7 @@ class UniprotProtein:
         self.go_functions = get_go_terms(s_data.get('Gene Ontology (molecular function)'))
         self.length = s_data['Length']
         self.mass = s_data['Mass']
-        self.aa_composition = get_aa_composition(s_data['Sequence'])
+        self.aa_composition = get_seq_composition(s_data['Sequence'])
         self.signal_peptide = s_data.get('Signal peptide')
         self.cofactors = get_cofactors(s_data.get('Cofactor'))
 

@@ -9,6 +9,9 @@ import numpy as np
 import pandas as pd
 import scipy
 import json
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
 from abc import ABC, abstractmethod
 
 import f2xba.prefixes as pf
@@ -101,6 +104,9 @@ class Results(ABC):
     def collect_protein_results(self):
         pass
 
+    def get_predicted_protein_data(self, solution):
+        return pd.DataFrame()
+
     def get_predicted_species_conc(self, solution):
         """Collect species concentrations (mmol/l) for a TD constraint model.
 
@@ -146,6 +152,39 @@ class Results(ABC):
         df_conc.insert(info_cols, 'rank', rank)
         df_conc.index.name = 'mid'
         return df_conc
+
+    def get_rtype_condition_mpmf(self, r_type, condition):
+        """For specific condition and reaction type collect protein mass fractions.
+
+        predicted vs. experimental protein mass fractions used for correlation studies
+        only return values for which experimental data exists
+
+        :param r_type: reaction type 'transport', 'metabolic' or 'other'
+        :type r_type: str
+        :param condition: specific condition to select data, e.g. 'Glucose'
+        :type condition: str
+        :return: dict (key: gene/str, value: list(predicted mpmf, experimental mpmf)/float/float
+        """
+        mpmfs = {}
+        if condition in self.results and condition in self.df_mpmf.columns:
+
+            # determine gene set to be collected
+            if r_type in ['transport', 'metabolic']:
+                genes = self.optim.get_genes_assigned_to(r_type)
+            else:
+                genes = []
+                tx_genes = self.optim.get_genes_assigned_to('transport')
+                metab_genes = self.optim.get_genes_assigned_to('metabolic')
+                for gene in self.optim.m_dict['fbcGeneProducts']['label'].values:
+                    if gene not in tx_genes and gene not in metab_genes:
+                        genes.append(gene)
+
+            exp_mpmfs = self.df_mpmf[condition].to_dict()
+            pred_mpmfs = self.get_predicted_protein_data(self.results[condition])['mg_per_gP'].to_dict()
+            for gene, pred_mpmf in pred_mpmfs.items():
+                if gene in exp_mpmfs and gene in genes:
+                    mpmfs[gene] = [exp_mpmfs[gene], pred_mpmf]
+        return mpmfs
 
     def report_proteomics_correlation(self, scale='lin'):
         """Report on correlation predicted vs experimental protein mass fraction (log scale).
@@ -212,3 +251,108 @@ class Results(ABC):
             with open(fname, 'w') as f:
                 json.dump(df_species_conc[condition].to_dict(), f)
         print(f'metabolite data stored under {escher_dir}')
+
+    # PLOT SUPPORT
+
+    @ staticmethod
+    def get_log10_xy(xy):
+        log10_x = []
+        log10_y = []
+        for x, y in xy:
+            if x > 0.0 and y > 0.0:
+                log10_x.append(np.log10(x))
+                log10_y.append(np.log10(y))
+        return log10_x, log10_y
+
+    def plot_grs(self, exp_grs, gr_max=None, highlight=None):
+        """Plot predicted vs. experimental growth rates.
+
+        Using Matplotlib, plot correlation of predicted vs. experimental growth rates.
+
+        :param exp_grs: experimental growth rates of various conditions
+        :type exp_grs: dict (key: condition/str, val: growth rate/float)
+        :param gr_max: max growth rate on axis (optional)
+        :type gr_max: float or None
+        :param highlight: condition to be highlighted
+        :type highlight: str
+        """
+        marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
+
+        sigma = self.optim.avg_enz_saturation
+        cond_pred_grs = []
+        cond_exp_grs = []
+        for condition, solution in self.results.items():
+            if condition in exp_grs:
+                cond_pred_grs.append(solution.objective_value)
+                cond_exp_grs.append(exp_grs[condition])
+        if gr_max is None:
+            gr_max = max(max(cond_pred_grs), max(cond_exp_grs)) * 1.15
+
+        fig, axs = plt.subplots(1, 1, figsize=(4, 4), squeeze=False)
+        ax = axs[0, 0]
+
+        ax.scatter(cond_exp_grs, cond_pred_grs, marker=marker2)
+        if highlight is not None and highlight in self.results and highlight in exp_grs:
+            ax.scatter(exp_grs[highlight], self.results[highlight].objective_value)
+
+        r_value, p_value = scipy.stats.pearsonr(cond_exp_grs, cond_pred_grs)
+        stats = r'$R^2$' + f'={r_value ** 2:.4f}, p={p_value:.2e}'
+        ax.text(0.5, 0.01, stats, transform=ax.transAxes, va='bottom', ha='center', fontsize=10)
+        ax.text(0.05, 1.0, self.optim.model_name, transform=ax.transAxes, va='top')
+        ax.text(0.05, 0.94, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
+
+        ax.set(xlim=(0.0, gr_max), ylim=(0.0, gr_max))
+        ax.plot((0.0, 1.0), (0.0, 1.0), 'k--', lw=0.5)
+        ax.set_xlabel(r'experimental growth rate ($h^{-1}$)')
+        ax.set_ylabel(r'predicted growth rate ($h^{-1}$)')
+
+        # fig.savefig(f'plots/{model_name}_growth_rates.pdf')
+        plt.show()
+
+    def protein_correlation(self, condition):
+        metab_gene2mpmfs = self.get_rtype_condition_mpmf('metabolic', condition)
+        tx_gene2mpmfs = self.get_rtype_condition_mpmf('transport', condition)
+        pm_gene2mpmfs = self.get_rtype_condition_mpmf('other', condition)
+        all_gene2mpmfs = metab_gene2mpmfs | tx_gene2mpmfs | pm_gene2mpmfs
+
+        metab_mpmfs = np.array(list(metab_gene2mpmfs.values()))
+        tx_mpmfs = np.array(list(tx_gene2mpmfs.values()))
+        pm_mpmfs = np.array(list(pm_gene2mpmfs.values()))
+        all_mpmfs = np.array(list(all_gene2mpmfs.values()))
+        pred_mg_per_gp = sum(df_proteins[condition])
+
+        tx_only_pred = {}
+        metab_only_pred = {}
+        for gene in self.optim.m_dict['fbcGeneProducts']['label'].values:
+            if gene not in metab_gene2mpmfs and gene not in tx_gene2mpmfs:
+                mpmf = df_proteins.at[gene, condition]
+                if gene in tx_genes:
+                    tx_only_pred[gene] = mpmf
+                else:
+                    metab_only_pred[gene] = mpmf
+
+        only_pred = len(tx_only_pred) + len(metab_only_pred)
+        only_pred_mpmf = sum(tx_only_pred.values()) + sum(metab_only_pred.values())
+        print(f'{len(df_proteins):4d} proteins in model constraint at {pred_mg_per_gp:.1f} mg/gP')
+        print(f'{len(all_mpmfs):4d} proteins in proteomics pred {sum(all_mpmfs[:,1]):.1f} mg/gP vs. '
+              f'{sum(all_mpmfs[:,0]):.1f} mg/gP measured')
+        print(f'    {len(metab_mpmfs):4d} metabolic proteins pred {sum(metab_mpmfs[:,1]):5.1f} mg/gP '
+              f'vs. {sum(metab_mpmfs[:,0]):5.1f} mg/gP measured')
+        print(f'    {len(tx_mpmfs):4d} transport proteins pred {sum(tx_mpmfs[:,1]):5.1f} mg/gP '
+              f'vs. {sum(tx_mpmfs[:,0]):5.1f} mg/gP measured')
+        if len(pm_gene2mpmfs) > 0:
+            print(f'    {len(pm_mpmfs):4d} transport proteins pred {sum(pm_mpmfs[:, 1]):5.1f} mg/gP '
+                  f'vs. {sum(pm_mpmfs[:, 0]):5.1f} mg/gP measured')
+
+        print(f'{only_pred:4d} proteins only predicted {only_pred_mpmf:.1f} mg/gP')
+        print(f'    {len(metab_only_pred):4d} metabolic proteins {sum(metab_only_pred.values()):5.1f} mg/gP')
+        print(f'    {len(tx_only_pred):4d} transport proteins {sum(tx_only_pred.values()):5.1f} mg/gP')
+
+        p_classes = {'transporter': tx_mpmfs, 'metabolic': metab_mpmfs, 'total': all_mpmfs}
+        for p_class, mpmfs in p_classes.items():
+            x, y = er.get_log10_xy(mpmfs)
+            r_value, p_value = scipy.stats.pearsonr(x, y)
+            print(f'{p_class:16s}: R\N{SUPERSCRIPT TWO}={r_value ** 2:.4f}, p={p_value:.2e} '
+                  f'({len(x):4d} proteins log scale)')
+
+        self.plot_proteins(condition, lin_max=None)

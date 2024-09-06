@@ -64,5 +64,9 @@ class NcbiFtRecord:
         return length
 
     @property
+    def old_locus(self):
+        return getattr(self, 'old_locus_tag', None)
+
+    @property
     def locus(self):
         return getattr(self, 'locus_tag', None)

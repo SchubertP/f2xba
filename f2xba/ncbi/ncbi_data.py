@@ -32,14 +32,44 @@ class NcbiData:
         for chrom_id, accession_id in chromosome2accid.items():
             self.chromosomes[chrom_id] = NcbiChromosome(chrom_id, accession_id, ncbi_dir)
 
+        # mapping of NCBI record loci to feature records and proteins across chromosomes
         self.locus2record = {}
+        self.locus2protein = {}
         for chrom_id, chrom in self.chromosomes.items():
             self.locus2record.update(chrom.mrnas)
             self.locus2record.update(chrom.rrnas)
             self.locus2record.update(chrom.trnas)
+            self.locus2protein.update(chrom.proteins)
+
+        # mapping of gene product label to NCBI locus (including NCBI old_locus_tag)
+        self.label2locus = {}
+        for locus, record in self.locus2record.items():
+            self.label2locus[locus] = locus
+            if hasattr(record, 'old_locus') and record.old_locus is not None:
+                self.label2locus[record.old_locus] = locus
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        used to add gene product labels to NCBI loci
+        e.g.: attribute = 'label2locus'
+              value = 'sll8031=SGL_RS01280, sml0004=SGL_RS18655,
+
+        :param attribute: attribute name, currently only 'label2locus'
+        :type attribute: str
+        :param value: value to be configured, key=value pairs, comma separated.
+        :type value: str
+        """
+        if attribute == 'label2locus':
+            for kv_pair in value.split(','):
+                label, locus = kv_pair.split('=')
+                if locus.strip() in self.locus2record:
+                    self.label2locus[label.strip()] = locus.strip()
+        else:
+            print(f'NCBI attribute {attribute} can not be updated. Supported: label2locus')
 
     def get_gc_content(self, chromosome_id=None):
-        """retrieve GC content accross all or a specifiec chromosome
+        """Retrieve GC content accross all or a specifiec chromosome
 
         :param chromosome_id: specific chromosome id
         :type chromosome_id: str or None (optional: default: None)

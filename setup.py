@@ -38,6 +38,7 @@ setup(
                       'numpy>=0.21.0',
                       'scipy>=1.11.0',
                       'requests>=2.26.0',
+                      'matplotlib>=3.6.3',
                       'sbmlxdf>=0.2.7'],
     python_requires=">=3.8",
     keywords=['modeling', 'SBML', 'FBA', 'RBA', 'GBA',

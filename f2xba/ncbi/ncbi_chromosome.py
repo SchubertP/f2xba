@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from .ncbi_feature import NcbiFeature
+from .ncbi_protein import NcbiProtein
 
 
 e_utils_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/'
@@ -42,14 +43,16 @@ class NcbiChromosome:
         self.accession_id = accession_id
 
         seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta.txt')
-        # aa_seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta_cds_aa.txt')
-        ft_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_features.txt')
+        self.fasta_cds_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta_cds_aa.txt')
+        self.ft_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_features.txt')
 
         # download data from NCBI, unless data exists locally
-        if not os.path.exists(seq_fname) or not os.path.exists(ft_fname):
+        if (not os.path.exists(seq_fname) or
+                not os.path.exists(self.ft_fname) or
+                not os.path.exists(self.fasta_cds_fname)):
             self.download_data('fasta', seq_fname)
-            self.download_data('ft', ft_fname)
-            # self.download_data('fasta_cds_aa', aa_seq_fname)
+            self.download_data('ft', self.ft_fname)
+            self.download_data('fasta_cds_aa', self.fasta_cds_fname)
         else:
             print(f'extracting nucleotide sequence from {seq_fname}')
 
@@ -64,10 +67,13 @@ class NcbiChromosome:
         self.gc_content = (self.nt_composition['G'] + self.nt_composition['C']) / sum(self.nt_composition.values())
 
         # collect feature data
-        self.features = self.extract_features(ft_fname, chrom_nt_sequence)
+        self.features = self.extract_features(chrom_nt_sequence)
         self.rrnas = {locus: gp for locus, gp in self.features.items() if gp.gp_type == 'rRNA'}
         self.trnas = {locus: gp for locus, gp in self.features.items() if gp.gp_type == 'tRNA'}
         self.mrnas = {locus: gp for locus, gp in self.features.items() if gp.gp_type == 'CDS'}
+
+        # collect protein data from fasta cds file
+        self.proteins = self.extract_proteins()
 
     def download_data(self, rettype, fname):
         """Download data for retrival type from NCBI nucleotide database to file.
@@ -84,47 +90,76 @@ class NcbiChromosome:
                           f'db=nuccore&id={self.accession_id}&rettype={rettype}&retmode="text"')
         with urllib.request.urlopen(ncbi_fetch_url) as response, open(fname, 'wb') as fh:
             fh.write(response.read())
-            print(f'Ncbi {rettype} records downloaded {self.accession_id} to: {fname}')
+            print(f'NCBI {rettype} records downloaded {self.accession_id} to: {fname}')
 
-    @staticmethod
-    def extract_features(ft_fname, chrom_nt_seq):
+    def extract_features(self, chrom_nt_seq):
         """Extract features from NCBI features file.
 
         A Feature contains 'gene' records and
         'tRNA', 'rRNA' or 'CDS' records
 
-        A new Feature starts with a 'gene' start record.
-        A start record contains start, stop and record type information.
-        Subsequent lines can contain start/stop information related to spliced products
-        Subsequent lines can contrain record attributes that will be collected.
+        E.g. gene in E. coli U00096.3_features.txt:
 
-        :param ft_fname: file name with gene feature information
-        :type ft_fname: str
+            2725925	2725987	gene
+                gene 	yfiS
+                gene_syn	ECK4639
+                locus_tag	b4783
+                db_xref	ECOCYC:G0-17029
+            2725925	2725987	CDS
+                product	protein YfiS
+                transl_table	11
+                protein_id	gb|QNV50536.1||gnl|b4783|CDS2742
+                transcript_id	gnl|b4783|mrna.CDS2742
+                db_xref	UniProtKB/Swiss-Prot:P0DSG1
+
+        A new Feature starts with a 'gene' start record.
+            this record contains some attributes which are collected
+        The gene type is contain in a subsequent reocord with start/stop/record type
+            this record constains some attributes which are collected
+
+        Note: special records can contain start/stop information related to spliced products
+        Note: not all records will be collected, e.g. 'mobile_element' records will be skipped
+
         :param chrom_nt_seq: nucleotide sequence of chromosome
-        :type chrom_nt_seq:
+        :type chrom_nt_seq: str
         :return: dict with gene locus and related NCBI feature record
         :rtype: dict (key: gstr; val: class NCBIFeatureRecord)
         """
         skipped_types = {'repeat_region', 'mobile_element', 'rep_origin'}
 
         features = {}
-        with open(ft_fname, 'r') as fh:
+        with open(self.ft_fname, 'r') as fh:
             fh.readline().strip()  # drop file header
 
             gene_data = None
             for line in fh:
                 fields = line.rstrip().split('\t')
+
+                # record header information
                 if len(fields) == 3:
+
                     record_type = fields[2]
+
+                    # a 'gene' record starts a new feature record
                     if record_type == 'gene':
-                        # this starts a new feature
+
+                        # collect information from a previous feature record
                         if gene_data is not None:
                             locus = gene_data.collect_info(chrom_nt_seq)
                             features[re.sub(r'\W', '_', locus)] = gene_data
-                        gene_data = NcbiFeature(record_type, int(fields[0]), int(fields[1]))
+
+                        # start a new feature record, unless gene is incomplete
+                        if re.match(r'\d*$', fields[0]) and re.match(r'\d*$', fields[1]):
+                            gene_data = NcbiFeature(record_type, int(fields[0]), int(fields[1]))
+                        else:
+                            gene_data = None
+
+                    # add sub-record related to previous 'gene' record
                     elif gene_data is not None and record_type not in skipped_types:
-                        # this adds a new record
-                        gene_data.add_record(record_type, int(fields[0]), int(fields[1]))
+                        if re.match(r'\d*$', fields[0]) and re.match(r'\d*$', fields[1]):
+                            gene_data.add_record(record_type, int(fields[0]), int(fields[1]))
+
+                # attribute information within a record
                 elif gene_data is not None:
                     if len(fields) == 2:
                         # this adds splicing information
@@ -133,9 +168,58 @@ class NcbiChromosome:
                         # this adds attributes
                         gene_data.add_attribute(record_type, fields[3], fields[4])
 
+        # collect final feature record at end of file
         if gene_data is not None:
             # final feature processing
             locus = gene_data.collect_info(chrom_nt_seq)
             features[re.sub(r'\W', '_', locus)] = gene_data
 
         return features
+
+    def extract_proteins(self):
+        """Extract protein data from NCBI fasta cds file
+
+        Data can be used, when Uniprot Data is not available
+
+        Example record:
+        >lcl|NC_000911.1_prot_WP_010872574.1_1430 [gene=fldA] [locus_tag=SGL_RS08960]
+         [protein=flavodoxin FldA] [protein_id=WP_010872574.1]
+         [location=complement(1516659..1517171)] [gbkey=CDS]
+        MTKIGLFYGTQTGNTETIAELIQKEMGGDSVVDMMDISQADVDDFRQYSCLIIGCPTWNVGELQSDWEGF
+        YDQLDEIDFNGKKVAYFGAGDQVGYADNFQDAMGILEEKISGLGGKTVGFWPTAGYDFDESKAVKNGKFV
+        GLALDEDNQPELTELRVKTWVSEIKPILQS
+
+        :return: proteins
+        :rtype: dict (key: locus, val: NcbiProtein
+        """
+        locus = None
+        proteins = {}
+        with open(self.fasta_cds_fname, 'r') as fh:
+            for line in fh:
+                line = line.strip()
+
+                # process header line
+                if re.match('>', line):
+
+                    # store a previous record
+                    if locus is not None:
+                        attributes['aa_sequence'] = aa_seq
+                        proteins[locus] = NcbiProtein(attributes)
+
+                    attributes = {}
+                    for kv_pair in re.findall(r' \[([^\[]*)]', line):
+                        k, v = kv_pair.split('=', 1)
+                        attributes[k] = v
+                    locus = attributes['locus_tag']
+                    aa_seq = ''
+
+                # collect amino acid sequence
+                else:
+                    aa_seq += line
+
+        # process last record in file
+        if locus is not None:
+            attributes['aa_sequence'] = aa_seq
+            proteins[locus] = NcbiProtein(attributes)
+
+        return proteins
