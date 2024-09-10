@@ -515,7 +515,7 @@ class XbaModel:
                                                genes, name, rev_rs]
 
         cols = ['rid', 'dirxn', 'enzyme', 'kcat_per_s', 'notes',
-                'info_active_sites', 'info ecns', 'info_type', 'info_genes', 'info_name', 'info_reaction']
+                'info_active_sites', 'info_ecns', 'info_type', 'info_genes', 'info_name', 'info_reaction']
         df_rid_kcats = pd.DataFrame(kcats.values(), columns=cols, index=list(kcats))
         df_rid_kcats.index.name = 'key'
 
@@ -546,6 +546,174 @@ class XbaModel:
         with pd.ExcelWriter(fname) as writer:
             df_enz_comp.to_excel(writer, sheet_name='enzymes')
             print(f'{len(df_enz_comp)} enzyme compositions exported to', fname)
+
+    def generate_turnup_input(self, orig_kcats_fname, kind='metabolic', fname='tmp_turnup_input.csv', max_records=500):
+        """Generate Input files for TurNuP kcat predictions.
+
+        Ref: Kroll, et al., 2023, Turnover number predictions for kinetically uncharacterized enzymes using
+             machine and deep learning. Nature Communications, 14(1), 4139.
+             DOI: https://doi.org/10.1038/s41467-023-39840-4
+
+        TurNuP (https://turnup.cs.hhu.de/Kcat_multiple_input) predicts kcat values for enzyme
+        catalyzed reactions, requiring protein amino acid sequence and optionally KEGG IDs (or Smiles, InChi)
+        of educts and products participating in the reactions.
+
+        Predictions for forward and reverse path are identical, therefore we only require prediction for forward path.
+        TurNuP is trained in metabolic enzymes, not on transporters yet.
+
+        TurNuP web interface has a limit of 500 kcats per input file. Files are split accordingly.
+
+        Predicted kcat values will be used to update kcat parameter file of model
+
+        :param orig_kcats_fname: baseline kcat parameter file, e.g. created with export_kcats() method.
+        :type orig_kcats_fname: str
+        :param kind: reaction kind for which to generate TurNuP input files, (default: 'metabolic')
+        :type kind: str, e.g 'metablic', 'all'
+        :param fname: file name for TurNuP input file / files, (default: tmp_turnup_input.csv)
+        :type fname: str, with file-suffix '.csv'
+        :param max_records: maximum number of recored in input file (for splitting of input files) (default: 500)
+        :type max_records: int
+        :return: TurNuP input data with amino acid sequences and KEGG ids of subtrates and products
+        :rtype: pandas DataFrame
+        """
+        with pd.ExcelFile(orig_kcats_fname) as xlsx:
+            df_orig_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
+            print(f'{len(df_orig_kcats):4d} original kcat records loaded from {orig_kcats_fname}')
+
+        sids_no_kegg = set()
+        records = []
+        for fwd_key, row in df_orig_kcats.iterrows():
+
+            # TurNuP predicts same kcat for fwd and corresponding reverse reaction
+            if row['dirxn'] != 1:
+                continue
+                # TurNuP presently only predicts kcat values for metabolic reactions
+            if row['info_type'] == 'all' or row['info_type'] == kind:
+                rev_key = f'{fwd_key}_REV' if f'{fwd_key}_REV' in df_orig_kcats.index else None
+
+                # retrieve KEGG ids for substrates and products
+                missing_keggs = False
+                r = self.reactions[row['rid']]
+
+                substrates = []
+                for sid in r.reactants:
+                    s = self.species[sid]
+                    if len(s.kegg_refs) == 0:
+                        missing_keggs = True
+                        sids_no_kegg.add(sid)
+                    else:
+                        substrates.append(s.kegg_refs[0])
+                products = []
+                for sid in r.products:
+                    s = self.species[sid]
+                    if len(s.kegg_refs) == 0:
+                        missing_keggs = True
+                        sids_no_kegg.add(sid)
+                    else:
+                        products.append(s.kegg_refs[0])
+                subs_keggs = None if missing_keggs else ';'.join(substrates)
+                prod_keggs = None if missing_keggs else ';'.join(products)
+
+                # for enzyme complexes, we concatenate aa sequnces of involved proteins
+                e = self.enzymes[row['enzyme']]
+                aa_seq = ''
+                for gpid in e.composition:
+                    pid = self.locus2uid[gpid]
+                    p = self.proteins[pid]
+                    aa_seq += p.aa_sequence
+
+                records.append([fwd_key, rev_key, row['enzyme'], row['info_ecns'], row['info_type'],
+                                aa_seq, subs_keggs, prod_keggs])
+
+        cols = ['fwd_key', 'rev_key', 'enzyme_id', 'info_ecns', 'info_type', 'Enzyme', 'Substrates', 'Products']
+        df_input = pd.DataFrame(records, columns=cols)
+        df_input.set_index('fwd_key', inplace=True)
+
+        n_rev = sum(df_input['rev_key'].notna())
+        no_reactions = sum(df_input['Substrates'].notna())
+        n_no_kegg = len(sids_no_kegg)
+        print(f'{len(df_input)} kcat records ({n_rev} reversible), {no_reactions} records with sequence and reaction')
+        print(f'{n_no_kegg} species without KEGG ids, e.g.: {list(sids_no_kegg)[:min(n_no_kegg, 10)]}')
+
+        # store TurNuP input file(s) - split as per max record length
+        if len(df_input) <= max_records:
+            df_input.to_csv(fname, sep=';')
+            print(f'1 TurNuP input file ({len(df_input)} records) stored under {fname}')
+            print(f' - upload file to TurNuP Web Server: https://turnup.cs.hhu.de/Kcat_multiple_input')
+        else:
+            base_fname = re.sub('.csv$', '', fname)
+            fnames = []
+            idx = 1
+            start = 0
+            stop = start + max_records
+
+            while start < len(df_input):
+                input_fname = f'{base_fname}_{idx}_seq.csv'
+                df_input.iloc[start:stop].to_csv(input_fname, sep=';')
+                fnames.append(input_fname)
+                idx += 1
+                start = stop
+                stop = min(len(df_input), start + max_records)
+
+            print(f'{len(fnames)} TurNuP input files (max {max_records} records) stored under '
+                  f'{fnames[0]} ... {fnames[-1]}')
+            print(f' - upload files individually to TurNuP Web Server: https://turnup.cs.hhu.de/Kcat_multiple_input')
+        print(f' - retrieve TurNuP kcat predictions and continue with process_turnup_output()')
+        return sids_no_kegg
+
+    @staticmethod
+    def process_turnup_output(orig_kcats_fname, pred_kcats_fname, input_files, output_files):
+        """Process TurNuP kcat prediction results and create new kcat parameter file.
+
+        Using as input the list of TurNuP input and corresponding output files.
+        Update predicted kcat values in baseline kcats parameter file and create an updated parameter file.
+
+        :param orig_kcats_fname: baseline kcat parameter file, e.g. created with export_kcats() method.
+        :type orig_kcats_fname: str
+        :param pred_kcats_fname: kcat parameter file name with predicted kcats
+        :type pred_kcats_fname: str
+        :param input_files: List of TurNuP input file names
+        :type input_files: list of str
+        :param output_files: List of corresponding TurNuP output file names
+        :type output_files: list of str
+        :return:
+        """
+        # update original kcats parameter file with data from TurNuP predictions, using input files as reference
+        with pd.ExcelFile(orig_kcats_fname) as xlsx:
+            df_predicted_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
+            print(f'{len(df_predicted_kcats):4d} original kcat records loaded from {orig_kcats_fname}')
+
+        notes = 'TurNuP predicted'
+        pred_fwd = 0
+        pred_rev = 0
+
+        for file_idx in range(len(input_files)):
+            print(f'{os.path.basename(input_files[file_idx])} - {os.path.basename(output_files[file_idx])}')
+            df_input = pd.read_csv(input_files[file_idx], sep=';')
+            df_output = pd.read_csv(output_files[file_idx], sep=';')
+            assert len(df_input) == len(df_output), 'TurNuP input does not match TurNuP output file'
+
+            for idx, row in df_input.iterrows():
+                if type(df_input.at[idx, 'Substrates']) is str and type(df_output.at[idx, 'substrates']) is str:
+                    if df_input.at[idx, 'Substrates'] != df_output.at[idx, 'substrates']:
+                        print(f'{input_files[file_idx]} not in sync with {output_files[file_idx]} at record {idx}')
+                        return
+
+                pred_kcat = df_output.at[idx, 'kcat [s^(-1)]']
+                df_predicted_kcats.at[row['fwd_key'], 'kcat_per_s'] = pred_kcat
+                df_predicted_kcats.at[row['fwd_key'], 'notes'] = notes
+                pred_fwd += 1
+                if type(row['rev_key']) is str:
+                    df_predicted_kcats.at[row['rev_key'], 'kcat_per_s'] = pred_kcat
+                    df_predicted_kcats.at[row['rev_key'], 'notes'] = notes
+                    pred_rev += 1
+
+        print(f'{pred_fwd + pred_rev:4d} kcat records replaced by predicted values '
+              f'({pred_fwd} forward, {pred_rev} reverse direction)')
+
+        with pd.ExcelWriter(pred_kcats_fname) as writer:
+            df_predicted_kcats.to_excel(writer, sheet_name='kcats')
+            print(f'{len(df_predicted_kcats):4d} kcat records exported to', pred_kcats_fname)
 
     #############################
     # MODIFY GENOME SCALE MODEL #
@@ -723,7 +891,7 @@ class XbaModel:
             if component_type == 'ncbi':
                 self.ncbi_data.modify_attribute(row['attribute'], row['value'])
             elif component_type == 'uniprot':
-                self.uniprot_data.proteins.modify_attribute(row['attribute'], row['value'])
+                self.uniprot_data.proteins[_id].modify_attribute(row['attribute'], row['value'])
             else:
                 component_mapping[component_type][_id].modify_attribute(row['attribute'], row['value'])
         if n_count > 0:
@@ -794,7 +962,7 @@ class XbaModel:
           - extract uniprot id from gene product record, if uniprot has been configured
           - alternatively check uniprot lookup table locus2uid to find uniprot id from gene product label
             - also update uid in gene product structure
-        - if uniprot record does not exists, collect protein data from NCBI protein record sequence
+        - if uniprot record doesn't exist, collect protein data from NCBI protein record sequence
 
         We also configure gene id and gene name 'notes'-field of gene product
         """

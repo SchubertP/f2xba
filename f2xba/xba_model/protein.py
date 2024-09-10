@@ -23,7 +23,7 @@ class Protein:
         self.linked_sids = set()
         self.up_cofactors = uniprot.cofactors
         self.cofactors = {}
-        self.aa_composition = uniprot.aa_composition
+        self.aa_sequence = uniprot.aa_sequence
         self.has_signal_peptide = True if type(uniprot.signal_peptide) is str else False
 
     def set_compartment(self, compartment):

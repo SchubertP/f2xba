@@ -17,7 +17,7 @@ from .rba_enzymes import RbaEnzymes
 from .rba_densities import RbaDensities
 from .rba_targets import RbaTargets
 from .rba_medium import RbaMedium
-from ..utils.calc_mw import protein_mw_from_aa_comp, rna_mw_from_nt_comp, ssdna_mw_from_dnt_comp
+from ..utils.calc_mw import protein_mw_from_aa_comp, rna_mw_from_nt_comp, ssdna_mw_from_dnt_comp, get_seq_composition
 from ..utils.mapping_utils import valid_sbml_sid
 from .initital_assignments import InitialAssignments
 import f2xba.prefixes as pf
@@ -119,7 +119,7 @@ class RbaModel:
         # determine average protein composition
         aa_count = defaultdict(int)
         for p in self.model.proteins.values():
-            for cmp_id, count in p.aa_composition.items():
+            for cmp_id, count in get_seq_composition(p.aa_sequence).items():
                 aa_count[cmp_id] += count
         total_count = sum(aa_count.values())
         avg_aa_len = total_count / len(self.model.proteins)

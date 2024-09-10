@@ -53,10 +53,13 @@ class SbmlSpecies(SbmlSBase):
         if 'miriamAnnotation' in s_species:
             chebi_refs = get_miriam_refs(s_species['miriamAnnotation'], 'chebi', 'bqbiol:is')
             self.chebi_refs = [ref.split(':')[1] for ref in chebi_refs]
+            kegg_refs = get_miriam_refs(s_species['miriamAnnotation'], 'kegg.compound', 'bqbiol:is')
+            self.kegg_refs = [ref for ref in kegg_refs]
             seed_refs = get_miriam_refs(s_species['miriamAnnotation'], 'seed.compound', 'bqbiol:is')
             self.seed_refs = [ref for ref in seed_refs]
         else:
             self.chebi_refs = []
+            self.kegg_refs = []
             self.seed_refs = []
 
     def modify_attribute(self, attribute, value):

@@ -7,6 +7,7 @@ import os
 import numpy as np
 import pandas as pd
 from xml.etree.ElementTree import parse, ElementTree, Element, SubElement, indent
+from ..utils.calc_mw import get_seq_composition
 
 type2tag = {'dna': 'RBADna', 'rnas': 'RBARnas', 'proteins': 'RBAProteins'}
 
@@ -115,21 +116,21 @@ class RbaMacromolecules:
             for trna_id, row in df_trna_data.iterrows():
                 cid = rcid2cid[row['compartment']]
                 record = xba_model.ncbi_data.locus2record[row['label']]
-                self.macromolecules[trna_id] = RbaMacromolecule(trna_id, compartment=cid,
-                                                                composition=record.spliced_nt_composition)
+                composition = record.spliced_nt_composition
+                self.macromolecules[trna_id] = RbaMacromolecule(trna_id, compartment=cid, composition=composition)
             # add rRNAs
             for _pm, row in df_mach_data[df_mach_data['macromolecules'] == 'rnas'].iterrows():
                 cid = rcid2cid[row['compartment']]
                 record = xba_model.ncbi_data.locus2record[row['label']]
                 rrna_id = row['id']
-                self.macromolecules[rrna_id] = RbaMacromolecule(rrna_id, compartment=cid,
-                                                                composition=record.spliced_nt_composition)
+                composition = record.spliced_nt_composition
+                self.macromolecules[rrna_id] = RbaMacromolecule(rrna_id, compartment=cid, composition=composition)
         if self.type == 'proteins':
             for p in xba_model.proteins.values():
                 locus = p.locus
                 cid = rcid2cid[p.compartment]
-                self.macromolecules[locus] = RbaMacromolecule(locus, compartment=cid,
-                                                              composition=p.aa_composition | p.cofactors)
+                composition = get_seq_composition(p.aa_sequence) | p.cofactors
+                self.macromolecules[locus] = RbaMacromolecule(locus, compartment=cid, composition=composition)
 
         # calulate macromolecular weight
         for mm in self.macromolecules.values():
