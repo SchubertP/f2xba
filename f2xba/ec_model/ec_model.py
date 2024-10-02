@@ -385,7 +385,7 @@ class EcModel:
         scaled total enzyme kcat by number of active sites and average enzyme saturation
 
         protein constraint for a specific protein:
-          reaction flux [mmol/gDWh] ≤ kcat [1/s] * 3600 [s/h] * n_AS * stoic * avg_enz_sat * P_conc [mg/gDW]
+          reaction flux [mmol/gDWh] ≤ kcat [1/s] * 3600 [s/h] * n_AS * 1/stoic * avg_enz_sat * P_conc [mg/gDW]
                                       * 1/MW [mmol/mg]
           - stoic: number of protein copies in the enzyme
           - n_AS: number of active sites

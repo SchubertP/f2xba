@@ -214,7 +214,7 @@ class Results(ABC):
                             x.append(np.log10(exp_mpmfs[gene]))
                             y.append(np.log10(pred_mpmfs[gene]))
                 r_value, p_value = scipy.stats.pearsonr(x, y)
-                print(f'{condition:25s}: R\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
+                print(f'{condition:25s}: r\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
                       f'({len(x)} proteins {scale} scale)')
 
     def save_fluxes_to_escher(self, escher_dir, model_name):
@@ -309,7 +309,12 @@ class Results(ABC):
         # fig.savefig(f'plots/{model_name}_growth_rates.pdf')
         plt.show()
 
+    # TODO: under construction
     def protein_correlation(self, condition):
+
+        df_proteins = self.get_predicted_protein_data(self.results[condition])
+        tx_genes = self.optim.get_genes_assigned_to('transport')
+
         metab_gene2mpmfs = self.get_rtype_condition_mpmf('metabolic', condition)
         tx_gene2mpmfs = self.get_rtype_condition_mpmf('transport', condition)
         pm_gene2mpmfs = self.get_rtype_condition_mpmf('other', condition)
@@ -350,9 +355,56 @@ class Results(ABC):
 
         p_classes = {'transporter': tx_mpmfs, 'metabolic': metab_mpmfs, 'total': all_mpmfs}
         for p_class, mpmfs in p_classes.items():
-            x, y = er.get_log10_xy(mpmfs)
+            x, y = self.get_log10_xy(mpmfs)
             r_value, p_value = scipy.stats.pearsonr(x, y)
             print(f'{p_class:16s}: R\N{SUPERSCRIPT TWO}={r_value ** 2:.4f}, p={p_value:.2e} '
                   f'({len(x):4d} proteins log scale)')
 
         self.plot_proteins(condition, lin_max=None)
+
+    # PLOT ROUTINES
+    def plot_proteins(self, condition, lin_max=None):
+        marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
+        log_delta = np.log10(5.0)
+        sigma = self.optim.avg_enz_saturation
+
+        metab_mpmfs = np.array(list(self.get_rtype_condition_mpmf('metabolic', condition).values()))
+        tx_mpmfs = np.array(list(self.get_rtype_condition_mpmf('transport', condition).values()))
+
+        fig, axs = plt.subplots(1, 2, figsize=(8, 4 * .618), squeeze=False)
+        for gcol in [0, 1]:
+            ax = axs[0, gcol]
+            if gcol == 0:  # lin scale
+                ax.scatter(metab_mpmfs[:, 0], metab_mpmfs[:, 1], marker=marker2, label='metabolic')
+                ax.scatter(tx_mpmfs[:, 0], tx_mpmfs[:, 1], marker=marker2, label='transport')
+                lin_vals = np.concatenate((metab_mpmfs.flatten(), tx_mpmfs.flatten()))
+                if lin_max is None:
+                    lin_max = max(lin_vals) + 10.0
+                xy_range = (0.0, lin_max)
+                ax.set_xlabel(r'experimental mpmf (mg/gP)')
+                ax.set_ylabel(r'predicted mpmf (mg/gP)')
+                ax.legend(loc='lower right')
+                ax.text(0.1, 1.0, self.optim.model_name, transform=ax.transAxes, va='top')
+                ax.text(0.1, 0.90, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
+                ax.text(1.0, 0.5, f'[... {max(lin_vals):.1f}]', transform=ax.transAxes,
+                        va='top', ha='right')
+
+            else:  # log10 scale
+                log_metab_x, log_metab_y = self.get_log10_xy(metab_mpmfs)
+                ax.scatter(log_metab_x, log_metab_y, marker=marker2, label='metabolic')
+                log_tx_x, log_tx_y = self.get_log10_xy(tx_mpmfs)
+                ax.scatter(log_tx_x, log_tx_y, marker=marker2, label='transport')
+                log_vals = np.concatenate((log_metab_x, log_metab_y, log_tx_x, log_tx_y))
+                xy_range = (-7.0, 3.0)
+                ax.set_xlabel(r'experimental mpmf log10')
+                ax.set_ylabel(r'predicted mpmf log10')
+                ax.legend(loc='upper left')
+                ax.plot((xy_range[0] + log_delta, xy_range[1]), (xy_range[0], xy_range[1] - log_delta), 'k:', lw=0.5)
+                ax.plot((xy_range[0], xy_range[1] - log_delta), (xy_range[0] + log_delta, xy_range[1]), 'k:', lw=0.5)
+                ax.text(1.0, 0.1, f'[{min(log_vals):.1f} ... {max(log_vals):.1f}]', transform=ax.transAxes,
+                        va='top', ha='right')
+
+            ax.set(xlim=xy_range, ylim=xy_range)
+            ax.plot(xy_range, xy_range, 'k--', lw=0.5)
+        # fig.savefig(f'plots/{model_name}_proteins.pdf')
+        plt.show()

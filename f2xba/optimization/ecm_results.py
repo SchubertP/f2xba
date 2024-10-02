@@ -154,8 +154,7 @@ class EcmResults(Results):
         return df_net_fluxes
 
     # PLOT ROUTINES
-
-    def plot_proteins(self, condition, lin_max=None):
+    def plot_proteins_old(self, condition, lin_max=None):
         marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
         log_delta = np.log10(5.0)
         sigma = self.optim.avg_enz_saturation

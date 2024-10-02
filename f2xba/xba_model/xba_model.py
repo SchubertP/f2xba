@@ -284,8 +284,10 @@ class XbaModel:
 
             # configure reaction/enzyme specific kcat values
             if 'kcats_fname' in general_params:
-                count = self.set_reaction_kcats(general_params['kcats_fname'])
-                print(f'{count:4d} kcat values updated from {general_params["kcats_fname"]}')
+                kcats_fname = general_params['kcats_fname']
+                count = self.set_reaction_kcats(kcats_fname)
+                print(f'{count:4d} kcat values updated from {kcats_fname} '
+                      f'({time.ctime(os.path.getmtime(kcats_fname))})')
 
             # remove enzyme from reactions if kcat values have not been provided
             count = 0
@@ -547,7 +549,8 @@ class XbaModel:
             df_enz_comp.to_excel(writer, sheet_name='enzymes')
             print(f'{len(df_enz_comp)} enzyme compositions exported to', fname)
 
-    def generate_turnup_input(self, orig_kcats_fname, kind='metabolic', fname='tmp_turnup_input.csv', max_records=500):
+    def generate_turnup_input(self, orig_kcats_fname, kind='metabolic', mids2ref=None,
+                              fname='tmp_turnup_input.csv', max_records=500):
         """Generate Input files for TurNuP kcat predictions.
 
         Ref: Kroll, et al., 2023, Turnover number predictions for kinetically uncharacterized enzymes using
@@ -563,56 +566,70 @@ class XbaModel:
 
         TurNuP web interface has a limit of 500 kcats per input file. Files are split accordingly.
 
-        Predicted kcat values will be used to update kcat parameter file of model
-
         :param orig_kcats_fname: baseline kcat parameter file, e.g. created with export_kcats() method.
         :type orig_kcats_fname: str
         :param kind: reaction kind for which to generate TurNuP input files, (default: 'metabolic')
         :type kind: str, e.g 'metablic', 'all'
+        :param mids2ref: manual mapping of metabolite ids to KEGG, InChI or SMILES reference
+        :type mids2ref: dict (key: mid/str, value: reference/str), default: None
         :param fname: file name for TurNuP input file / files, (default: tmp_turnup_input.csv)
         :type fname: str, with file-suffix '.csv'
         :param max_records: maximum number of recored in input file (for splitting of input files) (default: 500)
         :type max_records: int
-        :return: TurNuP input data with amino acid sequences and KEGG ids of subtrates and products
-        :rtype: pandas DataFrame
+        :return: metabolites without KEGG, InChi or SMILES reference
+        :rtype: dict (key: mid/str, value: sid/str)
         """
         with pd.ExcelFile(orig_kcats_fname) as xlsx:
             df_orig_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
             print(f'{len(df_orig_kcats):4d} original kcat records loaded from {orig_kcats_fname}')
 
-        sids_no_kegg = set()
+        if mids2ref is None:
+            mids2ref = {}
+        mids_no_ref = {}
         records = []
         for fwd_key, row in df_orig_kcats.iterrows():
 
             # TurNuP predicts same kcat for fwd and corresponding reverse reaction
             if row['dirxn'] != 1:
                 continue
-                # TurNuP presently only predicts kcat values for metabolic reactions
-            if row['info_type'] == 'all' or row['info_type'] == kind:
+            # TurNuP presently only predicts kcat values for metabolic reactions
+            if kind == 'all' or row['info_type'] == kind:
                 rev_key = f'{fwd_key}_REV' if f'{fwd_key}_REV' in df_orig_kcats.index else None
 
                 # retrieve KEGG ids for substrates and products
-                missing_keggs = False
+                missing_ref = False
                 r = self.reactions[row['rid']]
 
                 substrates = []
                 for sid in r.reactants:
-                    s = self.species[sid]
-                    if len(s.kegg_refs) == 0:
-                        missing_keggs = True
-                        sids_no_kegg.add(sid)
+                    # remove compartment postfix (assume there is a compartment postfix)
+                    mid = re.sub('_[^_]*$', '', sid)
+                    if mid not in mids2ref:
+                        s = self.species[sid]
+                        if len(s.kegg_refs) > 0:
+                            mids2ref[mid] = s.kegg_refs[0]
+                    if mid in mids2ref:
+                        substrates.append(mids2ref[mid])
                     else:
-                        substrates.append(s.kegg_refs[0])
+                        missing_ref = True
+                        mids_no_ref[mid] = sid
+
                 products = []
                 for sid in r.products:
-                    s = self.species[sid]
-                    if len(s.kegg_refs) == 0:
-                        missing_keggs = True
-                        sids_no_kegg.add(sid)
+                    # remove compartment postfix (assume there is a compartment postfix)
+                    mid = re.sub('_[^_]*$', '', sid)
+                    if mid not in mids2ref:
+                        s = self.species[sid]
+                        if len(s.kegg_refs) > 0:
+                            mids2ref[mid] = s.kegg_refs[0]
+                    if mid in mids2ref:
+                        products.append(mids2ref[mid])
                     else:
-                        products.append(s.kegg_refs[0])
-                subs_keggs = None if missing_keggs else ';'.join(substrates)
-                prod_keggs = None if missing_keggs else ';'.join(products)
+                        missing_ref = True
+                        mids_no_ref[mid] = sid
+
+                subs_keggs = None if missing_ref else ';'.join(substrates)
+                prod_keggs = None if missing_ref else ';'.join(products)
 
                 # for enzyme complexes, we concatenate aa sequnces of involved proteins
                 e = self.enzymes[row['enzyme']]
@@ -622,18 +639,17 @@ class XbaModel:
                     p = self.proteins[pid]
                     aa_seq += p.aa_sequence
 
-                records.append([fwd_key, rev_key, row['enzyme'], row['info_ecns'], row['info_type'],
+                records.append([fwd_key, rev_key, row['enzyme'], row['info_type'],
                                 aa_seq, subs_keggs, prod_keggs])
 
-        cols = ['fwd_key', 'rev_key', 'enzyme_id', 'info_ecns', 'info_type', 'Enzyme', 'Substrates', 'Products']
+        cols = ['fwd_key', 'rev_key', 'enzyme_id', 'kind', 'Enzyme', 'Substrates', 'Products']
         df_input = pd.DataFrame(records, columns=cols)
         df_input.set_index('fwd_key', inplace=True)
 
         n_rev = sum(df_input['rev_key'].notna())
-        no_reactions = sum(df_input['Substrates'].notna())
-        n_no_kegg = len(sids_no_kegg)
-        print(f'{len(df_input)} kcat records ({n_rev} reversible), {no_reactions} records with sequence and reaction')
-        print(f'{n_no_kegg} species without KEGG ids, e.g.: {list(sids_no_kegg)[:min(n_no_kegg, 10)]}')
+        full = sum(df_input['Substrates'].notna())
+        print(f'{len(df_input)} kcat records ({n_rev} reversible), {full} records with sequence and reaction')
+        print(f'{len(mids_no_ref)} mids without reference ids, e.g.: {list(mids_no_ref)[:min(len(mids_no_ref), 10)]}')
 
         # store TurNuP input file(s) - split as per max record length
         if len(df_input) <= max_records:
@@ -659,7 +675,7 @@ class XbaModel:
                   f'{fnames[0]} ... {fnames[-1]}')
             print(f' - upload files individually to TurNuP Web Server: https://turnup.cs.hhu.de/Kcat_multiple_input')
         print(f' - retrieve TurNuP kcat predictions and continue with process_turnup_output()')
-        return sids_no_kegg
+        return mids_no_ref
 
     @staticmethod
     def process_turnup_output(orig_kcats_fname, pred_kcats_fname, input_files, output_files):
@@ -867,13 +883,21 @@ class XbaModel:
             index: component id to modify
             columns:
                 'component': one of the supported model components
-                    'gp', 'reaction', 'species', 'protein', 'enzyme',
-                    'uniprot'
+                    'gp', 'species', 'reaction', 'protein', 'enzyme',
+                    'parameter', 'compartment'
+                    'uniprot', 'ncbi'
                 'attribute': the attribute name to modify
                 'value': value to configure for the attribute
-        for species refs it is also possible to modify a single sref,
-        using 'reactant' or 'product' as 'attribute' and 'sid=stoic'
-        as 'value'.
+
+        Examples for modification of reaction stoichiometry
+        ---------------------------------------------------
+        - change reactants/products stoichiometry (use attributes 'reactants', 'products')
+            - e.g.: id='R_BPNT', component='reaction', attribute='reactants',
+                value='species=M_h2o_c, stoic=1.0; species=M_pap_c, stoic=1.0'
+        - delete a single reactant/product from a reaction string (use attributes 'reactant', 'product')
+            - e.g.: id='R_CofactorSynt', component='reaction', attribute='reactant', value='M_hemeA_c=0.0'
+        - set change the stoichiometry factor for a single reactant/product
+            - e.g.: id='R_CAT', component='reaction', attribute='reactant', value='M_h2o_c=2.0'
 
         :param df_modify: structure with modifications
         :type df_modify: pandas DataFrame

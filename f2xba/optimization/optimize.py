@@ -86,6 +86,12 @@ class Optimize:
         self.m_dict = sbml_model.to_df()
         self.orig_gpm = None
 
+        sbml_parameters = self.m_dict['parameters']['value'].to_dict()
+        self.avg_enz_saturation = sbml_parameters.get('avg_enz_sat')
+        self.protein_per_gdw = sbml_parameters.get('gP_per_gDW')
+        self.modeled_protein_mf = sbml_parameters.get('gmodeledP_per_gP')
+        self.importer_km = sbml_parameters.get('default_importer_km_value')
+
         if cobra_model is not None:
             self.is_gpm = False
             self.model = cobra_model
@@ -98,6 +104,7 @@ class Optimize:
             self.gpm = self.gp_create_model()
             self.gp_report_model_size()
 
+        self.locus2uid = self.get_locus2uid()
         self.mid2name = {re.sub(f'^{pf.M_}', '', sid): row['name']
                          for sid, row in self.m_dict['species'].iterrows()}
         self.rdata_model = self.get_reaction_data()
@@ -111,12 +118,32 @@ class Optimize:
             self.rdata[re.sub(f'^{pf.R_}', '', rid)] = cp_rdata
         self.net_rdata = self.extract_net_reaction_data(self.rdata)
         self.rids_catalyzed = self.get_rids_catalyzed()
+        # self.uid2locus = {uid: locus for locus, uid in self.locus2uid.items()}
 
-        sbml_parameters = self.m_dict['parameters']['value'].to_dict()
-        self.avg_enz_saturation = sbml_parameters.get('avg_enz_sat')
-        self.protein_per_gdw = sbml_parameters.get('gP_per_gDW')
-        self.modeled_protein_mf = sbml_parameters.get('gmodeledP_per_gP')
-        self.importer_km = sbml_parameters.get('default_importer_km_value')
+    def get_locus2uid(self):
+        """From Model extract mapping for gene locus to protein id.
+
+        Note:
+        - Model reaction GPR refer to gene product ids, which in turn map to gene locus.
+        - Protein amount variables and Coupling constraints (reaction flux to protein amount) are
+          referenced by protein ids (uniprot id), not gene labels
+        - translation required between gene label (via reaction GPR) and corresponding protein
+        - reverse mapping:
+           uid2locus = {uid: locus for locus, uid in locus2uid.items()}
+
+        :return: mapping of gene locus to proteins
+        :rtype: dict (key: gene locus ('label' of fbaGeneProducts), val protein id)
+        """
+        locus2uid = {}
+        for varid, row in self.m_dict['reactions'].iterrows():
+            if re.match(f'{pf.V_PC_}', varid):
+                uid = re.sub(f'{pf.V_PC_}', '', varid)
+                gpr = row['fbcGeneProdAssoc']
+                if type(gpr) is str:
+                    gpid = gpr.split('=')[1]
+                    label = self.m_dict['fbcGeneProducts'].at[gpid, 'label']
+                    locus2uid[label] = uid
+        return locus2uid
 
     # COBRAPY MODEL RELATED
     def cp_report_model_size(self):
@@ -393,13 +420,21 @@ class Optimize:
                         elif item == 'or':
                             parts.append(';')
                 gpr = ' '.join(parts)
+                mpmf_coupling = {}
+                if gpr != '':
+                    loci = [item.strip() for item in gpr.split('+')]
+                    reactants = get_srefs(row['reactants'])
+                    for locus in loci:
+                        mpmf_coupling[locus] = reactants[f'{pf.C_prot_}{self.locus2uid[locus]}']/self.protein_per_gdw
+
                 exchange = False if type(row['products']) is str else True
                 rp_cids = [self.get_compartments(row.reactants, sid2cid), self.get_compartments(row.products, sid2cid)]
                 compartment = '-'.join(sorted(rp_cids[0].union(rp_cids[1])))
                 r_type = 'transport' if len(rp_cids[0].union(rp_cids[1])) > 1 else 'metabolic'
 
                 rdatas[rid] = {'base_rid': base_rid, 'drxn': drxn, 'reaction_str': reaction_str,
-                               'gpr': gpr, 'is_exchange': exchange, 'r_type': r_type, 'compartment': compartment}
+                               'gpr': gpr, 'mpmf_coupling': mpmf_coupling,
+                               'is_exchange': exchange, 'r_type': r_type, 'compartment': compartment}
         return rdatas
 
     def get_genes_assigned_to(self, reaction_type):
@@ -413,7 +448,7 @@ class Optimize:
         genes = set()
         for data in self.rdata.values():
             if data['r_type'] == reaction_type:
-                for gene in re.findall(r'\b\w+\b', data['gpr']):
+                for gene in [item.strip() for item in data['gpr'].split('+')]:
                     genes.add(gene)
         return genes
 
@@ -450,6 +485,9 @@ class Optimize:
 
         Data can be used to assess impact of gene deletions
         Data can be used to identify reactions catalyzed by a specific gene
+
+        Note: does not support 'or' in alternative components of enzyme complex like (b1234 or b2346) and b2222
+        Workaround: rearrange gpr: (b1234 and b2222) or (b2346 and b2222)
 
         :return: enzymes and their compositions of catalyzed reactions
         :rtype: dict (key: rid/str, val: list of sets of gene labels)
