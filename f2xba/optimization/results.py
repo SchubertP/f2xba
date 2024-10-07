@@ -210,7 +210,7 @@ class Results(ABC):
                         y.append(pred_mpmfs[gene])
                 else:
                     for gene in genes:
-                        if pred_mpmfs[gene] != 0.0 and exp_mpmfs[gene] != 0.0:
+                        if pred_mpmfs[gene] > 0.0 and exp_mpmfs[gene] > 0.0:
                             x.append(np.log10(exp_mpmfs[gene]))
                             y.append(np.log10(pred_mpmfs[gene]))
                 r_value, p_value = scipy.stats.pearsonr(x, y)

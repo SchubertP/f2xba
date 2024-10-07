@@ -113,7 +113,7 @@ class Optimize:
         self.rdata = {}
         for rid, record in self.rdata_model.items():
             cp_rdata = record.copy()
-            cp_rdata['base_rid'] = re.sub(f'^{pf.R_}', '', record['base_rid'])
+            cp_rdata['net_rid'] = re.sub(f'^{pf.R_}', '', record['net_rid'])
             cp_rdata['reaction_str'] = re.sub(r'\b' + f'{pf.M_}', '', record['reaction_str'])
             self.rdata[re.sub(f'^{pf.R_}', '', rid)] = cp_rdata
         self.net_rdata = self.extract_net_reaction_data(self.rdata)
@@ -404,7 +404,7 @@ class Optimize:
             if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
                 drxn = 'rev' if re.search('_REV$', rid) else 'fwd'
                 fwd_rid = re.sub('_REV$', '', rid)
-                base_rid = re.sub(r'_iso\d+', '', fwd_rid)
+                net_rid = re.sub(r'_iso\d+', '', fwd_rid)
                 reaction_str = self.get_reaction_str(row)
                 if re.search(r'pmet_\w+', reaction_str) is not None:
                     reaction_str = self.expand_pseudo_metabolite(rid, reaction_str)
@@ -432,7 +432,7 @@ class Optimize:
                 compartment = '-'.join(sorted(rp_cids[0].union(rp_cids[1])))
                 r_type = 'transport' if len(rp_cids[0].union(rp_cids[1])) > 1 else 'metabolic'
 
-                rdatas[rid] = {'base_rid': base_rid, 'drxn': drxn, 'reaction_str': reaction_str,
+                rdatas[rid] = {'net_rid': net_rid, 'drxn': drxn, 'reaction_str': reaction_str,
                                'gpr': gpr, 'mpmf_coupling': mpmf_coupling,
                                'is_exchange': exchange, 'r_type': r_type, 'compartment': compartment}
         return rdatas
@@ -466,18 +466,18 @@ class Optimize:
         :rtype: dict
         """
         # determine 'net' reaction data (i.e. unsplit the reaction)
-        rev_base_rids = {record['base_rid'] for rid, record in rdata.items() if record['drxn'] == 'rev'}
+        rev_net_rids = {record['net_rid'] for rid, record in rdata.items() if record['drxn'] == 'rev'}
         net_rdata = {}
         for rid, record in rdata.items():
             if record['drxn'] == 'fwd':
-                base_rid = record['base_rid']
-                if base_rid not in net_rdata:
+                net_rid = record['net_rid']
+                if net_rid not in net_rdata:
                     reaction_str = record['reaction_str']
-                    if base_rid in rev_base_rids:
+                    if net_rid in rev_net_rids:
                         reaction_str = re.sub('=>', '->', reaction_str)
-                    net_rdata[base_rid] = {'reaction_str': reaction_str, 'gpr': record['gpr']}
+                    net_rdata[net_rid] = {'reaction_str': reaction_str, 'gpr': record['gpr']}
                 else:
-                    net_rdata[base_rid]['gpr'] += ' or ' + record['gpr']
+                    net_rdata[net_rid]['gpr'] += ' or ' + record['gpr']
         return net_rdata
 
     def get_rids_catalyzed(self):
