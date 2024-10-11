@@ -123,18 +123,22 @@ class Optimize:
     def get_locus2uid(self):
         """From Model extract mapping for gene locus to protein id.
 
-        Note:
-        - Model reaction GPR refer to gene product ids, which in turn map to gene locus.
-        - Protein amount variables and Coupling constraints (reaction flux to protein amount) are
-          referenced by protein ids (uniprot id), not gene labels
-        - translation required between gene label (via reaction GPR) and corresponding protein
-        - reverse mapping:
-           uid2locus = {uid: locus for locus, uid in locus2uid.items()}
+        locus2uid mapping is used b
+
+
+        For EC models (e.g. GECKO) extract mapping
+        - from protein concentration variables 'V_PC_xxx', which carry the protein name in the id
+            - from fbcGeneProdAssoc of such variable extract the (single) gene product id
+            - from fbcGeneProducts component extract the related 'label' - gene locus.
+        for RBA models extract mapping from
+        - from macromolecular coupling constraints 'MM_prot_xxx, which carry the gene locus in the name
+            - from miriamAnnotation extract protein id, if available (not available for e.g. RNA or dummy protein)
 
         :return: mapping of gene locus to proteins
         :rtype: dict (key: gene locus ('label' of fbaGeneProducts), val protein id)
         """
         locus2uid = {}
+        # support for EC based models, e.g. GECKO
         for varid, row in self.m_dict['reactions'].iterrows():
             if re.match(f'{pf.V_PC_}', varid):
                 uid = re.sub(f'{pf.V_PC_}', '', varid)
@@ -143,6 +147,13 @@ class Optimize:
                     gpid = gpr.split('=')[1]
                     label = self.m_dict['fbcGeneProducts'].at[gpid, 'label']
                     locus2uid[label] = uid
+        # support for RBA based models
+        for constr_id, row in self.m_dict['species'].iterrows():
+            if re.match(f'{pf.MM_}', constr_id):
+                uids = sbmlxdf.misc.get_miriam_refs(row['miriamAnnotation'], 'uniprot')
+                if len(uids) == 1:
+                    label = re.sub(f'{pf.MM_}', '', constr_id)
+                    locus2uid[label] = uids[0]
         return locus2uid
 
     # COBRAPY MODEL RELATED
@@ -420,12 +431,15 @@ class Optimize:
                         elif item == 'or':
                             parts.append(';')
                 gpr = ' '.join(parts)
+                # mpmf coupling used in GECKO models for fitting kcats to proteomics (not required for RBA)
                 mpmf_coupling = {}
                 if gpr != '':
                     loci = [item.strip() for item in gpr.split('+')]
                     reactants = get_srefs(row['reactants'])
                     for locus in loci:
-                        mpmf_coupling[locus] = reactants[f'{pf.C_prot_}{self.locus2uid[locus]}']/self.protein_per_gdw
+                        ecm_coupling_constr_id = f'{pf.C_prot_}{self.locus2uid[locus]}'
+                        if ecm_coupling_constr_id in reactants:
+                            mpmf_coupling[locus] = reactants[ecm_coupling_constr_id]/self.protein_per_gdw
 
                 exchange = False if type(row['products']) is str else True
                 rp_cids = [self.get_compartments(row.reactants, sid2cid), self.get_compartments(row.products, sid2cid)]
