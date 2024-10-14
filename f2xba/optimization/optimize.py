@@ -31,6 +31,8 @@ except ImportError:
     gp = None
     pass
 
+XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
+XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
 
 status2text = {1: 'LOADED', 2: 'OPTIMAL', 3: 'INFEASIBLE', 4: 'INF_OR_UNBD', 5: 'UNBOUNDED',
                6: 'CUTOFF', 7: 'ITERATION_LIMIT', 8: 'NODE_LIMIT', 9: 'TIME_LIMIT',
@@ -109,6 +111,10 @@ class Optimize:
                          for sid, row in self.m_dict['species'].iterrows()}
         self.rdata_model = self.get_reaction_data()
         self.uptake_rids = [rid for rid, rdata in self.rdata_model.items() if rdata['is_exchange'] is True]
+        self.ex_rid2sid = self.get_ex_rid2sid()
+        self.sidx2ex_ridx = {re.sub(f'^{pf.M_}', '', sid): re.sub(f'^{pf.R_}', '', rid)
+                             for rid, sid in self.ex_rid2sid.items()}
+
         # rdata and net_rdata used in results processing (CobraPy ids, without 'R_', 'M_'
         self.rdata = {}
         for rid, record in self.rdata_model.items():
@@ -155,6 +161,36 @@ class Optimize:
                     label = re.sub(f'{pf.MM_}', '', constr_id)
                     locus2uid[label] = uids[0]
         return locus2uid
+
+    def get_ex_rid2sid(self):
+        """Get mapping of cobra exchange reaction ids to RBA uptake metabolites
+
+        From XML annotation of compartments identify the compartent for media uptake
+        Note: RBA allows other compartments than external compartment to
+        be used in Michaelis Menten saturation terms for medium uptake,
+        e.g. periplasm (however, this may block reactions in periplasm)
+
+        replace compartment postfix of exchanged metabolited by medium cid of RBA model.
+
+        Create mapping table from exchange reaction to medium
+        """
+        medium_cid = 'e'
+        for cid, row in self.m_dict['compartments'].iterrows():
+            xml_annots = row.get('xmlAnnotation')
+            xml_attrs = sbmlxdf.misc.extract_xml_attrs(xml_annots, ns=XML_COMPARTMENT_NS)
+            if 'medium' in xml_attrs and xml_attrs['medium'].lower == 'true':
+                medium_cid = cid
+                break
+
+        ex_rid2sid = {}
+        for uptake_rid in self.uptake_rids:
+            row = self.m_dict['reactions'].loc[uptake_rid]
+            # ridx = re.sub(f'^{pf.R_}', '', uptake_rid)
+            sref_str = row['reactants'].split(';')[0]
+            sid = sbmlxdf.extract_params(sref_str)['species']
+            mid = sid.rsplit('_', 1)[0]
+            ex_rid2sid[uptake_rid] = f'{mid}_{medium_cid}'
+        return ex_rid2sid
 
     # COBRAPY MODEL RELATED
     def cp_report_model_size(self):
@@ -565,26 +601,70 @@ class Optimize:
 
     # OPTIMIZATION RELATED
     def set_medium(self, medium):
-        """Configure medium (compatible with CobraPy)
+        """Configure medium in Gurobipy model (compatible with CobraPy)
 
         e.g. medium = {'EX_glc__D_e': 10.0, 'EX_o2_e': 20.0, 'EX_ca2_e': 1000.0, 'EX_cbl1_e': 0.01,
          'EX_cl_e': 1000.0, 'EX_co2_e': 1000.0, ...}
 
           1. medium defined through exchange reactions related to metabolies that can be taken up
           2. provide dict with exchange reactions ('R_' stripped) and positive values to constrain uptake
-          3. exchange reactions in the model that are not included get be blocked (uptake set to 0.0)
+          3. exchange reactions in the model that are not included get blocked (uptake set to 0.0)
           4. modification of exchange reaction lower variable bound (set to -uptake_rate)
           5. limit updates only to variable where lower bound will change
 
         :param medium: nutrients in medium, i.e. exchange reactions with max allowed uptake
         :type medium: dict, key = ridx of exchange reaction, val=max uptake (positive value)
         """
-        for rid in self.uptake_rids:
-            ridx = re.sub(f'^{pf.R_}', '', rid)
-            new_lb = -medium.get(ridx, 0.0)
-            cur_lb = self.gpm.getVarByName(rid).lb
-            if new_lb != cur_lb:
-                self.gpm.getVarByName(rid).lb = new_lb
+        if self.is_gpm:
+            for rid in self.uptake_rids:
+                ridx = re.sub(f'^{pf.R_}', '', rid)
+                new_lb = -medium.get(ridx, 0.0)
+                cur_lb = self.gpm.getVarByName(rid).lb
+                if new_lb != cur_lb:
+                    self.gpm.getVarByName(rid).lb = new_lb
+        else:
+            self.model.medium = medium
+
+    def set_medium_conc(self, ex_metabolites_mmol_per_l):
+        """RBA optimization: Configure external metabolite concentrations (in mmol/l).
+
+        Notes:
+        - for FBA and GECKO (ECM) model optimization, the medium is defined
+          as exchange reaction id and uptake flux rate in mmol/gDWh.
+        - In RBA we define medium as external metabolite id (without leading 'M_') and
+          external metabolite concentration in mmol/l.
+        - in RBA medium concentrations should be defined with respect to default Michaelis constant of transporter
+          (check model parameter DEFAULT_MICHAELIS_CONSTANT)
+
+        e.g.: medium = {'glc__D_e': 111.0, 'o2_e': 20.0, 'ca2_e': 0.5, 'cbl1_e': 0.01,
+         'cl_e': 60.0, 'co2_e': 0.00003, ...}
+
+        SBML coded RBA model still contains exchange reactions that control exchange of metabolites
+        across the modeling environment. These need to be considered as well
+
+        1. open up exchange reactions for external metabolites of the medium (so they can be imported)
+        2. configure external metabolite concentrations via initial assignments
+
+        :param ex_metabolites_mmol_per_l: external metabolites with respective concentrations in mmol/l
+        :type ex_metabolites_mmol_per_l: dict, key = metabolite id, val = metabolite concentration in mmol/l
+        """
+        # open up related exchange reactions
+        # self.model.medium = {self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_metabolites_mmol_per_l}
+        self.set_medium({self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_metabolites_mmol_per_l})
+
+        # configure RBA related medium concentrations
+        medium_conc = {sid: ex_metabolites_mmol_per_l.get(re.sub(f'^{pf.M_}', '', sid), 0.0)
+                       for ex_rid, sid in self.ex_rid2sid.items()}
+        self.initial_assignments.set_medium(medium_conc)
+
+    def set_growth_rate(self, growth_rate):
+        """RBA optimization: set growth rate dependent model parameters
+
+        :param growth_rate: selected growth rate in h-1
+        :type growth_rate: float
+        :return:
+        """
+        self.initial_assignments.set_growth_rate(growth_rate)
 
     def optimize(self, alt_model=None):
         """Optimize the gurobipy model and return solution.

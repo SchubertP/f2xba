@@ -363,48 +363,69 @@ class Results(ABC):
         self.plot_proteins(condition, lin_max=None)
 
     # PLOT ROUTINES
-    def plot_proteins(self, condition, lin_max=None):
+    def plot_proteins(self, condition, lin_max=None, plot_fname=None):
+        """Plot linear and logarithmic protein correlation.
+
+        Support both of ECM (e.g. GECKO) and RBA type models.
+
+        :param condition: specific condition for which to plot correlation
+        :type condition: str, one of the conditions in the results
+        :param lin_max: (optional) maximal value in linear scale (otherwise automatic)
+        :type lin_max: float > 0, if provided (default: None)
+        :param plot_fname: (optional) file name where to store resulting plot
+        :type plot_fname: str if provided (default: None)
+        :return:
+        """
         marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
         log_delta = np.log10(5.0)
         sigma = self.optim.avg_enz_saturation
 
         metab_mpmfs = np.array(list(self.get_rtype_condition_mpmf('metabolic', condition).values()))
         tx_mpmfs = np.array(list(self.get_rtype_condition_mpmf('transport', condition).values()))
+        process_mpmfs = np.array(list(self.get_rtype_condition_mpmf('process', condition).values()))
 
         fig, axs = plt.subplots(1, 2, figsize=(8, 4 * .618), squeeze=False)
         for gcol in [0, 1]:
             ax = axs[0, gcol]
             if gcol == 0:  # lin scale
-                ax.scatter(metab_mpmfs[:, 0], metab_mpmfs[:, 1], marker=marker2, label='metabolic')
-                ax.scatter(tx_mpmfs[:, 0], tx_mpmfs[:, 1], marker=marker2, label='transport')
-                lin_vals = np.concatenate((metab_mpmfs.flatten(), tx_mpmfs.flatten()))
+                max_lin_val = 0.0
+                for label, mpmfs in {'metabolic': metab_mpmfs, 'transport': tx_mpmfs,
+                                     'process': process_mpmfs}.items():
+                    if len(mpmfs) > 0:
+                        ax.scatter(mpmfs[:, 0], mpmfs[:, 1], marker=marker2, label=label)
+                        max_lin_val = max(max_lin_val, np.max(mpmfs))
                 if lin_max is None:
-                    lin_max = max(lin_vals) + 10.0
+                    lin_max = max_lin_val + 10.0
                 xy_range = (0.0, lin_max)
                 ax.set_xlabel(r'experimental mpmf (mg/gP)')
                 ax.set_ylabel(r'predicted mpmf (mg/gP)')
                 ax.legend(loc='lower right')
                 ax.text(0.1, 1.0, self.optim.model_name, transform=ax.transAxes, va='top')
                 ax.text(0.1, 0.90, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
-                ax.text(1.0, 0.5, f'[... {max(lin_vals):.1f}]', transform=ax.transAxes,
-                        va='top', ha='right')
+                ax.text(1.0, 0.5, f'[... {max_lin_val:.1f}]', transform=ax.transAxes, va='top', ha='right')
 
             else:  # log10 scale
-                log_metab_x, log_metab_y = self.get_log10_xy(metab_mpmfs)
-                ax.scatter(log_metab_x, log_metab_y, marker=marker2, label='metabolic')
-                log_tx_x, log_tx_y = self.get_log10_xy(tx_mpmfs)
-                ax.scatter(log_tx_x, log_tx_y, marker=marker2, label='transport')
-                log_vals = np.concatenate((log_metab_x, log_metab_y, log_tx_x, log_tx_y))
+                max_log_val = -10.0
+                min_log_val = 10.0
+                for label, mpmfs in {'metabolic': metab_mpmfs, 'transport': tx_mpmfs,
+                                     'process': process_mpmfs}.items():
+                    if len(mpmfs) > 0:
+                        log_x, log_y = self.get_log10_xy(mpmfs)
+                        ax.scatter(log_x, log_y, marker=marker2, label=label)
+                        max_log_val = max(max_log_val, np.max(log_x), np.max(log_y))
+                        min_log_val = min(min_log_val, np.min(log_x), np.min(log_y))
                 xy_range = (-7.0, 3.0)
                 ax.set_xlabel(r'experimental mpmf log10')
                 ax.set_ylabel(r'predicted mpmf log10')
                 ax.legend(loc='upper left')
                 ax.plot((xy_range[0] + log_delta, xy_range[1]), (xy_range[0], xy_range[1] - log_delta), 'k:', lw=0.5)
                 ax.plot((xy_range[0], xy_range[1] - log_delta), (xy_range[0] + log_delta, xy_range[1]), 'k:', lw=0.5)
-                ax.text(1.0, 0.1, f'[{min(log_vals):.1f} ... {max(log_vals):.1f}]', transform=ax.transAxes,
+                ax.text(1.0, 0.1, f'[{min_log_val:.1f} ... {max_log_val:.1f}]', transform=ax.transAxes,
                         va='top', ha='right')
 
             ax.set(xlim=xy_range, ylim=xy_range)
             ax.plot(xy_range, xy_range, 'k--', lw=0.5)
-        # fig.savefig(f'plots/{model_name}_proteins.pdf')
+
+        if plot_fname is not None:
+            fig.savefig(plot_fname)
         plt.show()

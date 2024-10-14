@@ -49,9 +49,6 @@ class CobraRbaOptimization(Optimize):
         self.df_enz_data = self.get_enzyme_data(self.m_dict['reactions'])
         self.initial_assignments = InitialAssignments(self)
 
-        medium_cid = self.get_medium_cid(self.m_dict['compartments'])
-        self.ex_rid2mid = self.get_ex_rid2mid(self.m_dict['reactions'], medium_cid)
-
         model_gr = self.m_dict['parameters'].loc['growth_rate'].value
         self.enz_mm_composition = self.get_enzyme_mm_composition(model_gr)
 
@@ -61,46 +58,6 @@ class CobraRbaOptimization(Optimize):
         if 'cplex' in self.model.solver.interface.__name__:
             self.model.solver.problem.parameters.read.scale.set(-1)
         return
-
-    @staticmethod
-    def get_medium_cid(df_compartments):
-        """Determine medium compartment id from compartment annotation.
-
-        Note: RBA allows other compartments than external compartment to
-        be used in michaelis menten saturation terms for medium uptake,
-        e.g. periplasm (this may block however reactions in periplasm)
-
-        :param df_compartments: compartment data from sbml model
-        :type df_compartments: pandas DataFrame
-        :return: medium compartment id
-        :rtype: str
-        """
-        medium_cid = 'e'
-        for cid, row in df_compartments.iterrows():
-            xml_annots = row.get('xmlAnnotation')
-            xml_attrs = sbmlxdf.misc.extract_xml_attrs(xml_annots, ns=XML_COMPARTMENT_NS)
-            if 'medium' in xml_attrs and xml_attrs['medium'].lower == 'true':
-                medium_cid = cid
-                break
-        return medium_cid
-
-    @staticmethod
-    def get_ex_rid2mid(df_reactions, medium_cid):
-        """Get mapping of cobra exchange reaction ids to RBA uptake metabolites
-
-        :param df_reactions:
-        :param medium_cid:
-        :return:
-        """
-        ex_rid2mid = {}
-        for rid, row in df_reactions.iterrows():
-            if re.match(f'{pf.R_}EX_', rid):
-                ridx = re.sub(f'^{pf.R_}', '', rid)
-                sref_str = row['reactants'].split(';')[0]
-                sid = sbmlxdf.extract_params(sref_str)['species']
-                sidcx = sid.rsplit('_', 1)[0]
-                ex_rid2mid[ridx] = f'{sidcx}_{medium_cid}'
-        return ex_rid2mid
 
     def configure_rba_model_constraints(self):
         """configure constraints related to RBA modelling
@@ -163,34 +120,6 @@ class CobraRbaOptimization(Optimize):
                     if re.match(pf.MM_, metab.id):
                         enz_mm_composition[rxn.id][re.sub(f'^{pf.MM_}', '', metab.id)] = -stoic / model_gr
         return dict(enz_mm_composition)
-
-    # MODEL RBA OPTIMIZATION SUPPORT
-    def set_medium(self, ex_fluxes, default_conc=0.01):
-        """Set model exchange fluxes and rba uptake metabolite concentrations
-
-        :param ex_fluxes:
-        :param default_conc: optiona default concentration for external metabolites in mol/l
-        :type default_conc: float, default at 0.01 mol/l
-        :return:
-        """
-        medium_conc = {mid: 0.0 for mid in self.ex_rid2mid.values()}
-        for rxn in self.model.exchanges:
-            if re.match(pf.V_, rxn.id) is None:
-                if rxn.id in ex_fluxes:
-                    rxn.lower_bound = -1000.0
-                    medium_conc[self.ex_rid2mid[rxn.id]] = default_conc
-                else:
-                    rxn.lower_bound = 0.0
-        self.initial_assignments.set_medium(medium_conc)
-
-    def set_growth_rate(self, growth_rate):
-        """Set growth rate dependent model parameters for selected growth rate
-
-        :param growth_rate: selected growth rate in h-1
-        :type growth_rate: float
-        :return:
-        """
-        self.initial_assignments.set_growth_rate(growth_rate)
 
     def solve(self, gr_min=0.0, gr_max=2.5, bisection_tol=1e-5, max_iter=40):
         """Solve RBA feasibility problem usin bisection algorithem of RbaPy 1.0.
