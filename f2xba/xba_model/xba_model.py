@@ -942,13 +942,6 @@ class XbaModel:
                 del self.gps[gp]
         print(f'{n_count:4d} gene product(s) removed from reactions ({len(self.gps)} gene products remaining)')
 
-    def remove_blocked_reactions_old(self):
-        """Remove reactions from the model with lower and upper flux bounds set to zero.
-        """
-        remove_rids = [rid for rid, r in self.reactions.items() if r.is_blocked_old(self.parameters)]
-        for rid in remove_rids:
-            del self.reactions[rid]
-
     def del_components(self, component, ids):
         """Delete / remove components from the model.
 
@@ -1792,44 +1785,3 @@ class XbaModel:
         df_reactants = self.get_sref_data(r.reactants)
         df_products = self.get_sref_data(r.products)
         return df_reactants, df_products
-
-    # old / currently unused methods
-
-    def rescale_biomass_old(self, biomass):
-        """rescale biomass
-
-        biomass dict contains
-        - biomass reaction id 'rid'
-        - rescale tasks 'rescale' a list of dict, each with
-            - either rescale factor 'factor' or an absolute value 'value', flaat
-            - 'rectants' and/or 'products', consisting of list of species ids
-
-        amino acids get scaled by parameter f_p
-        carbohydrates get scaled by parameter f_c
-        GAM related species get set to gam level
-
-        :param biomass: data structure with information what/how to rescale
-        :type biomass: dict
-        :return:
-        """
-        biomass_r = self.reactions[biomass['rid']]
-
-        modify_stoic = {}
-        for rescale in biomass['rescale']:
-            if 'factor' in rescale:
-                factor = rescale['factor']
-                if 'reactants' in rescale:
-                    for sid in rescale['reactants']:
-                        modify_stoic[sid] = -factor * biomass_r.reactants[sid]
-                if 'products' in rescale:
-                    for sid in rescale['products']:
-                        modify_stoic[sid] = factor * biomass_r.products[sid]
-            if 'value' in rescale:
-                value = rescale['value']
-                if 'reactants' in rescale:
-                    for sid in rescale['reactants']:
-                        modify_stoic[sid] = -value
-                if 'products' in rescale:
-                    for sid in rescale['products']:
-                        modify_stoic[sid] = value
-        biomass_r.modify_stoic(modify_stoic)

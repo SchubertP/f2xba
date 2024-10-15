@@ -18,4 +18,4 @@ class GurobiFbaOptimization(Optimize):
         :param fname: path name of SBML coded metabolic model
         :type fname: str
         """
-        super().__init__(fname)
+        super().__init__('FBA', fname)

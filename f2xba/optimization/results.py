@@ -19,7 +19,6 @@ import f2xba.prefixes as pf
 
 class Results(ABC):
 
-    @abstractmethod
     def __init__(self, optim, results, df_mpmf):
         """Instantiation
 
@@ -47,7 +46,7 @@ class Results(ABC):
         self.results = results
         self.df_mpmf = df_mpmf
 
-        if hasattr(optim, 'ecm_type'):
+        if self.optim.model_type == 'ECM':
             # get mapping from UniProt Id to gene label via gene reaction rule in protein concentration variables
             self.uid2gene = {}
             for rid, row in self.optim.m_dict['reactions'].iterrows():
@@ -264,7 +263,7 @@ class Results(ABC):
                 log10_y.append(np.log10(y))
         return log10_x, log10_y
 
-    def plot_grs(self, exp_grs, gr_max=None, highlight=None):
+    def plot_grs(self, exp_grs, gr_max=None, highlight=None, plot_fname=None):
         """Plot predicted vs. experimental growth rates.
 
         Using Matplotlib, plot correlation of predicted vs. experimental growth rates.
@@ -275,24 +274,22 @@ class Results(ABC):
         :type gr_max: float or None
         :param highlight: condition to be highlighted
         :type highlight: str
+        :param plot_fname: (optional) file name where to store resulting plot
+        :type plot_fname: str if provided (default: None)
         """
         marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
 
         sigma = self.optim.avg_enz_saturation
-        cond_pred_grs = []
-        cond_exp_grs = []
-        for condition, solution in self.results.items():
-            if condition in exp_grs:
-                cond_pred_grs.append(solution.objective_value)
-                cond_exp_grs.append(exp_grs[condition])
-        if gr_max is None:
-            gr_max = max(max(cond_pred_grs), max(cond_exp_grs)) * 1.15
+        conds = list(set(self.results.keys()).intersection(set(exp_grs.keys())))
+        cond_exp_grs = [exp_grs[cond] for cond in conds]
+        cond_pred_grs = [self.results[cond].objective_value for cond in conds]
+        gr_max = gr_max if gr_max else max(max(cond_pred_grs), max(cond_exp_grs)) * 1.15
 
         fig, axs = plt.subplots(1, 1, figsize=(4, 4), squeeze=False)
         ax = axs[0, 0]
 
         ax.scatter(cond_exp_grs, cond_pred_grs, marker=marker2)
-        if highlight is not None and highlight in self.results and highlight in exp_grs:
+        if highlight and (highlight in conds):
             ax.scatter(exp_grs[highlight], self.results[highlight].objective_value)
 
         r_value, p_value = scipy.stats.pearsonr(cond_exp_grs, cond_pred_grs)
@@ -306,7 +303,8 @@ class Results(ABC):
         ax.set_xlabel(r'experimental growth rate ($h^{-1}$)')
         ax.set_ylabel(r'predicted growth rate ($h^{-1}$)')
 
-        # fig.savefig(f'plots/{model_name}_growth_rates.pdf')
+        if plot_fname:
+            fig.savefig(plot_fname)
         plt.show()
 
     # TODO: under construction
@@ -374,7 +372,6 @@ class Results(ABC):
         :type lin_max: float > 0, if provided (default: None)
         :param plot_fname: (optional) file name where to store resulting plot
         :type plot_fname: str if provided (default: None)
-        :return:
         """
         marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
         log_delta = np.log10(5.0)
@@ -426,6 +423,6 @@ class Results(ABC):
             ax.set(xlim=xy_range, ylim=xy_range)
             ax.plot(xy_range, xy_range, 'k--', lw=0.5)
 
-        if plot_fname is not None:
+        if plot_fname:
             fig.savefig(plot_fname)
         plt.show()

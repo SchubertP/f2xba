@@ -64,7 +64,7 @@ class Solution:
 
 class Optimize:
 
-    def __init__(self, fname, cobra_model=None):
+    def __init__(self, model_type, fname, cobra_model=None):
         """Instantiate Optimize base class
 
         load SBML coded metabolic model
@@ -72,11 +72,14 @@ class Optimize:
         else create and configure a gurobipy model (gpm)
         collect data required for optimization and results analysis
 
+        :param model_type: type of model ('FBA', 'ECM' or 'RBA')
+        :type model_type: str
         :param fname: path name of SBML coded metabolic model
         :type fname: str
         :param cobra_model: (optional) the corresponding cobra model
         :type cobra_model: cobra.core.model.Model if supplied
         """
+        self.model_type = model_type
         if not os.path.exists(fname):
             print(f'Error: {fname} not found!')
             raise FileNotFoundError
@@ -94,7 +97,7 @@ class Optimize:
         self.modeled_protein_mf = sbml_parameters.get('gmodeledP_per_gP')
         self.importer_km = sbml_parameters.get('default_importer_km_value')
 
-        if cobra_model is not None:
+        if cobra_model:
             self.is_gpm = False
             self.model = cobra_model
             self.cp_configure_td_model_constraints()
@@ -624,47 +627,6 @@ class Optimize:
                     self.gpm.getVarByName(rid).lb = new_lb
         else:
             self.model.medium = medium
-
-    def set_medium_conc(self, ex_metabolites_mmol_per_l):
-        """RBA optimization: Configure external metabolite concentrations (in mmol/l).
-
-        Notes:
-        - for FBA and GECKO (ECM) model optimization, the medium is defined
-          as exchange reaction id and uptake flux rate in mmol/gDWh.
-        - In RBA we define medium as external metabolite id (without leading 'M_') and
-          external metabolite concentration in mmol/l.
-        - in RBA medium concentrations should be defined with respect to default Michaelis constant of transporter
-          (check model parameter DEFAULT_MICHAELIS_CONSTANT)
-
-        e.g.: medium = {'glc__D_e': 111.0, 'o2_e': 20.0, 'ca2_e': 0.5, 'cbl1_e': 0.01,
-         'cl_e': 60.0, 'co2_e': 0.00003, ...}
-
-        SBML coded RBA model still contains exchange reactions that control exchange of metabolites
-        across the modeling environment. These need to be considered as well
-
-        1. open up exchange reactions for external metabolites of the medium (so they can be imported)
-        2. configure external metabolite concentrations via initial assignments
-
-        :param ex_metabolites_mmol_per_l: external metabolites with respective concentrations in mmol/l
-        :type ex_metabolites_mmol_per_l: dict, key = metabolite id, val = metabolite concentration in mmol/l
-        """
-        # open up related exchange reactions
-        # self.model.medium = {self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_metabolites_mmol_per_l}
-        self.set_medium({self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_metabolites_mmol_per_l})
-
-        # configure RBA related medium concentrations
-        medium_conc = {sid: ex_metabolites_mmol_per_l.get(re.sub(f'^{pf.M_}', '', sid), 0.0)
-                       for ex_rid, sid in self.ex_rid2sid.items()}
-        self.initial_assignments.set_medium(medium_conc)
-
-    def set_growth_rate(self, growth_rate):
-        """RBA optimization: set growth rate dependent model parameters
-
-        :param growth_rate: selected growth rate in h-1
-        :type growth_rate: float
-        :return:
-        """
-        self.initial_assignments.set_growth_rate(growth_rate)
 
     def optimize(self, alt_model=None):
         """Optimize the gurobipy model and return solution.

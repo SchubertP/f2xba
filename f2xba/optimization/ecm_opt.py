@@ -34,7 +34,7 @@ class EcmOptimization(Optimize):
         :param cobra_model: (optional) the corresponding cobra model
         :type cobra_model: cobra.core.model.Model if supplied
         """
-        super().__init__(fname, cobra_model)
+        super().__init__('ECM', fname, cobra_model)
         self.orig_coeffs = {}
 
         self.ecm_type = self.m_dict['modelAttrs'].get('id', '_GECKO').rsplit('_', 1)[1]
