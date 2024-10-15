@@ -197,22 +197,15 @@ class NcbiChromosome:
         with open(self.fasta_cds_fname, 'r') as fh:
             for line in fh:
                 line = line.strip()
-
-                # process header line
                 if re.match('>', line):
-
                     # store a previous record
                     if locus is not None:
                         attributes['aa_sequence'] = aa_seq
                         proteins[locus] = NcbiProtein(attributes)
-
-                    attributes = {}
-                    for kv_pair in re.findall(r' \[([^\[]*)]', line):
-                        k, v = kv_pair.split('=', 1)
-                        attributes[k] = v
+                    # collect attributes from header line
+                    attributes = {key: val for key, val in re.findall(r'(\w+)=([^]]*)', line)}
                     locus = attributes['locus_tag']
                     aa_seq = ''
-
                 # collect amino acid sequence
                 else:
                     aa_seq += line

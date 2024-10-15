@@ -4,9 +4,10 @@ Peter Schubert, CCB, HHU Duesseldorf, May 2024
 """
 
 import re
+import numpy as np
 
 
-# Atomic weights from NIST (standard atomic weights, considering isotopic composition
+# Atomic weights from NIST (standard atomic weights, considering isotopic composition)
 # isotopic weights for Deuterium (D) and Tritium (T) added.
 # Rest 'R' assigned zero weight
 # https://physics.nist.gov/cgi-bin/Compositions/stand_alone.pl
@@ -72,8 +73,7 @@ def calc_mw_from_formula(formula):
     composition = {atom: stoic for atom, stoic in extract_atoms(formula)}
     weight = 0.0
     for atom, stoic in composition.items():
-        if atom in atomic_weights:
-            weight += atomic_weights[atom] * stoic
+        weight += atomic_weights.get(atom, 0.0) * stoic
     return weight
 
 
@@ -86,6 +86,7 @@ aa_avg_mw = {'A': 71.0788, 'C': 103.1388, 'D': 115.0886, 'E': 129.1155, 'F': 147
              'M': 131.1926, 'N': 114.1038, 'P': 97.1167, 'Q': 128.1307, 'R': 156.1875,
              'S': 87.0782, 'T': 101.1051, 'V': 99.1326, 'W': 186.2132, 'Y': 163.176,
              'O': 237.3018, 'U': 150.0388, '*': 130.0}
+aa_ukn_mw = np.mean(list(aa_avg_mw.values()))   # molecular weight of unknonw sequence identifier
 h2o_avg_mw = 18.01524   # average isotopic mass of one water molecule
 
 
@@ -102,7 +103,7 @@ def protein_mw_from_aa_comp(aa_dict):
     """
     mw = h2o_avg_mw  # Expasy Compute pI/Mw adds one water molecule
     for aa, stoic in aa_dict.items():
-        mw += stoic * aa_avg_mw.get(aa, 100.0)
+        mw += stoic * aa_avg_mw.get(aa, aa_ukn_mw)
     return mw
 
 
@@ -111,6 +112,7 @@ def protein_mw_from_aa_seq(aa_seq):
 
     Based on Expasy Compyte pI/Mw tool
     one H20 is removed from amino acid per peptide bond
+    unknown sequence identifiers get assigned a dummy cost of 100 g/mol
 
     :param aa_seq: sequence of amino acid one letter chars
     :type aa_seq: str
@@ -119,13 +121,14 @@ def protein_mw_from_aa_seq(aa_seq):
     """
     mw = h2o_avg_mw  # Expasy Compute pI/Mw adds one water molecule
     for aa in sorted(set(aa_seq)):
-        mw += aa_seq.count(aa) * aa_avg_mw[aa]
+        mw += aa_seq.count(aa) * aa_avg_mw.get(aa, aa_ukn_mw)
     return mw
 
 
 # mw of individual nucleoside monophosphates with 'HO' removed due to condensation
 #  based on deprotonated nucleoside monophosphates, e.g. AMP: 'C10H12N5O7P',
 nt_weights = {'A': 328.047, 'C': 304.036, 'G': 344.042, 'U': 305.020}
+nt_ukn_mw = np.mean(list(nt_weights.values()))   # molecular weight of unknown identifiers (should not appear)
 
 
 def rna_mw_from_nt_comp(nt_dict):
@@ -138,13 +141,14 @@ def rna_mw_from_nt_comp(nt_dict):
     """
     mw = 0.0
     for nt, stoic in nt_dict.items():
-        mw += stoic * nt_weights[nt]
+        mw += stoic * nt_weights.get(nt, nt_ukn_mw)
     return mw
 
 
 # mw of individual deoxy nucleoside monophosphates with 'HO' removed due to condensation
 #  based on deprotonated deocxy nucleoside monophosphates, e.g. dAMP: 'C10H12N5O6P',
 dnt_weights = {'A': 312.052, 'C': 288.041, 'G': 328.047, 'T': 303.041}
+dnt_ukn_mw = np.mean(list(dnt_weights.values()))    # molecular weight of unknown dnt identifiers (should not appear)
 dnt_complements = {'A': 'T', 'C': 'G', 'T': 'A', 'G': 'C'}
 
 
@@ -158,7 +162,7 @@ def ssdna_mw_from_dnt_comp(dnt_dict):
     """
     mw = 0.0
     for dnt, stoic in dnt_dict.items():
-        mw += stoic * dnt_weights[dnt]
+        mw += stoic * dnt_weights.get(dnt, dnt_ukn_mw)
     return mw
 
 
@@ -174,5 +178,5 @@ def dsdna_mw_from_dnt_comp(dnt_dict):
     """
     mw = 0.0
     for dnt, stoic in dnt_dict.items():
-        mw += stoic * (dnt_weights[dnt] + dnt_weights[dnt_complements[dnt]])
+        mw += stoic * (dnt_weights.get(dnt, dnt_ukn_mw) + dnt_weights[dnt_complements.get(dnt, 'A')])
     return mw

@@ -396,20 +396,6 @@ class SbmlReaction(SbmlSBase):
         if gpa == '':
             self.gene_product_assoc = None
 
-    def is_blocked_old(self, parameters):
-        """Check if reaction is blocked due to zero value flux bounds.
-
-        :param parameters: flux bound paramters
-        :type parameters: SbmlParameters
-        :return:
-        """
-        lb_value = parameters[self.fbc_lower_bound].value
-        ub_value = parameters[self.fbc_upper_bound].value
-        if lb_value == 0.0 and ub_value == 0.0:
-            return True
-        else:
-            return False
-
     def correct_reversibility_old(self, parameters, exclude_ex_reactions=False):
         """Correct reversibility based on flux bounds.
 

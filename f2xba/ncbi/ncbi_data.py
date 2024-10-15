@@ -17,19 +17,19 @@ from .ncbi_chromosome import NcbiChromosome
 
 class NcbiData:
 
-    def __init__(self, chromosome2accid, ncbi_dir):
+    def __init__(self, chromosome2accids, ncbi_dir):
         """Initialize
 
         Download NCBI nucleotide information for given accession ids.
         Use stored file, if found in ncbi_dir.
 
-        :param chromosome2accid: Mapping chromosome id to GeneBank accession_id
-        :type chromosome2accid: dict (key: chromosome id, str; value: Genbank accession_id, str)
+        :param chromosome2accids: Mapping chromosome id to GeneBank accession_id
+        :type chromosome2accids: dict (key: chromosome id, str; value: Genbank accession_id, str)
         :param ncbi_dir: directory where ncbi exports are stored
         :type ncbi_dir: str
         """
         self.chromosomes = {}
-        for chrom_id, accession_id in chromosome2accid.items():
+        for chrom_id, accession_id in chromosome2accids.items():
             self.chromosomes[chrom_id] = NcbiChromosome(chrom_id, accession_id, ncbi_dir)
 
         # mapping of NCBI record loci to feature records and proteins across chromosomes
