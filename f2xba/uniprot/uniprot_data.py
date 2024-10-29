@@ -135,14 +135,14 @@ class UniprotData:
                 # print(f'{progress} / {total}')
             print(f'Uniprot protein data downloaded for organism {self.organism_id} to: {self.fname}')
 
-    def modify_attributes_old(self, df_modify_attrs):
+    def modify_attributes(self, df_modify_attrs):
         """Modify locus information for selected uniprot ids.
 
         Uniprot loci might be missing in uniprot export,
             e.g. 'P0A6D5' entry has missing locus (as per July 2023)
 
-        :param df_modify_attrs: uniprot ids with assigned locus
-        :type df_modify_attrs: pandas DataFrame (index: uniprot id [str], val: locus id [str])
+        :param df_modify_attrs: data to be modified on proteins
+        :type df_modify_attrs: pandas DataFrame with protein related data to modify
         """
         for uid, row in df_modify_attrs.iterrows():
             if uid not in self.proteins:

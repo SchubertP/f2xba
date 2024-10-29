@@ -47,10 +47,6 @@ class BiocycData:
                             'EnzRxn': ['Enzymatic-Reactions', 'full'],
                             }
 
-        if os.path.exists(biocyc_dir) is False:
-            os.makedirs(biocyc_dir)
-            print(f'{biocyc_dir} created.')
-
         if self.is_complete_biocyc_data() is False:
             self.retrieve_biocyc_data()
 

@@ -10,8 +10,7 @@ from .ncbi_ft_record import NcbiFtRecord
 
 map_complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
 record_types = {'gene', 'mRNA', 'CDS', 'tRNA', 'rRNA', 'ncRNA'}
-attr_types = {'gene', 'locus_tag', 'old_locus_tag', 'product', 'db_xref', 'EC_number',
-              'note'}
+attr_types = {'gene', 'locus_tag', 'old_locus_tag', 'product', 'db_xref', 'EC_number', 'note'}
 
 
 class NcbiFeature:
@@ -89,3 +88,13 @@ class NcbiFeature:
             self.xrefs = getattr(record, 'db_xref', None)
             self.note = getattr(record, 'note', None)
         return self.locus
+
+    def modify_attribute(self, attribute, value):
+        """modify attribute value.
+
+        :param attribute: attribute name
+        :type attribute: str
+        :param value: value to be configured
+        :type value: str
+        """
+        setattr(self, attribute, value)

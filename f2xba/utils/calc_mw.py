@@ -79,14 +79,21 @@ def calc_mw_from_formula(formula):
 
 # average isotopic mass used in Expasy Compute pI/Mw tool (https://web.expasy.org/compute_pi/)
 # data copied from https://web.expasy.org/findmod/findmod_masses.html#AA
-# polymerized amino acids considered, e.g. L-Alanine 89,09 g/mol,
+# polymerized amino acids considered, e.g. L-Alanine 89.09 g/mol,
 #  in protein H2O is removed per peptide bond: i.e. A = 89.09 - 18.01 = 71.08 g/mol
-aa_avg_mw = {'A': 71.0788, 'C': 103.1388, 'D': 115.0886, 'E': 129.1155, 'F': 147.1766,
-             'G': 57.0519, 'H': 137.1411, 'I': 113.1594, 'K': 128.1741, 'L': 113.1594,
-             'M': 131.1926, 'N': 114.1038, 'P': 97.1167, 'Q': 128.1307, 'R': 156.1875,
-             'S': 87.0782, 'T': 101.1051, 'V': 99.1326, 'W': 186.2132, 'Y': 163.176,
-             'O': 237.3018, 'U': 150.0388, '*': 130.0}
-aa_ukn_mw = np.mean(list(aa_avg_mw.values()))   # molecular weight of unknonw sequence identifier
+# Note: mean aa_weight: 110.74 g/mol (major 20 aa, H2O rmoved, weighted as per Kozlowski, 2016, pubmed: 27789699)
+#  note: uknown aa could be replaced by L (most frequent)
+aa_mw = {'A': 71.0788, 'C': 103.1388, 'D': 115.0886, 'E': 129.1155, 'F': 147.1766,
+         'G': 57.0519, 'H': 137.1411, 'I': 113.1594, 'K': 128.1741, 'L': 113.1594,
+         'M': 131.1926, 'N': 114.1038, 'P': 97.1167, 'Q': 128.1307, 'R': 156.1875,
+         'S': 87.0782, 'T': 101.1051, 'V': 99.1326, 'W': 186.2132, 'Y': 163.176,
+         'O': 237.3018, 'U': 150.0388,   # Pyrrolysine (Pyl, O), Selenocysteine (Sec, U)
+         }
+aa_freq = {'A': 8.76, 'C': 1.38, 'D': 5.49, 'E': 6.32, 'F': 3.87,
+           'G': 7.03, 'H': 2.26, 'I': 5.49, 'K': 5.19, 'L': 9.68,
+           'M': 2.32, 'N': 3.93, 'P': 5.02, 'Q': 3.90, 'R': 5.78,
+           'S': 7.14, 'T': 5.53, 'V': 6.73, 'W': 1.25, 'Y': 2.91}
+aa_avg_mw = sum([freq/100.0 * aa_mw[aa] for aa, freq in aa_freq.items()])  # avg mw used for unknown sequence ids
 h2o_avg_mw = 18.01524   # average isotopic mass of one water molecule
 
 
@@ -103,7 +110,7 @@ def protein_mw_from_aa_comp(aa_dict):
     """
     mw = h2o_avg_mw  # Expasy Compute pI/Mw adds one water molecule
     for aa, stoic in aa_dict.items():
-        mw += stoic * aa_avg_mw.get(aa, aa_ukn_mw)
+        mw += stoic * aa_mw.get(aa, aa_avg_mw)
     return mw
 
 
@@ -121,7 +128,7 @@ def protein_mw_from_aa_seq(aa_seq):
     """
     mw = h2o_avg_mw  # Expasy Compute pI/Mw adds one water molecule
     for aa in sorted(set(aa_seq)):
-        mw += aa_seq.count(aa) * aa_avg_mw.get(aa, aa_ukn_mw)
+        mw += aa_seq.count(aa) * aa_mw.get(aa, aa_avg_mw)
     return mw
 
 

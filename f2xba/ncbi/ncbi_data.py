@@ -43,30 +43,30 @@ class NcbiData:
 
         # mapping of gene product label to NCBI locus (including NCBI old_locus_tag)
         self.label2locus = {}
+        self.update_label2locus()
+
+    def update_label2locus(self):
+        self.label2locus = {}
         for locus, record in self.locus2record.items():
             self.label2locus[locus] = locus
             if hasattr(record, 'old_locus') and record.old_locus is not None:
                 self.label2locus[record.old_locus] = locus
 
-    def modify_attribute(self, attribute, value):
-        """modify attribute value.
+    def modify_attributes(self, df_modify_attrs):
+        """modify attribute values of ncbi feature records
 
-        used to add gene product labels to NCBI loci
-        e.g.: attribute = 'label2locus'
-              value = 'sll8031=SGL_RS01280, sml0004=SGL_RS18655,
+        e.g. update 'locus' or 'old_locus' attributes to improve mapping with model loci
 
-        :param attribute: attribute name, currently only 'label2locus'
-        :type attribute: str
-        :param value: value to be configured, key=value pairs, comma separated.
-        :type value: str
+        :param df_modify_attrs: table with 'attribute', 'value' columns and index set to gene locus
+        :type df_modify_attrs: pandas DataFrame
         """
-        if attribute == 'label2locus':
-            for kv_pair in value.split(','):
-                label, locus = kv_pair.split('=')
-                if locus.strip() in self.locus2record:
-                    self.label2locus[label.strip()] = locus.strip()
-        else:
-            print(f'NCBI attribute {attribute} can not be updated. Supported: label2locus')
+        for locus, row in df_modify_attrs.iterrows():
+            if locus in self.locus2record:
+                record = self.locus2record[locus]
+                record.modify_attribute(row['attribute'], row['value'])
+            else:
+                print(f'{locus} not found in NCBI data export')
+        self.update_label2locus()
 
     def get_gc_content(self, chromosome_id=None):
         """Retrieve GC content accross all or a specifiec chromosome

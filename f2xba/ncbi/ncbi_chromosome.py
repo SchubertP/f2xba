@@ -42,9 +42,9 @@ class NcbiChromosome:
         self.chromosome_id = chrom_id
         self.accession_id = accession_id
 
-        seq_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta.txt')
-        self.fasta_cds_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_fasta_cds_aa.txt')
-        self.ft_fname = os.path.join(ncbi_dir, f'{chrom_id}_{accession_id}_features.txt')
+        seq_fname = os.path.join(ncbi_dir, f'{self.chromosome_id}_{self.accession_id}_fasta.txt')
+        self.fasta_cds_fname = os.path.join(ncbi_dir, f'{self.chromosome_id}_{self.accession_id}_fasta_cds_aa.txt')
+        self.ft_fname = os.path.join(ncbi_dir, f'{self.chromosome_id}_{self.accession_id}_features.txt')
 
         # download data from NCBI, unless data exists locally
         if (not os.path.exists(seq_fname) or
@@ -135,35 +135,35 @@ class NcbiChromosome:
             for line in fh:
                 fields = line.rstrip().split('\t')
 
-                # record header information
+                # new record header. Records could be 'gene', 'CDS', 'rRNA', 'tRNA', ...
                 if len(fields) == 3:
-
+                    start = int(re.sub(r'\D', '', fields[0]))
+                    stop = int(re.sub(r'\D', '', fields[1]))
                     record_type = fields[2]
-
                     # a 'gene' record starts a new feature record
                     if record_type == 'gene':
-
-                        # collect information from a previous feature record
+                        # collect info from previous feature and store the feature
                         if gene_data is not None:
                             locus = gene_data.collect_info(chrom_nt_seq)
+                            # in case locus is not provided, at least a gene name should be provided
+                            if locus is None:
+                                assert gene_data.gene, "neither Locus_tag nor gene-data provided in NCBI seq record"
+                                locus = gene_data.gene
                             features[re.sub(r'\W', '_', locus)] = gene_data
+                        # create a new feature
+                        gene_data = NcbiFeature(record_type, start, stop)
 
-                        # start a new feature record, unless gene is incomplete
-                        if re.match(r'\d*$', fields[0]) and re.match(r'\d*$', fields[1]):
-                            gene_data = NcbiFeature(record_type, int(fields[0]), int(fields[1]))
-                        else:
-                            gene_data = None
-
-                    # add sub-record related to previous 'gene' record
+                    # if header is not a 'gene' record, open a sub-record related to previous 'gene' record
                     elif gene_data is not None and record_type not in skipped_types:
-                        if re.match(r'\d*$', fields[0]) and re.match(r'\d*$', fields[1]):
-                            gene_data.add_record(record_type, int(fields[0]), int(fields[1]))
+                        gene_data.add_record(record_type, start, stop)
 
-                # attribute information within a record
+                # collect attribute information related to the current record
                 elif gene_data is not None:
                     if len(fields) == 2:
                         # this adds splicing information
-                        gene_data.add_region(record_type, int(fields[0]), int(fields[1]))
+                        start = int(re.sub(r'\D', '', fields[0]))
+                        stop = int(re.sub(r'\D', '', fields[1]))
+                        gene_data.add_region(record_type, start, stop)
                     elif len(fields) == 5:
                         # this adds attributes
                         gene_data.add_attribute(record_type, fields[3], fields[4])
@@ -172,6 +172,10 @@ class NcbiChromosome:
         if gene_data is not None:
             # final feature processing
             locus = gene_data.collect_info(chrom_nt_seq)
+            # in case locus is not provided, at least a gene name should be provided
+            if locus is None:
+                assert gene_data.gene, "neither Locus_tag nor gene-data provided in NCBI seq record"
+                locus = gene_data.gene
             features[re.sub(r'\W', '_', locus)] = gene_data
 
         return features
@@ -204,7 +208,8 @@ class NcbiChromosome:
                         proteins[locus] = NcbiProtein(attributes)
                     # collect attributes from header line
                     attributes = {key: val for key, val in re.findall(r'(\w+)=([^]]*)', line)}
-                    locus = attributes['locus_tag']
+                    # in case locus_tag is not provided, get 'gene'
+                    locus = attributes.get('locus_tag', attributes.get('gene', ''))
                     aa_seq = ''
                 # collect amino acid sequence
                 else:

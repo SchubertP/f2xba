@@ -110,10 +110,16 @@ class XbaModel:
                     r.kind = 'drain'
 
     def update_gp_mappings(self):
-        self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items() if gp.uid is not None}
+        self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items() if gp.uid}
         self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
-        self.locus2uid = {gp.label: gp.id for gp in self.gps.values()}
+        self.locus2uid = {gp.label: gp.uid for gp in self.gps.values() if gp.uid}
         self.locus2rids = self._get_locus2rids()
+        uid2locus = defaultdict(list)
+        for locus, uid in self.locus2uid.items():
+            uid2locus[uid].append(locus)
+        for uid, loci in uid2locus.items():
+            if len(loci) > 1:
+                print(f'WARNING: {loci} gene loci map to same protein {uid}, this needs to be corrected!')
 
     def _get_external_compartment(self):
         """Determine the external compartment id.
@@ -208,12 +214,16 @@ class XbaModel:
         #################
         # add NCBI data #
         #################
-        if 'chromosome2accids' in general_params and 'ncbi_dir' in general_params:
+        if 'chromosome2accids' in general_params and 'organism_dir' in general_params:
+            ncbi_dir = os.path.join(general_params['organism_dir'], 'ncbi')
+            if not os.path.exists(ncbi_dir):
+                os.makedirs(ncbi_dir)
+                print(f'{ncbi_dir} created')
             chromosome2accids = {}
             for kv in general_params['chromosome2accids'].split(','):
                 k, v = kv.split('=')
                 chromosome2accids[k.strip()] = v.strip()
-            self.ncbi_data = NcbiData(chromosome2accids, general_params['ncbi_dir'])
+            self.ncbi_data = NcbiData(chromosome2accids, ncbi_dir)
             for chromosome, data in self.ncbi_data.chromosomes.items():
                 print(f'{chromosome:15s}: {sum(data.nt_composition.values()):7d} nucleotides, '
                       f'{len(data.mrnas):4d} mRNAs,', f'{len(data.rrnas):2d} rRNAs, {len(data.trnas):2d} tRNAs', )
@@ -224,10 +234,15 @@ class XbaModel:
         # create proteins based on Uniprot #
         ####################################
         if 'organism_id' in general_params and 'organism_dir' in general_params:
-            self.uniprot_data = UniprotData(general_params['organism_id'], general_params['organism_dir'])
+            organism_dir = os.path.join(general_params['organism_dir'], 'ncbi')
+            if not os.path.exists(organism_dir):
+                os.makedirs(organism_dir)
+                print(f'{organism_dir} created')
+            self.uniprot_data = UniprotData(general_params['organism_id'], organism_dir)
             if 'modify_attributes' in xba_params:
                 self.modify_attributes(xba_params['modify_attributes'], 'uniprot')
 
+        # create proteins for model gene products based on uniprot data (preferred) or ncbi sequence data)
         if self.uniprot_data or self.ncbi_data:
             count = self.create_proteins()
             print(f'{count:4d} proteins created')
@@ -246,18 +261,34 @@ class XbaModel:
         # configure enzymes #
         #####################
         if len(self.proteins) > 0:
+            self.update_gp_mappings()
+
+            # ensure we have all equired protein data
+            missing_proteins = 0
+            for locus, uid in self.locus2uid.items():
+                if uid not in self.proteins:
+                    print(f'{locus} has no assigned protein')
+                    missing_proteins += 1
+            if missing_proteins > 0:
+                raise Exception(f'Cannot continue, {missing_proteins} missing proteins')
+
             count = self.create_enzymes()
             print(f'{count:4d} enzymes added with default stoichiometry')
 
             # set specific enzyme composition
-            org_prefix = general_params.get('biocyc_org_prefix')
-            biocyc_dir = os.path.join(general_params.get('organism_dir', ''), 'biocyc')
             if 'enzyme_comp_fname' in general_params:
                 count = self.set_enzyme_composition_from_file(general_params['enzyme_comp_fname'])
                 print(f'{count:4d} enzyme compositions updated from {fname}')
-            elif type(org_prefix) is str:
-                count = self.set_enzyme_composition_from_biocyc(biocyc_dir, org_prefix)
+            elif 'biocyc_org_prefix' in general_params:
+                biocyc_org_prefix = general_params.get('biocyc_org_prefix')
+                biocyc_dir = os.path.join(general_params.get('organism_dir', ''), 'biocyc')
+                if not os.path.exists(biocyc_dir):
+                    os.makedirs(biocyc_dir)
+                    print(f'{biocyc_dir} created')
+                count = self.set_enzyme_composition_from_biocyc(biocyc_dir, biocyc_org_prefix)
                 print(f'{count:4d} enzyme compositions updated from Biocyc Enzyme data')
+            else:
+                print(f'default enzyme composition with 1 copy of each individual protein')
 
             # modify enzyme composition, e.g. ABC transporters
             if 'modify_attributes' in xba_params:
@@ -579,6 +610,13 @@ class XbaModel:
         :return: metabolites without KEGG, InChi or SMILES reference
         :rtype: dict (key: mid/str, value: sid/str)
         """
+        # aa_freq used to Kozlowski, 2016, Table 2, pubmed: 27789699, used to filter invalid amino acids ids
+        aa_freq = {'A': 8.76, 'C': 1.38, 'D': 5.49, 'E': 6.32, 'F': 3.87,
+                   'G': 7.03, 'H': 2.26, 'I': 5.49, 'K': 5.19, 'L': 9.68,
+                   'M': 2.32, 'N': 3.93, 'P': 5.02, 'Q': 3.90, 'R': 5.78,
+                   'S': 7.14, 'T': 5.53, 'V': 6.73, 'W': 1.25, 'Y': 2.91}
+        invalid_aa_ids = '[^' + ''.join(aa_freq.keys()) + ']'
+
         with pd.ExcelFile(orig_kcats_fname) as xlsx:
             df_orig_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
             print(f'{len(df_orig_kcats):4d} original kcat records loaded from {orig_kcats_fname}')
@@ -631,16 +669,16 @@ class XbaModel:
                 subs_keggs = None if missing_ref else ';'.join(substrates)
                 prod_keggs = None if missing_ref else ';'.join(products)
 
-                # for enzyme complexes, we concatenate aa sequnces of involved proteins
+                # for enzyme complexes, we concatenate aa sequences of involved proteins
                 e = self.enzymes[row['enzyme']]
                 aa_seq = ''
                 for gpid in e.composition:
                     pid = self.locus2uid[gpid]
                     p = self.proteins[pid]
                     aa_seq += p.aa_sequence
-
+                valid_aa_seq = re.sub(invalid_aa_ids, 'L', aa_seq)
                 records.append([fwd_key, rev_key, row['enzyme'], row['info_type'],
-                                aa_seq, subs_keggs, prod_keggs])
+                                valid_aa_seq, subs_keggs, prod_keggs])
 
         cols = ['fwd_key', 'rev_key', 'enzyme_id', 'kind', 'Enzyme', 'Substrates', 'Products']
         df_input = pd.DataFrame(records, columns=cols)
@@ -678,7 +716,7 @@ class XbaModel:
         return mids_no_ref
 
     @staticmethod
-    def process_turnup_output(orig_kcats_fname, pred_kcats_fname, input_files, output_files):
+    def process_turnup_output(orig_kcats_fname, pred_kcats_fname, in2out_fnames):
         """Process TurNuP kcat prediction results and create new kcat parameter file.
 
         Using as input the list of TurNuP input and corresponding output files.
@@ -688,10 +726,8 @@ class XbaModel:
         :type orig_kcats_fname: str
         :param pred_kcats_fname: kcat parameter file name with predicted kcats
         :type pred_kcats_fname: str
-        :param input_files: List of TurNuP input file names
-        :type input_files: list of str
-        :param output_files: List of corresponding TurNuP output file names
-        :type output_files: list of str
+        :param in2out_fnames: mapping of TurNuP input to output file names
+        :type in2out_fnames: dict (key: input_fname/str, val: output_fname/str
         :return:
         """
         # update original kcats parameter file with data from TurNuP predictions, using input files as reference
@@ -703,16 +739,16 @@ class XbaModel:
         pred_fwd = 0
         pred_rev = 0
 
-        for file_idx in range(len(input_files)):
-            print(f'{os.path.basename(input_files[file_idx])} - {os.path.basename(output_files[file_idx])}')
-            df_input = pd.read_csv(input_files[file_idx], sep=';')
-            df_output = pd.read_csv(output_files[file_idx], sep=';')
+        for in_fname, out_fname in in2out_fnames.items():
+            print(f'{os.path.basename(in_fname)} - {os.path.basename(out_fname)}')
+            df_input = pd.read_csv(in_fname, sep=';')
+            df_output = pd.read_csv(out_fname, sep=';')
             assert len(df_input) == len(df_output), 'TurNuP input does not match TurNuP output file'
 
             for idx, row in df_input.iterrows():
                 if type(df_input.at[idx, 'Substrates']) is str and type(df_output.at[idx, 'substrates']) is str:
                     if df_input.at[idx, 'Substrates'] != df_output.at[idx, 'substrates']:
-                        print(f'{input_files[file_idx]} not in sync with {output_files[file_idx]} at record {idx}')
+                        print(f'{in_fname} not in sync with {out_fname} at record {idx}')
                         return
 
                 pred_kcat = df_output.at[idx, 'kcat [s^(-1)]']
@@ -909,17 +945,22 @@ class XbaModel:
                              'species': self.species, 'reaction': self.reactions,
                              'protein': self.proteins, 'enzyme': self.enzymes,
                              'parameter': self.parameters, 'compartment': self.compartments}
-        n_count = 0
-        for _id, row in df_modify[df_modify['component'] == component_type].iterrows():
-            n_count += 1
-            if component_type == 'ncbi':
-                self.ncbi_data.modify_attribute(row['attribute'], row['value'])
-            elif component_type == 'uniprot':
-                self.uniprot_data.proteins[_id].modify_attribute(row['attribute'], row['value'])
+
+        value_counts = df_modify['component'].value_counts().to_dict()
+        if component_type in value_counts:
+            df_modify_attrs = df_modify[df_modify['component'] == component_type]
+            if component_type == 'uniprot':
+                self.uniprot_data.modify_attributes(df_modify_attrs)
+            elif component_type == 'ncbi':
+                self.ncbi_data.modify_attributes(df_modify_attrs)
+            elif component_type in component_mapping:
+                comp_obj = component_mapping[component_type]
+                for _id, row in df_modify_attrs.iterrows():
+                    comp_obj[_id].modify_attribute(row['attribute'], row['value'])
             else:
-                component_mapping[component_type][_id].modify_attribute(row['attribute'], row['value'])
-        if n_count > 0:
-            print(f'{n_count:4d} attributes on {component_type} instances updated')
+                print('unknown component_type {component_type} in "modify_attributes" sheet')
+                return
+            print(f'{value_counts[component_type]:4d} attributes on {component_type} instances updated')
 
     def gpa_remove_gps(self, del_gps):
         """Remove gene products from Gene Product Rules.
@@ -973,13 +1014,13 @@ class XbaModel:
     def create_proteins(self):
         """Create proteins related to gene products used in the model.
 
-        For each gene product create related protein
-        - if related uniprot record exists (loaded from UniProt file), used uniprot id
+        For each gene product create a related protein
+        - if cooresponding uniprot record exists (loaded from UniProt file), use uniprot id
           as reference and configure model protein with data from uniprot record
-          - extract uniprot id from gene product record, if uniprot has been configured
-          - alternatively check uniprot lookup table locus2uid to find uniprot id from gene product label
-            - also update uid in gene product structure
-        - if uniprot record doesn't exist, collect protein data from NCBI protein record sequence
+          - try extracting the uniprot id from gene product MiriamAnnotation
+          - alternatively check mapping of uniprot records to gene labels
+            - in which case we add the uniprot id to the gene product data
+        - if corresponding uniprot not found, collect protein data from NCBI sequence data
 
         We also configure gene id and gene name 'notes'-field of gene product
         """
@@ -987,7 +1028,7 @@ class XbaModel:
         n_created = 0
         for gp in self.gps.values():
 
-            # in case of invalid uniprot id, assigne uid based on uniprot_data, alternatively create dummy id
+            # in case of invalid uniprot id, assign uid based on uniprot_data, alternatively create dummy id
             if gp.uid not in self.uniprot_data.proteins:
                 if gp.label in self.uniprot_data.locus2uid:
                     gp.uid = self.uniprot_data.locus2uid[gp.label]

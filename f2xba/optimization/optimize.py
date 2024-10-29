@@ -22,7 +22,7 @@ import pandas as pd
 from collections import defaultdict
 import sbmlxdf
 import f2xba.prefixes as pf
-from f2xba.utils.mapping_utils import get_srefs
+from f2xba.utils.mapping_utils import get_srefs, parse_reaction_string, valid_sbml_sid
 
 # Gurobipy should not be a hard requirement, unless used in this context
 try:
@@ -134,7 +134,6 @@ class Optimize:
 
         locus2uid mapping is used b
 
-
         For EC models (e.g. GECKO) extract mapping
         - from protein concentration variables 'V_PC_xxx', which carry the protein name in the id
             - from fbcGeneProdAssoc of such variable extract the (single) gene product id
@@ -154,7 +153,7 @@ class Optimize:
                 gpr = row['fbcGeneProdAssoc']
                 if type(gpr) is str:
                     gpid = gpr.split('=')[1]
-                    label = self.m_dict['fbcGeneProducts'].at[gpid, 'label']
+                    label = valid_sbml_sid(self.m_dict['fbcGeneProducts'].at[gpid, 'label'])
                     locus2uid[label] = uid
         # support for RBA based models
         for constr_id, row in self.m_dict['species'].iterrows():
@@ -413,30 +412,26 @@ class Optimize:
         expand_pmet = parts[1] if re.search(r'\w*pmet_\w+', parts[0]) else parts[0]
         return re.sub(r'\w*pmet_\w+', expand_pmet, reaction_str)
 
-    @staticmethod
-    def get_compartments(srefs_str, sid2cid):
-        """For reaction srefs str, e.g. reactants, determine compartment ids
+    def get_reaction_compartments(self, reaction_str):
+        """From reaction string extract participating compartments
 
         e.g.
-          srefs_str = 'species=M_atp_c, stoic=1.0, const=True; species=M_h2o_c, stoic=1.0, const=True'
-          sid2cid = {'M_atp_c': 'c', 'M_h2o_c': 'c', ...}
-          return: {'c'}
+          reaction_str = 'M_2dmmq8_c + M_h2_c + 2.0 M_h_c => M_2dmmql8_c + 2.0 M_h_p'
+          return: 'c_p'
 
-        :param srefs_str: species srefs string as per sbmlxdf reactants/products fields in reactions
-        :type srefs_str: str
-        :param sid2cid: mapping of metabolite ids to compartment ids
-        :type sid2cid: dict (key: sid/str, value: compartment id/str)
-        :return: set of compartment ids of metabolites in srefs_str
-        :rtype: set of str
+        :param reaction_str: species srefs string as per sbmlxdf reactants/products fields in reactions
+        :type reaction_str: str
+        :return: sorted compartment ids joined by '-'
+        :rtype: str
         """
-        compartments = set()
-        if type(srefs_str) is str:
-            for sref_str in sbmlxdf.record_generator(srefs_str):
+        cids = set()
+        srefs = parse_reaction_string(reaction_str)
+        for idx, r_side in enumerate(['reactants', 'products']):
+            for sref_str in sbmlxdf.record_generator(srefs[r_side]):
                 params = sbmlxdf.extract_params(sref_str)
                 sid = params['species']
-                if sid in sid2cid:
-                    compartments.add(sid2cid[sid])
-        return compartments
+                cids.add(self.m_dict['species'].loc[sid].compartment)
+        return '-'.join(sorted(cids))
 
     def get_reaction_data(self):
         """Extract reaction related data from reactions (reaction string, gpr)
@@ -446,8 +441,6 @@ class Optimize:
         :return: reaction related data, indexed by reaction id
         :rtype: dict
         """
-        sid2cid = {sid: row['compartment'] for sid, row in self.m_dict['species'].iterrows() if
-                   re.match(f'{pf.M_}', sid)}
         gpid2label = self.m_dict['fbcGeneProducts']['label'].to_dict()
         rdatas = {}
         for rid, row in self.m_dict['reactions'].iterrows():
@@ -476,21 +469,44 @@ class Optimize:
                     loci = [item.strip() for item in gpr.split('+')]
                     reactants = get_srefs(row['reactants'])
                     for locus in loci:
+                        locus = valid_sbml_sid(locus)
                         ecm_coupling_constr_id = f'{pf.C_prot_}{self.locus2uid[locus]}'
                         if ecm_coupling_constr_id in reactants:
                             mpmf_coupling[locus] = reactants[ecm_coupling_constr_id]/self.protein_per_gdw
 
                 exchange = False if type(row['products']) is str else True
-                rp_cids = [self.get_compartments(row.reactants, sid2cid), self.get_compartments(row.products, sid2cid)]
-                compartment = '-'.join(sorted(rp_cids[0].union(rp_cids[1])))
-                r_type = 'transport' if len(rp_cids[0].union(rp_cids[1])) > 1 else 'metabolic'
+                rp_cids = self.get_reaction_compartments(reaction_str)
+                r_type = 'transport' if '-' in rp_cids else 'metabolic'
 
                 rdatas[rid] = {'net_rid': net_rid, 'drxn': drxn, 'reaction_str': reaction_str,
                                'gpr': gpr, 'mpmf_coupling': mpmf_coupling,
-                               'is_exchange': exchange, 'r_type': r_type, 'compartment': compartment}
+                               'is_exchange': exchange, 'r_type': r_type, 'compartment': rp_cids}
         return rdatas
 
-    def get_genes_assigned_to(self, reaction_type):
+    def get_tx_metab_genes(self):
+        """Get genes assigned to transport/metabolic reactions
+
+        if a gene is participating in both transport and metabolic reactions
+         it is assigned to transprot genes
+
+        :return: set of genes assigned to specific reaction types
+        :rtype: tuple of with set of gene ids
+        """
+        tx_genes = set()
+        metab_genes = set()
+        for data in self.rdata.values():
+            if len(data['gpr']) > 0:
+                if data['r_type'] == 'transport':
+                    for gene in [item.strip() for item in data['gpr'].split('+')]:
+                        tx_genes.add(gene)
+                elif data['r_type'] == 'metabolic':
+                    for gene in [item.strip() for item in data['gpr'].split('+')]:
+                        metab_genes.add(gene)
+        metab_genes = metab_genes.difference(tx_genes)
+        return tx_genes, metab_genes
+
+    # TODO: remove function
+    def get_genes_assigned_to_old(self, reaction_type):
         """Get genes assigned to a specific ('transport' or 'metabolic') reaction type
 
         :param reaction_type: 'transport' or 'metabolic'
@@ -500,7 +516,7 @@ class Optimize:
         """
         genes = set()
         for data in self.rdata.values():
-            if data['r_type'] == reaction_type:
+            if data['r_type'] == reaction_type and len(data['gpr']) > 0:
                 for gene in [item.strip() for item in data['gpr'].split('+')]:
                     genes.add(gene)
         return genes

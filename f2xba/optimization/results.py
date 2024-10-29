@@ -158,25 +158,28 @@ class Results(ABC):
         predicted vs. experimental protein mass fractions used for correlation studies
         only return values for which experimental data exists
 
-        :param r_type: reaction type 'transport', 'metabolic' or 'other'
+        :param r_type: reaction type 'transport', 'metabolic' or 'process'
         :type r_type: str
         :param condition: specific condition to select data, e.g. 'Glucose'
         :type condition: str
-        :return: dict (key: gene/str, value: list(predicted mpmf, experimental mpmf)/float/float
+        :return: dict (key: gene/str, value: list(experimental mpmf, predicted mpmf)/float/float
         """
+
+        all_genes = set(self.optim.m_dict['fbcGeneProducts']['label'].values)
+        tx_genes, metab_genes = self.optim.get_tx_metab_genes()
+        pm_genes = all_genes.difference(tx_genes.union(metab_genes))
+
         mpmfs = {}
         if condition in self.results and condition in self.df_mpmf.columns:
 
             # determine gene set to be collected
-            if r_type in ['transport', 'metabolic']:
-                genes = self.optim.get_genes_assigned_to(r_type)
-            else:
-                genes = []
-                tx_genes = self.optim.get_genes_assigned_to('transport')
-                metab_genes = self.optim.get_genes_assigned_to('metabolic')
-                for gene in self.optim.m_dict['fbcGeneProducts']['label'].values:
-                    if gene not in tx_genes and gene not in metab_genes:
-                        genes.append(gene)
+            genes = set()
+            if r_type == 'transport':
+                genes = tx_genes
+            elif r_type == 'metabolic':
+                genes = metab_genes
+            elif r_type == 'process':
+                genes = pm_genes
 
             exp_mpmfs = self.df_mpmf[condition].to_dict()
             pred_mpmfs = self.get_predicted_protein_data(self.results[condition])['mg_per_gP'].to_dict()
