@@ -90,7 +90,7 @@ class NcbiData:
         return total_gc / total_nts
 
     def get_mrna_avg_composition(self, chromosome_id=None):
-        """retrieve average mrna composition accross all or a chromosome
+        """Retrieve average mrna composition across all or a chromosome
 
         :param chromosome_id: specific chromosome id
         :type chromosome_id: str or None (optional: default: None)

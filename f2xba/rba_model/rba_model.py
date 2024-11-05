@@ -279,8 +279,12 @@ class RbaModel:
         rba_params = {}
         with pd.ExcelFile(fname) as xlsx:
             for sheet in xlsx.sheet_names:
-                if sheet in rba_params_sheets:
-                    rba_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+                try:
+                    if sheet in rba_params_sheets:
+                        rba_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+                except ValueError:
+                    print(f'ERROR: problem reading sheet "{sheet}" from {fname}')
+                    return False
             print(f'{len(rba_params)} tables with RBA model configuration parameters loaded from {fname}')
 
         if self.check_rba_params_functions(rba_params) is False:

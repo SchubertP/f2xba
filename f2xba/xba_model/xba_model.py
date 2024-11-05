@@ -234,7 +234,7 @@ class XbaModel:
         # create proteins based on Uniprot #
         ####################################
         if 'organism_id' in general_params and 'organism_dir' in general_params:
-            organism_dir = os.path.join(general_params['organism_dir'], 'ncbi')
+            organism_dir = os.path.join(general_params['organism_dir'])
             if not os.path.exists(organism_dir):
                 os.makedirs(organism_dir)
                 print(f'{organism_dir} created')
