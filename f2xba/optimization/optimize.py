@@ -470,9 +470,11 @@ class Optimize:
                     reactants = get_srefs(row['reactants'])
                     for locus in loci:
                         locus = valid_sbml_sid(locus)
-                        ecm_coupling_constr_id = f'{pf.C_prot_}{self.locus2uid[locus]}'
-                        if ecm_coupling_constr_id in reactants:
-                            mpmf_coupling[locus] = reactants[ecm_coupling_constr_id]/self.protein_per_gdw
+                        # note: FBA/TFA models have not data in locus2uid
+                        if locus in self.locus2uid:
+                            ecm_coupling_constr_id = f'{pf.C_prot_}{self.locus2uid[locus]}'
+                            if ecm_coupling_constr_id in reactants:
+                                mpmf_coupling[locus] = reactants[ecm_coupling_constr_id]/self.protein_per_gdw
 
                 exchange = False if type(row['products']) is str else True
                 rp_cids = self.get_reaction_compartments(reaction_str)

@@ -1,6 +1,6 @@
-"""Implementation of CobraEcmResults class.
+"""Implementation of EcmResults class.
 
-Support functions for CobraPy optimization of EC (enzyme constraint) models
+Support functions for CobraPy and Gurobi optimization of EC (enzyme constraint) models
 that have been created using the f2xba modelling package.
 
 Support of GECKO, ccFBA, MOMENTmr and MOMENT optimization, as well

@@ -205,7 +205,7 @@ class XbaModel:
         if 'add_reactions' in xba_params:
             self.add_reactions(xba_params['add_reactions'])
             protect_ids.extend(xba_params['add_reactions'].index)
-
+        self.clean(protect_ids)
         # for r in self.reactions.values():
         #     r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
         # update mappings (just in case)
@@ -362,8 +362,8 @@ class XbaModel:
         """Print current model size (and difference to orignal model"""
         size = {'n_sids': len(self.species), 'n_rids': len(self.reactions),
                 'n_gps': len(self.gps), 'n_pids': len(self.parameters)}
-        print(f'{size["n_sids"]} species ({size["n_sids"] - self.gem_size["n_sids"]:+}); '
-              f'{size["n_rids"]} reactions ({size["n_rids"] - self.gem_size["n_rids"]:+}); '
+        print(f'{size["n_sids"]} constraints ({size["n_sids"] - self.gem_size["n_sids"]:+}); '
+              f'{size["n_rids"]} variables ({size["n_rids"] - self.gem_size["n_rids"]:+}); '
               f'{size["n_gps"]} genes ({size["n_gps"] - self.gem_size["n_gps"]:+}); '
               f'{size["n_pids"]} parameters ({size["n_pids"] - self.gem_size["n_pids"]:+})')
 

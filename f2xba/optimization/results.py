@@ -19,7 +19,7 @@ import f2xba.prefixes as pf
 
 class Results(ABC):
 
-    def __init__(self, optim, results, df_mpmf):
+    def __init__(self, optim, results, df_mpmf=None):
         """Instantiation
 
         Results for different media conditions with CobraPy solution objects
@@ -99,11 +99,12 @@ class Results(ABC):
         df_fluxes.index.name = 'rid'
         return df_fluxes
 
-    @abstractmethod
     def collect_protein_results(self):
-        pass
+        # should be overwritten by subclasses, when model contains protein concentration variables
+        return pd.DataFrame()
 
     def get_predicted_protein_data(self, solution):
+        # should be overwritten by subclasses, when model contains protein concentration variables
         return pd.DataFrame()
 
     def get_predicted_species_conc(self, solution):
@@ -187,6 +188,20 @@ class Results(ABC):
                 if gene in exp_mpmfs and gene in genes:
                     mpmfs[gene] = [exp_mpmfs[gene], pred_mpmf]
         return mpmfs
+
+    def report_grs_correlation(self, exp_grs):
+        """Report on predicted vs experimental growth rate correlation.
+
+        :param exp_grs: experimental growth rates for selected conditions
+        :type exp_grs: dict (key: condition/str, val: gr in h-1/float)
+        """
+        conds = set(exp_grs).intersection(self.results)
+        cond_exp_grs = np.array([exp_grs[cond] for cond in conds])
+        cond_pred_grs = np.array([self.results[cond].objective_value for cond in conds])
+        rel_error = abs(cond_exp_grs - cond_pred_grs) / cond_exp_grs
+        r_value, p_value = scipy.stats.pearsonr(cond_exp_grs, cond_pred_grs)
+        print(f'predicted grs ({len(cond_pred_grs)}) vs experiment: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}, '
+              f'avg rel error = {np.mean(rel_error) * 100:.2f}%')
 
     def report_proteomics_correlation(self, scale='lin'):
         """Report on correlation predicted vs experimental protein mass fraction (log scale).
