@@ -93,6 +93,7 @@ class EcmResults(Results):
             df = self.get_predicted_protein_data(solution)
             if df_proteins is None:
                 if self.df_mpmf is not None:
+                    # TODO: support df_mpmf if any of ['description', 'avg_mpmf', 'rank'] are not included
                     exp_mpmf_cols = ['description', 'avg_mpmf', 'rank']
                     df_proteins = df[['uniprot', 'gene_name']].join(self.df_mpmf[exp_mpmf_cols])
                     df_proteins.rename(columns={'avg_mpmf': 'exp_avg_mpmf', 'rank': 'exp_rank'}, inplace=True)

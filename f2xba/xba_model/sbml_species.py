@@ -43,7 +43,8 @@ class SbmlSpecies(SbmlSBase):
         self.constant = s_species.get('constant', False)
         self.boundary_condition = s_species.get('boundaryCondition', False)
         self.has_only_substance_units = s_species.get('hasOnlySubstanceUnits', False)
-
+        if 'substanceUnits' in s_species:
+            self.substance_units = s_species['substanceUnits']
         if 'fbcCharge' in s_species:
             self.charge = s_species['fbcCharge']
         if 'fbcChemicalFormula' in s_species:
@@ -79,6 +80,8 @@ class SbmlSpecies(SbmlSBase):
         data['boundaryCondition'] = self.boundary_condition
         data['hasOnlySubstanceUnits'] = self.has_only_substance_units
 
+        if hasattr(self, 'substance_units'):
+            data['substanceUnits'] = self.substance_units
         if hasattr(self, 'charge'):
             data['fbcCharge'] = self.charge
         if hasattr(self, 'formula'):

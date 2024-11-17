@@ -35,7 +35,7 @@ class EcmOptimization(Optimize):
         :type cobra_model: cobra.core.model.Model if supplied
         """
         super().__init__('ECM', fname, cobra_model)
-        self.orig_coeffs = {}
+        self.orig_coupling = {}
 
         self.ecm_type = self.m_dict['modelAttrs'].get('id', '_GECKO').rsplit('_', 1)[1]
         if self.ecm_type.endswith('MOMENT'):
@@ -57,29 +57,69 @@ class EcmOptimization(Optimize):
                     constr.ub = 1000.0
         print(f'MOMENT protein constraints configured ≥ 0')
 
-    # Support functions to tune model kcat parameters by rescaling kcat values
-    def gp_tune_scale_kcats(self, scale_kcats):
-        """Scale selected kcats of the model as per provided scale_kcats.
+    def scale_kcats(self, scale_kcats):
+        """Scale selected kcat values for model tuning/fitting.
 
         Used to manually tune kcat parameters.
-        - call gp_tune_reset_kcats() after optimizatin to restore original kcat values
+        - supports both COBFAPpy and Gurobi interfaces
+        - to reset, call unscale_kcats()
         - example:
           scale_kcats= {'BPNT': 0.2, 'TMPK':0.2, 'TMPK_REV':0.2, 'CLPNS':0.25}
-          geo.gp_tune_scale_kcats(scale_kcats)
+          geo.scale_kcats(scale_kcats)
           solution = geo.optimize()
-          geo.gp_tune_reset_kcats()
-
-        Steps:
-        - based on reaction id, access model variable and get column entries of S-matrix
-        - identify matrix entries related to protein constraints
-        - retrieve current coefficient value, so it can be restored after optimization
-        - set new coefficient using the scaling value
+          geo.unscale_kcats()
 
         :param scale_kcats: selected reaction ids (without 'R_' prefix) with kcat scaling factor
         :type scale_kcats: dict (key: reaction id without 'R_' prefix, val: float)
         """
-        assert self.is_gpm is True, "kcat tunining supported on Gurobipy model only"
-        orig_coeffs = defaultdict(dict)
+        if self.is_gpm:
+            self._gp_scale_kcats(scale_kcats)
+        else:
+            self._cp_scale_kcats(scale_kcats)
+
+    def unscale_kcats(self):
+        """Unscale previously scaled kcat values and return to original coupling coefficients
+        """
+        if self.is_gpm:
+            self._gp_unscale_kcats()
+        else:
+            self._cp_unscale_kcats()
+
+    def _cp_scale_kcats(self, scale_kcats):
+        """Scale kcat values for COBRApy interface, by updating coupling coefficients.
+
+        :param scale_kcats: selected reaction ids (without 'R_' prefix) with kcat scaling factor
+        :type scale_kcats: dict (key: reaction id without 'R_' prefix, val: float)
+        """
+        assert self.is_gpm is False, 'applicable to COBRApy interface only'
+        orig_coupling = defaultdict(dict)
+        for ridx, scale in scale_kcats.items():
+            assert ridx in self.model.reactions
+            r = self.model.reactions.get_by_id(ridx)
+            for m, coeff in r.metabolites.items():
+                if re.match(f'{pf.C_prot_}', m.id):
+                    r.add_metabolites({m: coeff / scale}, combine=False)
+                    orig_coupling[ridx][m.id] = coeff
+        self.orig_coupling = dict(orig_coupling)
+
+    def _cp_unscale_kcats(self):
+        """Unscale kcat values for COBRApy inteface, by resetting original coupling coefficients
+        """
+        assert self.is_gpm is False, 'applicable to COBRApy interface only'
+        for ridx, couplings in self.orig_coupling.items():
+            r = self.model.reactions.get_by_id(ridx)
+            for constr_id, coeff in couplings.items():
+                r.add_metabolites({constr_id: coeff}, combine=False)
+        self.orig_coupling = {}
+
+    def _gp_scale_kcats(self, scale_kcats):
+        """Scale kcat values for Gurobi interface, by updating coupling coefficients.
+
+        :param scale_kcats: selected reaction ids (without 'R_' prefix) with kcat scaling factor
+        :type scale_kcats: dict (key: reaction id without 'R_' prefix, val: float)
+        """
+        assert self.is_gpm is True, 'applicable to Gurobi interface only'
+        orig_coupling = defaultdict(dict)
         self.gpm.update()
         for ridx, scale in scale_kcats.items():
             var = self.gpm.getVarByName(f'{pf.R_}{ridx}')
@@ -88,22 +128,24 @@ class EcmOptimization(Optimize):
                 constr = col.getConstr(idx)
                 if re.match(f'{pf.C_prot_}', constr.getAttr('ConstrName')):
                     coeff = col.getCoeff(idx)
-                    orig_coeffs[var][constr] = coeff
                     self.gpm.chgCoeff(constr, var, coeff / scale)
+                    orig_coupling[ridx][constr.getAttr('ConstrName')] = coeff
         self.gpm.update()
-        self.orig_coeffs = dict(orig_coeffs)
+        self.orig_coupling = dict(orig_coupling)
 
-    def gp_tune_reset_kcats(self):
+    def _gp_unscale_kcats(self):
         """reset kcat values to original values.
 
         Used in manually tuning model kcats
         - call gp_tune_scale_kcats() prior to optmization
         - call gp_tune_reset_kcats() after optimizatin to reset old kcat values
         """
-        assert self.is_gpm is True, "kcat tunining supported on Gurobipy model only"
-        for var, data in self.orig_coeffs.items():
-            for constr, orig_coeff in data.items():
-                self.gpm.chgCoeff(constr, var, orig_coeff)
+        assert self.is_gpm is True, 'applicable to Gurobi interface only'
+        for ridx, couplings in self.orig_coupling.items():
+            var = self.gpm.getVarByName(f'{pf.R_}{ridx}')
+            for constr_id, coeff in couplings.items():
+                constr = self.gpm.getConstrByName(constr_id)
+                self.gpm.chgCoeff(constr, var, coeff)
         self.gpm.update()
         self.orig_coeffs = {}
 

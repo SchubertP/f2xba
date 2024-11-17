@@ -3,7 +3,6 @@
 Peter Schubert, HHU Duesseldorf, CCB, Mai 2024
 """
 
-import os
 import re
 import numpy as np
 import pandas as pd
@@ -189,7 +188,7 @@ class Results(ABC):
                     mpmfs[gene] = [exp_mpmfs[gene], pred_mpmf]
         return mpmfs
 
-    def report_grs_correlation(self, exp_grs):
+    def report_gr_correlation(self, exp_grs):
         """Report on predicted vs experimental growth rate correlation.
 
         :param exp_grs: experimental growth rates for selected conditions
@@ -200,7 +199,7 @@ class Results(ABC):
         cond_pred_grs = np.array([self.results[cond].objective_value for cond in conds])
         rel_error = abs(cond_exp_grs - cond_pred_grs) / cond_exp_grs
         r_value, p_value = scipy.stats.pearsonr(cond_exp_grs, cond_pred_grs)
-        print(f'predicted grs ({len(cond_pred_grs)}) vs experiment: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}, '
+        print(f'predicted grs ({len(cond_pred_grs)}) vs. experiment: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}, '
               f'avg rel error = {np.mean(rel_error) * 100:.2f}%')
 
     def report_proteomics_correlation(self, scale='lin'):
@@ -234,43 +233,89 @@ class Results(ABC):
                 print(f'{condition:25s}: r\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
                       f'({len(x)} proteins {scale} scale)')
 
-    def save_fluxes_to_escher(self, escher_dir, model_name):
-        """Export net metabolic reaction fluxes (mmol/gDWh) to Escher compliant files.
+    def report_protein_levels(self, condition):
+        """Report on experimental vs. predicted protein levels per protein type.
 
-        For import as reaction data in Escher maps.
+        Proteins get split into groups of metabolic proteins, transporters and process machines.
+        Per type report on experiemental vs predicted protein mass fraction and pearson correlation
 
-        :param escher_dir: parent directory where to store escher files
-        :type escher_dir: str
-        :param model_name: file name prefix
-        :type model_name: str
+        :param condition: selected condtion (medium)
+        :type condition: str
         """
-        df_net_fluxes = self.collect_fluxes(net=True)
-        for condition in self.results:
-            flux_dict = df_net_fluxes[condition][abs(df_net_fluxes[condition]) > 1e-8].to_dict()
-            fname = os.path.join(escher_dir, model_name + f'_{condition}_fluxes.json')
-            with open(fname, 'w') as f:
-                json.dump(flux_dict, f)
-        print(f'net reaction fluxes stored under {escher_dir}')
+        # For measured proteins collect predicted mass fraction per type
+        metab_gene2mpmfs = self.get_rtype_condition_mpmf('metabolic', condition)
+        tx_gene2mpmfs = self.get_rtype_condition_mpmf('transport', condition)
+        pm_gene2mpmfs = self.get_rtype_condition_mpmf('process', condition)
+        all_gene2mpmfs = metab_gene2mpmfs | tx_gene2mpmfs | pm_gene2mpmfs
+        metab_mpmfs = np.array(list(metab_gene2mpmfs.values()))
+        tx_mpmfs = np.array(list(tx_gene2mpmfs.values()))
+        pm_mpmfs = np.array(list(pm_gene2mpmfs.values()))
+        all_mpmfs = np.array(list(all_gene2mpmfs.values()))
 
-    def save_metabolite_conc_to_escher(self, escher_dir, model_name):
-        """Export metabolite concentrations (mmol/l) to Escher compliant files.
+        # get total predicted protein mass, including proteins not measured
+        all_pred = self.get_predicted_protein_data(self.results[condition])['mg_per_gP'].to_dict()
+        dummy_pred = {gp: mpmf for gp, mpmf in all_pred.items() if 'dummy' in gp}
+        other_pred_only = {gp: mpmf for gp, mpmf in all_pred.items() if
+                           gp not in all_gene2mpmfs and gp not in dummy_pred}
 
-        For import as metabolite data in Escher maps.
+        print(f'condition: {condition}')
+        print(f'{len(all_pred):4d} proteins in model with total predicted mass fraction of '
+              f'{sum(all_pred.values()):.1f} mg/gP')
+        print(f'{"":5s}{len(all_mpmfs):4d} have been measured with mpmf of  {sum(all_mpmfs[:, 0]):5.1f} mg/gP vs. '
+              f'{sum(all_mpmfs[:, 1]):.1f} mg/gP predicted')
+        for p_class, mpmfs in {'metabolic': metab_mpmfs, 'transport': tx_mpmfs, 'processes': pm_mpmfs}.items():
+            if len(mpmfs) > 0:
+                print(f'{"":10s}{len(mpmfs):4d} {p_class} proteins measured {sum(mpmfs[:, 0]):5.1f} mg/gP '
+                      f'vs. {sum(mpmfs[:, 1]):5.1f} mg/gP predicted')
+        print(f'{"":5s}{len(dummy_pred) + len(other_pred_only):4d} proteins not measured vs. '
+              f'{sum(dummy_pred.values()) + sum(other_pred_only.values()):5.1f} mg/gP predicted')
+        for p_class, mpmfs in {'dummy ': dummy_pred, 'actual ': other_pred_only}.items():
+            if len(mpmfs) > 0:
+                print(f'{"":10s}{len(mpmfs):4d} {p_class} proteins {sum(mpmfs.values()):9.1f} mg/gP predicted')
 
-        :param escher_dir: parent directory where to store escher files
-        :type escher_dir: str
-        :param model_name: file name prefix
-        :type model_name: str
+        for scale in ['lin', 'log']:
+            for p_class, mpmfs in {'total': all_mpmfs, ' metabolic': metab_mpmfs,
+                                   ' transport': tx_mpmfs, ' processes ': pm_mpmfs}.items():
+                if len(mpmfs) > 0:
+                    x, y = (mpmfs[:, 0], mpmfs[:, 1]) if scale == 'lin' else self.get_log10_xy(mpmfs)
+                    r_value, p_value = scipy.stats.pearsonr(x, y)
+                    print(f'{p_class:16s}: R\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
+                          f'({len(x):4d} proteins {scale} scale)')
+
+    def save_to_escher(self, df, base_fname):
+        """Save selected results for import into Escher maps.
+
+        Results could be reaction fluxes, protein mass fractions or metabolite concentrations.
+
+        To avoid noise, records with small absolute value (<1e-8) are not exported
+
+        :param df: dataframe with optimization results (all or selected conditions)
+        :type df: pandas DataFrame or pandas Series
+        :param base_fname: base name to construct escher files
+        :type base_fname: str
+        :return:
         """
-        df_species_conc = self.collect_species_conc()
-        for condition in self.results:
-            fname = os.path.join(escher_dir, model_name + f'_{condition}_metabolites.json')
-            with open(fname, 'w') as f:
-                json.dump(df_species_conc[condition].to_dict(), f)
-        print(f'metabolite data stored under {escher_dir}')
+        # in case a single condidion is selected, df could be a pandas Series
+        if isinstance(df, pd.Series):
+            df = pd.DataFrame(df)
+        assert isinstance(df, pd.DataFrame)
+
+        data_sets = {'rid': 'reaction data', 'gene': 'gene data', 'sid': 'metabolite data'}
+        data_set = data_sets.get(df.index.name)
+
+        count = 0
+        if data_set:
+            for condition in set(df.columns).intersection(self.results.keys()):
+                values_dict = df[condition][abs(df[condition]) > 1e-8].to_dict()
+                with open(f'{base_fname}_{condition}_{re.sub(" ", "_", data_set)}.json', 'w') as f:
+                    json.dump(values_dict, f)
+                    count += 1
+            print(f'{count} file(s) exported for Load {data_set} into Escher maps')
+
+        else:
+            print(f'{df.index.name} not supported, use dataframe indexed with any of {data_sets.keys()}')
 
     # PLOT SUPPORT
-
     @ staticmethod
     def get_log10_xy(xy):
         log10_x = []
@@ -303,7 +348,7 @@ class Results(ABC):
         cond_pred_grs = [self.results[cond].objective_value for cond in conds]
         gr_max = gr_max if gr_max else max(max(cond_pred_grs), max(cond_exp_grs)) * 1.15
 
-        fig, axs = plt.subplots(1, 1, figsize=(4, 4), squeeze=False)
+        fig, axs = plt.subplots(1, 1, figsize=(3, 3), squeeze=False)
         ax = axs[0, 0]
 
         ax.scatter(cond_exp_grs, cond_pred_grs, marker=marker2)
@@ -313,8 +358,8 @@ class Results(ABC):
         r_value, p_value = scipy.stats.pearsonr(cond_exp_grs, cond_pred_grs)
         stats = r'$R^2$' + f'={r_value ** 2:.4f}, p={p_value:.2e}'
         ax.text(0.5, 0.01, stats, transform=ax.transAxes, va='bottom', ha='center', fontsize=10)
-        ax.text(0.05, 1.0, self.optim.model_name, transform=ax.transAxes, va='top')
-        ax.text(0.05, 0.94, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
+        ax.text(0.05, 0.99, self.optim.model_name, transform=ax.transAxes, va='top')
+        ax.text(0.05, 0.92, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
 
         ax.set(xlim=(0.0, gr_max), ylim=(0.0, gr_max))
         ax.plot((0.0, 1.0), (0.0, 1.0), 'k--', lw=0.5)
@@ -325,60 +370,6 @@ class Results(ABC):
             fig.savefig(plot_fname)
         plt.show()
 
-    # TODO: under construction
-    def protein_correlation(self, condition):
-
-        df_proteins = self.get_predicted_protein_data(self.results[condition])
-        tx_genes = self.optim.get_genes_assigned_to('transport')
-
-        metab_gene2mpmfs = self.get_rtype_condition_mpmf('metabolic', condition)
-        tx_gene2mpmfs = self.get_rtype_condition_mpmf('transport', condition)
-        pm_gene2mpmfs = self.get_rtype_condition_mpmf('other', condition)
-        all_gene2mpmfs = metab_gene2mpmfs | tx_gene2mpmfs | pm_gene2mpmfs
-
-        metab_mpmfs = np.array(list(metab_gene2mpmfs.values()))
-        tx_mpmfs = np.array(list(tx_gene2mpmfs.values()))
-        pm_mpmfs = np.array(list(pm_gene2mpmfs.values()))
-        all_mpmfs = np.array(list(all_gene2mpmfs.values()))
-        pred_mg_per_gp = sum(df_proteins[condition])
-
-        tx_only_pred = {}
-        metab_only_pred = {}
-        for gene in self.optim.m_dict['fbcGeneProducts']['label'].values:
-            if gene not in metab_gene2mpmfs and gene not in tx_gene2mpmfs:
-                mpmf = df_proteins.at[gene, condition]
-                if gene in tx_genes:
-                    tx_only_pred[gene] = mpmf
-                else:
-                    metab_only_pred[gene] = mpmf
-
-        only_pred = len(tx_only_pred) + len(metab_only_pred)
-        only_pred_mpmf = sum(tx_only_pred.values()) + sum(metab_only_pred.values())
-        print(f'{len(df_proteins):4d} proteins in model constraint at {pred_mg_per_gp:.1f} mg/gP')
-        print(f'{len(all_mpmfs):4d} proteins in proteomics pred {sum(all_mpmfs[:,1]):.1f} mg/gP vs. '
-              f'{sum(all_mpmfs[:,0]):.1f} mg/gP measured')
-        print(f'    {len(metab_mpmfs):4d} metabolic proteins pred {sum(metab_mpmfs[:,1]):5.1f} mg/gP '
-              f'vs. {sum(metab_mpmfs[:,0]):5.1f} mg/gP measured')
-        print(f'    {len(tx_mpmfs):4d} transport proteins pred {sum(tx_mpmfs[:,1]):5.1f} mg/gP '
-              f'vs. {sum(tx_mpmfs[:,0]):5.1f} mg/gP measured')
-        if len(pm_gene2mpmfs) > 0:
-            print(f'    {len(pm_mpmfs):4d} transport proteins pred {sum(pm_mpmfs[:, 1]):5.1f} mg/gP '
-                  f'vs. {sum(pm_mpmfs[:, 0]):5.1f} mg/gP measured')
-
-        print(f'{only_pred:4d} proteins only predicted {only_pred_mpmf:.1f} mg/gP')
-        print(f'    {len(metab_only_pred):4d} metabolic proteins {sum(metab_only_pred.values()):5.1f} mg/gP')
-        print(f'    {len(tx_only_pred):4d} transport proteins {sum(tx_only_pred.values()):5.1f} mg/gP')
-
-        p_classes = {'transporter': tx_mpmfs, 'metabolic': metab_mpmfs, 'total': all_mpmfs}
-        for p_class, mpmfs in p_classes.items():
-            x, y = self.get_log10_xy(mpmfs)
-            r_value, p_value = scipy.stats.pearsonr(x, y)
-            print(f'{p_class:16s}: R\N{SUPERSCRIPT TWO}={r_value ** 2:.4f}, p={p_value:.2e} '
-                  f'({len(x):4d} proteins log scale)')
-
-        self.plot_proteins(condition, lin_max=None)
-
-    # PLOT ROUTINES
     def plot_proteins(self, condition, lin_max=None, plot_fname=None):
         """Plot linear and logarithmic protein correlation.
 
@@ -415,9 +406,9 @@ class Results(ABC):
                 ax.set_xlabel(r'experimental mpmf (mg/gP)')
                 ax.set_ylabel(r'predicted mpmf (mg/gP)')
                 ax.legend(loc='lower right')
-                ax.text(0.1, 1.0, self.optim.model_name, transform=ax.transAxes, va='top')
-                ax.text(0.1, 0.90, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
-                ax.text(1.0, 0.5, f'[... {max_lin_val:.1f}]', transform=ax.transAxes, va='top', ha='right')
+                ax.text(0.1, 0.99, self.optim.model_name, transform=ax.transAxes, va='top')
+                ax.text(0.1, 0.91, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
+                ax.text(0.99, 0.5, f'[... {max_lin_val:.1f}]', transform=ax.transAxes, va='top', ha='right')
 
             else:  # log10 scale
                 max_log_val = -10.0
@@ -435,7 +426,7 @@ class Results(ABC):
                 ax.legend(loc='upper left')
                 ax.plot((xy_range[0] + log_delta, xy_range[1]), (xy_range[0], xy_range[1] - log_delta), 'k:', lw=0.5)
                 ax.plot((xy_range[0], xy_range[1] - log_delta), (xy_range[0] + log_delta, xy_range[1]), 'k:', lw=0.5)
-                ax.text(1.0, 0.1, f'[{min_log_val:.1f} ... {max_log_val:.1f}]', transform=ax.transAxes,
+                ax.text(0.99, 0.1, f'[{min_log_val:.1f} ... {max_log_val:.1f}]', transform=ax.transAxes,
                         va='top', ha='right')
 
             ax.set(xlim=xy_range, ylim=xy_range)

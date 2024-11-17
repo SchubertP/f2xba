@@ -111,7 +111,7 @@ class EcModel:
         else:
             assert 'pm2totpm' in general_params, ("to determine modeled protein mass fraction, either provide in "
                                                   "ECM parameters sheet 'general' a corresponding value in field "
-                                                  "'pm2totpm' of a PAXdb file-name in 'p_abundance_fname'")
+                                                  "'pm2totpm' or a PAXdb file name in field 'p_abundance_fname'")
             pm2totpm = general_params['pm2totpm']
         print(f'modeled protein fraction {pm2totpm:.4f} g/g')
         protein_pool = p_total * pm2totpm

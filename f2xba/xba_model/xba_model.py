@@ -72,6 +72,14 @@ class XbaModel:
                              if 'initAssign' in model_dict else None)
         self.main_cid = model_dict['species']['compartment'].value_counts().index[0]
 
+        # add unit definitions so we can validate SBML wrt units as well
+        if 'substanceUnits' not in self.model_attrs:
+            self.model_attrs['substanceUnits'] = 'mmol_per_gDW'
+            u_dict = {'id': 'mmol_per_gDW', 'name': 'millimole per gram (dry weight)',
+                      'units': ('kind=mole, exp=1.0, scale=-3, mult=1.0; '
+                                'kind=gram, exp=-1.0, scale=0, mult=1.0')}
+            self.add_unit_def(u_dict)
+
         self.cofactor_flag = True
         self.uid2gp = {}
         self.locus2gp = {}
@@ -277,7 +285,8 @@ class XbaModel:
 
             # set specific enzyme composition
             if 'enzyme_comp_fname' in general_params:
-                count = self.set_enzyme_composition_from_file(general_params['enzyme_comp_fname'])
+                fname = general_params['enzyme_comp_fname']
+                count = self.set_enzyme_composition_from_file(fname)
                 print(f'{count:4d} enzyme compositions updated from {fname}')
             elif 'biocyc_org_prefix' in general_params:
                 biocyc_org_prefix = general_params.get('biocyc_org_prefix')

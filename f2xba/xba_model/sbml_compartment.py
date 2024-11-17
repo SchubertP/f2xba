@@ -36,13 +36,14 @@ class SbmlCompartment(SbmlSBase):
         """
         super().__init__(s_compartment)
         self.constant = s_compartment['constant']
-
         if 'size' in s_compartment:
             self.size = s_compartment['size']
-        if 'units' in s_compartment:
-            self.units = s_compartment['units']
         if 'spatialDimension' in s_compartment:
             self.dimension = s_compartment['spatialDimension']
+            if 'units' in s_compartment:
+                self.units = s_compartment['units']
+        else:
+            self.units = s_compartment.get('units', 'dimensionless')
 
     def to_dict(self):
         data = super().to_dict()
