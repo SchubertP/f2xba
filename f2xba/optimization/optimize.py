@@ -17,6 +17,7 @@ Peter Schubert, HHU Duesseldorf, CCB, June 2024
 
 import re
 import os
+import time
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -87,7 +88,7 @@ class Optimize:
         self.model_name = os.path.basename(fname).split('.')[0]
         # load SBML coded metabolic model into sbmlxdf for data extraction
         sbml_model = sbmlxdf.Model(fname)
-        print(f'SBML model loaded by sbmlxdf')
+        print(f'SBML model loaded by sbmlxdf: {fname} ({time.ctime(os.path.getmtime(fname))})')
         self.m_dict = sbml_model.to_df()
         self.orig_gpm = None
 
@@ -101,13 +102,12 @@ class Optimize:
             self.is_gpm = False
             self.model = cobra_model
             self.cp_configure_td_model_constraints()
-            self.cp_report_model_size()
         else:
             self.is_gpm = True
             self.var_id2gpm = {}
             self.constr_id2gpm = {}
             self.gpm = self.gp_create_model()
-            self.gp_report_model_size()
+        self.report_model_size()
 
         self.locus2uid = self.get_locus2uid()
         self.mid2name = {re.sub(f'^{pf.M_}', '', sid): row['name']
@@ -194,21 +194,43 @@ class Optimize:
             ex_rid2sid[uptake_rid] = f'{mid}_{medium_cid}'
         return ex_rid2sid
 
-    # COBRAPY MODEL RELATED
-    def cp_report_model_size(self):
+    def report_model_size(self):
         n_vars_drg = 0
         n_vars_ec = 0
         n_vars_pmc = 0
-        for rxn in self.model.reactions:
-            if re.match(pf.V_DRG_, rxn.id):
-                n_vars_drg += 1
-            elif re.match(pf.V_EC_, rxn.id):
-                n_vars_ec += 1
-            elif re.match(pf.V_PMC_, rxn.id):
-                n_vars_pmc += 1
-        print(f'{len(self.model.variables)} variables, {len(self.model.constraints)} constraints')
-        print(f'{n_vars_ec} enzymes, {n_vars_pmc} process machines, {n_vars_drg} TD reaction constraints')
+        if self.is_gpm:
+            self.gpm.update()
+            for var in self.gpm.getVars():
+                if re.match(pf.V_DRG_, var.varname):
+                    n_vars_drg += 1
+                elif re.match(pf.V_EC_, var.varname):
+                    n_vars_ec += 1
+                elif re.match(pf.V_PMC_, var.varname):
+                    n_vars_pmc += 1
+            model_type = 'MILP' if self.gpm.ismip else 'LP'
+            print(f'{model_type} Model of {self.gpm.modelname}')
+            print(f'{self.gpm.numvars} variables, {self.gpm.numconstrs} constraints, '
+                  f'{self.gpm.numnzs} non-zero matrix coefficients')
+        else:
+            for rxn in self.model.reactions:
+                if re.match(pf.V_DRG_, rxn.id):
+                    n_vars_drg += 1
+                elif re.match(pf.V_EC_, rxn.id):
+                    n_vars_ec += 1
+                elif re.match(pf.V_PMC_, rxn.id):
+                    n_vars_pmc += 1
 
+        build_str = []
+        if n_vars_ec > 0:
+            build_str.append(f'{n_vars_ec} enzymes')
+        if n_vars_pmc > 0:
+            build_str.append(f'{n_vars_pmc} process machines')
+        if n_vars_drg > 0:
+            build_str.append(f'{n_vars_drg} TD reaction constraints')
+        if len(build_str) > 0:
+            print(', '.join(build_str))
+
+    # COBRAPY MODEL RELATED
     def cp_configure_td_model_constraints(self):
         # configure thermodynamic related model constraints and variables
         is_td = False
@@ -282,7 +304,7 @@ class Optimize:
         # configure optimization objective
         df_fbc_objs = self.m_dict['fbcObjectives']
         active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
-        sense = -1 if 'max' in active_odata['type'].lower() else 1
+        sense = gp.GRB.MAXIMIZE if 'max' in active_odata['type'].lower() else gp.GRB.MINIMIZE
         vars_gpm = []
         coeffs = []
         for sref_str in sbmlxdf.record_generator(active_odata['fluxObjectives']):
@@ -293,29 +315,7 @@ class Optimize:
 
         # update gpm with configuration data
         gpm.update()
-
         return gpm
-
-    def gp_report_model_size(self):
-        """Report on model type and model size.
-        """
-        self.gpm.update()
-        n_vars_drg = 0
-        n_vars_ec = 0
-        n_vars_pmc = 0
-        for var in self.gpm.getVars():
-            if re.match(pf.V_DRG_, var.varname):
-                n_vars_drg += 1
-            elif re.match(pf.V_EC_, var.varname):
-                n_vars_ec += 1
-            elif re.match(pf.V_PMC_, var.varname):
-                n_vars_pmc += 1
-        # we only check for mip constraints
-        model_type = 'MILP' if self.gpm.ismip else 'LP'
-        print(f'{model_type} Model of {self.gpm.modelname}')
-        print(f'{self.gpm.numvars} variables, {self.gpm.numconstrs} constraints, '
-              f'{self.gpm.numnzs} non-zero matrix coefficients')
-        print(f'{n_vars_ec} enzymes, {n_vars_pmc} process machines, {n_vars_drg} TD reaction constraints')
 
     def gp_model_non_negative_vars(self):
         """Decomposition of variables unrestricted in sign.
@@ -507,22 +507,6 @@ class Optimize:
         metab_genes = metab_genes.difference(tx_genes)
         return tx_genes, metab_genes
 
-    # TODO: remove function
-    def get_genes_assigned_to_old(self, reaction_type):
-        """Get genes assigned to a specific ('transport' or 'metabolic') reaction type
-
-        :param reaction_type: 'transport' or 'metabolic'
-        :type reaction_type: str
-        :return: set of genes assigned to specific reaction type
-        :rtype: set of str
-        """
-        genes = set()
-        for data in self.rdata.values():
-            if data['r_type'] == reaction_type and len(data['gpr']) > 0:
-                for gene in [item.strip() for item in data['gpr'].split('+')]:
-                    genes.add(gene)
-        return genes
-
     @staticmethod
     def extract_net_reaction_data(rdata):
         """Extract net reaction data, i.e. unsplit reactions
@@ -621,6 +605,196 @@ class Optimize:
         return rids_catalalyzed_by
 
     # OPTIMIZATION RELATED
+    def get_variable_bounds(self, var_ids):
+        """Retrieve variable bounds for single variable or list of variables.
+
+        Note: for COBRApy inteface, one can directly use COBRApy methods
+
+        :param var_ids: variable id or list of variable ids
+        :type var_ids: str or list of str
+        :return: tuple with lower and upper bound or dict of varialbe ids with tuples (lb, ub)
+        :rtype: 2-tuple with float or None, or dict with tuples
+        """
+        if type(var_ids) is str:
+            var_ids = [var_ids]
+
+        variable_bounds = {}
+        if self.is_gpm:
+            self.gpm.update()
+            for var_id in var_ids:
+                assert var_id in self.var_id2gpm or pf.R_ + var_id in self.var_id2gpm, f'{var_id} not found'
+                var = self.var_id2gpm[var_id] if var_id in self.var_id2gpm else self.var_id2gpm[pf.R_ + var_id]
+                variable_bounds[var_id] = (var.lb, var.ub)
+        else:
+            for var_id in var_ids:
+                assert var_id in self.model.reactions, f'{var_id} not found'
+                variable_bounds[var_id] = self.model.reactions.get_by_id(var_id).bounds
+
+        if len(variable_bounds) == 1:
+            return variable_bounds.popitem()[1]
+        else:
+            return variable_bounds
+
+    def set_variable_bounds(self, variable_bounds):
+        """Set variable bounds for several variables.
+
+        Both lower and upper bounds get set, if respective value is not None
+        Note: for COBRApy interface, one can directly use COBRApy method, 'rxn.bounds = (lb, ub)'
+
+        :param variable_bounds: min and max concentrations for metabolites
+        :type variable_bounds: dict (key: metabolite id, val: tuple of float for min/max conc)
+        :return: original bounds (upper, lower bounds)
+        :rtype: dict (key: metabolite id, val: tuple of float for min/max conc)
+        """
+        orig_bounds = {}
+        if self.is_gpm:
+            self.gpm.update()
+            for var_id, (lb, ub) in variable_bounds.items():
+                assert var_id in self.var_id2gpm or pf.R_ + var_id in self.var_id2gpm, f'{var_id} not found'
+                var = self.var_id2gpm[var_id] if var_id in self.var_id2gpm else self.var_id2gpm[pf.R_ + var_id]
+                orig_bounds[var_id] = (var.lb, var.ub)
+                if lb:
+                    var.lb = lb
+                if ub:
+                    var.ub = ub
+        else:
+            for var_id, (lb, ub) in variable_bounds.items():
+                assert var_id in self.model.reactions, f'{var_id} not found'
+                rxn = self.model.reactions.get_by_id(var_id)
+                orig_bounds[var_id] = rxn.bounds
+                if lb and ub:
+                    rxn.bounds = (lb, ub)
+                elif lb:
+                    rxn.lower_bound = lb
+                elif ub:
+                    rxn.upper_bound = ub
+        return orig_bounds
+
+    def get_objective(self):
+        """Retrieve model optimization objective and direction.
+
+        Note: for COBRApy inteface, one can directly use COBRApy methods
+
+        :return: objective coefficients and optimization direction
+        :rtype: dict and str
+        """
+        if self.is_gpm:
+            lin_expr = self.gpm.getObjective()
+            objective = {}
+            for idx in range(lin_expr.size()):
+                var_id = lin_expr.getVar(idx).VarName
+                objective[re.sub(pf.R_, '', var_id)] = lin_expr.getCoeff(idx)
+            direction = {gp.GRB.MINIMIZE: 'min', gp.GRB.MAXIMIZE: 'max'}[self.gpm.ModelSense]
+        else:
+            objective = {}
+            sympy_expr = self.model.solver.objective.expression
+            for var, coeff in sympy_expr.as_coefficients_dict().items():
+                varname = var.name
+                if '_reverse_' not in varname:
+                    objective[varname] = coeff
+            direction = self.model.objective.direction
+        return objective, direction
+
+    def set_objective(self, objective, direction='max'):
+        """Set model optimization objective and direction.
+
+        E.g.: set_objective({'BIOMASS_Ec_iML1515_core_75p37M': 1.0}, 'max')
+
+        Note: for COBRApy inteface, one can directly use COBRApy methods
+
+        :param objective:
+        :type objective: dict (key: variable id, val: coefficient)
+        :param direction: (optional) direction of optimization ('min' or 'max': default)
+        :type direction: (optional) str
+        """
+        if self.is_gpm:
+            sense = gp.GRB.MAXIMIZE if 'max' in direction.lower() else gp.GRB.MINIMIZE
+            variables = []
+            coeffs = []
+            for var_id, coeff in objective.items():
+                if var_id not in self.var_id2gpm:
+                    var_id = f'{pf.R_}{var_id}'
+                    assert var_id in self.var_id2gpm
+                variables.append(self.var_id2gpm[var_id])
+                coeffs.append(coeff)
+            self.gpm.setObjective(gp.LinExpr(coeffs, variables), sense)
+            self.gpm.update()
+        else:
+            self.model.objective = {self.model.reactions.get_by_id(var_id): coeff
+                                    for var_id, coeff in objective.items()}
+            self.model.objective_direction = direction
+
+    def set_tfa_metab_concentrations(self, metab_concs):
+        """For TFA model set metabolite lower/upper concentrations in mol/l.
+
+        For selected metabolites provide a tuple of minimum and maximum concentrations
+        in mol per liter (if a specific bound should not be modified use a None value)
+
+        :param metab_concs: min and max concentrations for metabolites
+        :type metab_concs: dict (key: metabolite id, val: tuple of float for min/max mol/l)
+        :return: original concentrations (min, max mol/l)
+        :rtype: dict (key: metabolite id, val: tuple of float for min/max conc)
+        """
+        variable_bounds = {}
+        for sid, (lb, ub) in metab_concs.items():
+            var_id = 'V_LC_' + sid
+            log_lb = np.log(lb) if lb else None
+            log_ub = np.log(ub) if ub else None
+            variable_bounds[var_id] = (log_lb, log_ub)
+
+        orig_log_bounds = self.set_variable_bounds(variable_bounds)
+
+        orig_bounds = {}
+        for var_id, (log_lb, log_ub) in orig_log_bounds.items():
+            sid = re.sub('V_LC_', '', var_id)
+            lb = np.exp(log_lb) if log_lb else None
+            ub = np.exp(log_ub) if log_ub else None
+            orig_bounds[sid] = (lb, ub)
+        return orig_bounds
+
+    def update_relaxation(self, fluxes, eps=0.5):
+        """TFA slack model relaxation for a specific solution.
+
+        Based on positive or negative slack, DGR0 variables get updated
+        and updates get recorded and returned.
+        :param fluxes: fluxes of tfa optimization solution
+        :type fluxes: dict or dict-like, key: variable ids, val: values/float
+        :param eps: additonal margin to add (optional, default: 0.5 kJ_per_mol)
+        :type eps: float (units kJ per mol)
+        :return: drg0 variables that require bound relaxation.
+        :rtype: dict (key: drg0 variable id, val: dict with subkey: bound type, subval: new value)
+        """
+        ns_slack_vars = {re.sub(f'^{pf.V_NS_}', pf.V_DRG0_, var_id): slack
+                         for var_id, slack in fluxes.items()
+                         if re.match(pf.V_NS_, var_id) and slack > 1e-7}
+        ps_slack_vars = {re.sub(f'^{pf.V_PS_}', pf.V_DRG0_, var_id): slack
+                         for var_id, slack in fluxes.items()
+                         if re.match(pf.V_PS_, var_id) and slack > 1e-7}
+        drg0_relaxations = {}
+        if self.is_gpm:
+            for drg0_id, slack in ns_slack_vars.items():
+                var = self.var_id2gpm[drg0_id]
+                new_lb = var.lb - slack - eps
+                var.lb = new_lb
+                drg0_relaxations[drg0_id] = {'fbc_lower_bound': new_lb}
+            for drg0_id, slack in ps_slack_vars.items():
+                var = self.var_id2gpm[drg0_id]
+                new_ub = var.ub + slack + eps
+                var.ub = new_ub
+                drg0_relaxations[drg0_id] = {'fbc_upper_bound': new_ub}
+        else:
+            for drg0_id, slack in ns_slack_vars.items():
+                rxn = self.model.reactions.get_by_id(drg0_id)
+                new_lb = rxn.lower_bound - slack - eps
+                rxn.lower_bound = new_lb
+                drg0_relaxations[drg0_id] = {'fbc_lower_bound': new_lb}
+            for drg0_id, slack in ps_slack_vars.items():
+                rxn = self.model.reactions.get_by_id(drg0_id)
+                new_ub = rxn.upper_bound + slack + eps
+                rxn.upper_bound = new_ub
+                drg0_relaxations[drg0_id] = {'fbc_upper_bound': new_ub}
+        return drg0_relaxations
+
     def set_medium(self, medium):
         """Configure medium in Gurobipy model (compatible with CobraPy)
 

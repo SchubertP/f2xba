@@ -24,6 +24,7 @@ from .td_cue_data import TdCueData
 from .td_reaction_data import TdReactionData
 from .td_reactant_data import TdReactantData
 from ..utils.tfa_utils import extract_atoms
+from ..utils.mapping_utils import load_parameter_file
 from ..xba_model.fbc_objective import FbcObjective
 import f2xba.prefixes as pf
 
@@ -134,18 +135,11 @@ class TfaModel:
         :return: success/failure of model configuration
         :rtype: bool
         """
-        # load TFA parameter data
-        if os.path.exists(fname) is False:
-            print(f'{fname} does not exist')
-            raise FileNotFoundError
-        tfa_params_sheets = ['general', 'td_compartments', 'modify_td_sids',
-                             'modify_thermo_data', 'modify_drg0_bounds']
-        tfa_params = {}
-        with pd.ExcelFile(fname) as xlsx:
-            for sheet in xlsx.sheet_names:
-                if sheet in tfa_params_sheets:
-                    tfa_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
-            print(f'{len(tfa_params)} tables with thermodynamics model configuration parameters loaded from {fname}')
+        sheet_names = ['general', 'td_compartments', 'modify_td_sids', 'modify_thermo_data', 'modify_drg0_bounds']
+        tfa_params = load_parameter_file(fname, sheet_names)
+        if 'general' not in tfa_params.keys():
+            print(f'mandatory table "general" not found in the document')
+            raise ValueError
 
         self.td_params = tfa_params['general']['value'].to_dict()
 
@@ -183,7 +177,7 @@ class TfaModel:
     def export_slack_model(self, fname):
         """Create a slack model and export as sbml.
 
-        This slack model needst to be loaded in CobraPy and optimized.
+        This slack model needs to be loaded in CobraPy and optimized.
 
         :: code:: python
 

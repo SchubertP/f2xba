@@ -22,8 +22,6 @@ class BiocycProtein:
         self.rna_parts = {}
         self.compound_parts = {}
         self.gene_composition = {}
-        # self.cofactor_composition = {}
-        # self.parents = []
 
     @staticmethod
     def get_proteins(file_name):
@@ -47,7 +45,6 @@ class BiocycProtein:
             bc_protein.protein_parts = get_components(el, 'Protein')
             bc_protein.rna_parts = get_components(el, 'RNA')
             bc_protein.compound_parts = get_components(el, 'Compound')
-            # bc_protein.parents = get_sub_obj_ids(el, 'parent', '*')
 
             data[biocyc_id] = bc_protein
         return data

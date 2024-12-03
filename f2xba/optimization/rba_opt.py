@@ -257,8 +257,14 @@ class RbaOptimization(Optimize):
             if (gr_max - gr_min) < bisection_tol:
                 gr_opt = gr_min
                 self.set_growth_rate(gr_opt)
-                # self.gpm.reset()
                 solution = self.optimize().get_net_fluxes()
+
+                # if solution with gr_min is no longer optimal, lower gr_opt slighlty and try again
+                if solution.status != 'optimal':
+                    gr_opt = max(0.0, gr_opt - 0.5 * bisection_tol)
+                    self.set_growth_rate(gr_opt)
+                    solution = self.optimize().get_net_fluxes()
+
                 solution.objective_value = gr_opt
                 solution.n_iter = n_iter
                 # determine final density constraint
@@ -312,9 +318,14 @@ class RbaOptimization(Optimize):
             # collect optimiziation solution at optimum growth rate
             if (gr_max - gr_min) < bisection_tol:
                 gr_opt = gr_min
-                # with self.model:
                 self.set_growth_rate(gr_opt)
                 solution = self.model.optimize()
+
+                # if solution with gr_min is no longer optimal, lower gr_opt slighlty and try again
+                if solution.status != 'optimal':
+                    gr_opt = max(0.0, gr_opt - 0.5 * bisection_tol)
+                    solution = self.model.optimize()
+
                 solution.objective_value = gr_opt
                 solution.n_iter = n_iter
                 solution.density_constraints = {met.id: -val for met, val

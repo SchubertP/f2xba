@@ -26,7 +26,7 @@ from .protein import Protein
 from .enzyme import Enzyme
 from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
-from ..utils.mapping_utils import get_srefs, parse_reaction_string
+from ..utils.mapping_utils import get_srefs, parse_reaction_string, load_parameter_file
 from ..utils.calc_mw import calc_mw_from_formula
 from ..biocyc.biocyc_data import BiocycData
 
@@ -37,6 +37,7 @@ class XbaModel:
 
     def __init__(self, sbml_file):
 
+        # Load SBML model and extract model data
         if os.path.exists(sbml_file) is False:
             print(f'{sbml_file} does not exist')
             raise FileNotFoundError
@@ -72,7 +73,7 @@ class XbaModel:
                              if 'initAssign' in model_dict else None)
         self.main_cid = model_dict['species']['compartment'].value_counts().index[0]
 
-        # add unit definitions so we can validate SBML wrt units as well
+        # add unit definitions to ensure we can validate SBML wrt units without issuing warnings
         if 'substanceUnits' not in self.model_attrs:
             self.model_attrs['substanceUnits'] = 'mmol_per_gDW'
             u_dict = {'id': 'mmol_per_gDW', 'name': 'millimole per gram (dry weight)',
@@ -181,16 +182,10 @@ class XbaModel:
         :param fname: name of configuration parameters in Excel spreadsheet
         :type fname: str
         """
-        sheets = ['general', 'modify_attributes', 'remove_gps', 'add_gps', 'add_parameters',
-                  'add_species', 'add_reactions', 'chebi2sid']
-        xba_params = {}
-        with pd.ExcelFile(fname) as xlsx:
-            for sheet in sheets:
-                if sheet in xlsx.sheet_names:
-                    xba_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
-            print(f'{len(xba_params)} tables with XBA model configuration parameters loaded from {fname}')
-
-        general_params = xba_params['general']['value'].to_dict()
+        sheet_names = ['general', 'modify_attributes', 'remove_gps', 'add_gps', 'add_parameters',
+                       'add_species', 'add_reactions', 'chebi2sid']
+        xba_params = load_parameter_file(fname, sheet_names)
+        general_params = xba_params['general']['value'].to_dict() if 'general' in xba_params.keys() else {}
         self.cofactor_flag = general_params.get('cofactor_flag', False)
 
         #############################
@@ -326,8 +321,7 @@ class XbaModel:
             if 'kcats_fname' in general_params:
                 kcats_fname = general_params['kcats_fname']
                 count = self.set_reaction_kcats(kcats_fname)
-                print(f'{count:4d} kcat values updated from {kcats_fname} '
-                      f'({time.ctime(os.path.getmtime(kcats_fname))})')
+                print(f'{count:4d} kcat values updated from {kcats_fname}')
 
             # remove enzyme from reactions if kcat values have not been provided
             count = 0
@@ -626,9 +620,7 @@ class XbaModel:
                    'S': 7.14, 'T': 5.53, 'V': 6.73, 'W': 1.25, 'Y': 2.91}
         invalid_aa_ids = '[^' + ''.join(aa_freq.keys()) + ']'
 
-        with pd.ExcelFile(orig_kcats_fname) as xlsx:
-            df_orig_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
-            print(f'{len(df_orig_kcats):4d} original kcat records loaded from {orig_kcats_fname}')
+        df_orig_kcats = load_parameter_file(orig_kcats_fname, ['kcats'])['kcats']
 
         if mids2ref is None:
             mids2ref = {}
@@ -740,9 +732,7 @@ class XbaModel:
         :return:
         """
         # update original kcats parameter file with data from TurNuP predictions, using input files as reference
-        with pd.ExcelFile(orig_kcats_fname) as xlsx:
-            df_predicted_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
-            print(f'{len(df_predicted_kcats):4d} original kcat records loaded from {orig_kcats_fname}')
+        df_predicted_kcats = load_parameter_file(orig_kcats_fname, ['kcats'])['kcats']
 
         notes = 'TurNuP predicted'
         pred_fwd = 0
@@ -1109,7 +1099,7 @@ class XbaModel:
             if gpid not in self.gps:
                 if type(gp_data.get('miriamAnnotation')) is not str:
                     gene_id = gp_data['label']
-                    if gene_id in self.uniprot_data.locus2uid:
+                    if self.uniprot_data and gene_id in self.uniprot_data.locus2uid:
                         uid = self.uniprot_data.locus2uid[gene_id]
                         gp_data['metaid'] = f'meta_{gpid}'
                         gp_data['miriamAnnotation'] = f'bqbiol:is, uniprot/{uid}'
@@ -1239,7 +1229,7 @@ class XbaModel:
         return n_created
 
     def set_enzyme_composition_from_biocyc(self, biocyc_dir, org_prefix):
-        """Configure enzyme composition from biocyc
+        """Configure enzyme composition from BioCyc.
 
         Biocyc enzyme related data is read from files in directory biocyc_dir, if files exist,
         alternatively Biocyc data is downloaded from Biocyc (assuming access for given
@@ -1316,8 +1306,7 @@ class XbaModel:
         :rtype: int
         """
         # load enzyme composition data from file
-        with pd.ExcelFile(fname) as xlsx:
-            df = pd.read_excel(xlsx, index_col=0)
+        df = load_parameter_file(fname, ['enzymes'])['enzymes']
 
         count = 0
         for _, row in df.iterrows():
@@ -1394,16 +1383,12 @@ class XbaModel:
                 e.g. 'b1263, b1264', or np.nan/empty, if kcat is not isoenzyme specific
             'kcat': kcat value in per second (float)
 
-        :param fname: file name of Excel or CSV document with specific kcat values
+        :param fname: file name of Excel document with specific kcat values
         :type fname: str
         :return: number of kcat updates
         :rtype: int
         """
-        if re.search('.xlsx$', fname) is not None:
-            with pd.ExcelFile(fname) as xlsx:
-                df_reaction_kcats = pd.read_excel(xlsx, index_col=0)
-        else:
-            df_reaction_kcats = pd.read_csv(fname, index_col=0)
+        df_reaction_kcats = load_parameter_file(fname, ['kcats'])['kcats']
 
         n_updates = 0
         for idx, row in df_reaction_kcats.iterrows():
@@ -1504,8 +1489,7 @@ class XbaModel:
         :rtype: str
         """
         valstr = val
-
-        # if parameter id does not exist, first create it
+        # if units have not been defined, we create them
         if unit_id not in self.fbc_shared_pids:
             if unit_id == 'umol_per_gDW':
                 u_dict = {'id': unit_id, 'name': 'micromole per gram (dry weight)',
@@ -1547,7 +1531,6 @@ class XbaModel:
 
         elif valstr in self.fbc_shared_pids[unit_id]:
             return self.fbc_shared_pids[unit_id][valstr]
-
         else:
             p_dict = {'id': proposed_pid, 'name': proposed_pid, 'value': val, 'constant': True,
                       'sboterm': 'SBO:0000626', 'units': unit_id}
@@ -1568,8 +1551,6 @@ class XbaModel:
         :return: reverse reaction with reactants/bounds inverted
         :rtype: Reaction
         """
-        zero_flux_bnd_pid = self.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'zero_flux_bound')
-
         r_dict = reaction.to_dict()
         rev_rid = f'{reaction.id}_REV'
         rev_r = SbmlReaction(pd.Series(r_dict, name=rev_rid), self.species)
@@ -1592,6 +1573,7 @@ class XbaModel:
         self.reactions[rev_rid] = rev_r
 
         # make forward reaction irreversible and check flux bounds
+        zero_flux_bnd_pid = self.get_fbc_bnd_pid(0.0, self.flux_uid, f'zero_flux_bnd')
         if self.parameters[reaction.fbc_lower_bound].value < 0.0:
             reaction.modify_bounds({'lb': zero_flux_bnd_pid})
         if self.parameters[reaction.fbc_upper_bound].value < 0.0:
@@ -1741,9 +1723,8 @@ class XbaModel:
         Reversible reactions of the original model will be split in fwd/rev
         Flux bound are checked and reversible flag set to 'False'
         """
-        zero_flux_bnd_pid = self.get_fbc_bnd_pid(0.0, 'mmol_per_gDW', 'zero_flux_bound')
-
         # Note: self.reactions gets modified in the loop, therefore iterate though initial list of reactions
+        zero_flux_bnd_pid = self.get_fbc_bnd_pid(0.0, self.flux_uid, f'zero_flux_bnd')
         rids = list(self.reactions)
         for rid in rids:
             r = self.reactions[rid]

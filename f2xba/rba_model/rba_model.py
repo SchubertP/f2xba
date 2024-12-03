@@ -18,12 +18,12 @@ from .rba_densities import RbaDensities
 from .rba_targets import RbaTargets
 from .rba_medium import RbaMedium
 from ..utils.calc_mw import protein_mw_from_aa_comp, rna_mw_from_nt_comp, ssdna_mw_from_dnt_comp, get_seq_composition
-from ..utils.mapping_utils import valid_sbml_sid
+from ..utils.mapping_utils import valid_sbml_sid, load_parameter_file
 from .initital_assignments import InitialAssignments
 import f2xba.prefixes as pf
 
-DEFAULT_GROWTH_RATE = 1.0         # h-1
-DEFAULT_ENZ_SATURATION = 1.0      # dimensionless, is overwritten in RBA Parameters Excel document
+DEFAULT_GROWTH_RATE = 1.0         # h-1 (used to set initial values for growth rate dependent parameters)
+DEFAULT_ENZ_SATURATION = 0.5      # dimensionless, is overwritten in RBA Parameters Excel document
 DEFAULT_MICHAELIS_CONSTANT = 1.0  # mmol/l
 MAX_ENZ_CONC = 10                 # mmol/gDW
 MAX_MM_PROCESSING_FLUX = 10       # in µmol per gDW per h
@@ -269,28 +269,17 @@ class RbaModel:
         :param fname: file name of Excel document with RBA specific parameters
         :type fname: str
         """
-        if os.path.exists(fname) is False:
-            print('RBA model NOT created. RBA parameter file not found: ' + fname)
-            return False
-
-        # load RBA parameter data
-        rba_params_sheets = ['general', 'trna2locus', 'compartments', 'targets',
-                             'functions', 'processing_maps', 'processes', 'machineries']
-        rba_params = {}
-        with pd.ExcelFile(fname) as xlsx:
-            for sheet in xlsx.sheet_names:
-                try:
-                    if sheet in rba_params_sheets:
-                        rba_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
-                except ValueError:
-                    print(f'ERROR: problem reading sheet "{sheet}" from {fname}')
-                    return False
-            print(f'{len(rba_params)} tables with RBA model configuration parameters loaded from {fname}')
+        sheet_names = ['general', 'trna2locus', 'compartments', 'targets',
+                       'functions', 'processing_maps', 'processes', 'machineries']
+        rba_params = load_parameter_file(fname, sheet_names)
+        missing_sheets = set(sheet_names).difference(set(rba_params.keys()))
+        if len(missing_sheets) > 0:
+            print(f'missing required tables {missing_sheets}')
+            raise ValueError
 
         if self.check_rba_params_functions(rba_params) is False:
             print('ERRORs in RBA Parameter file')
             return False
-
         if self.check_rba_params_labels(rba_params) is False:
             print('ERRORs in RBA Parameter file')
             return False
@@ -324,11 +313,10 @@ class RbaModel:
         print(f'{len(self.parameters.functions):4d} functions, {len(self.parameters.aggregates):4d} aggregates')
         print(f'>>> RBA model created')
 
-        growth_rate = general_params.get('growth_rate', DEFAULT_GROWTH_RATE)
-        self.update_xba_model(growth_rate)
+        self.update_xba_model()
         return True
 
-    def update_xba_model(self, growth_rate):
+    def update_xba_model(self):
         """Based on configured RBA model implement a corresponding XBA model.
 
         RBA model will be exported in RBA proprietary format.
@@ -343,11 +331,10 @@ class RbaModel:
         Note: this is currently implemented as an add-on to the RBA modelling.
               Alternatively, we could update XBA model alongside RBA model creation.
 
-        :param growth_rate: growth rate (h-1) to be used to determine function values
-        :type growth_rate: float
         """
         print('update XBA model with RBA parameters')
 
+        growth_rate = DEFAULT_GROWTH_RATE
         protect_ids = set()
 
         # create units required for RBA
@@ -469,7 +456,7 @@ class RbaModel:
                 agg = row.get('capacity_aggregate')
                 if type(agg) is str:
                     for fid in [item.strip() for item in agg.split(',')]:
-                        used_functions[fid].add('processes: {pid}')
+                        used_functions[fid].add(f'processes: {pid}')
 
         # check that functions have been defined
         for fid, xids in used_functions.items():

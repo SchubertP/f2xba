@@ -29,3 +29,5 @@ class FbaOptimization(Optimize):
         :type cobra_model: cobra.core.model.Model if supplied
         """
         super().__init__('FBA', fname, cobra_model)
+
+

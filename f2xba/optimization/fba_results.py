@@ -64,3 +64,9 @@ class FbaResults(Results):
         df_net_fluxes = pd.DataFrame(net_flux_data.values(), index=list(net_flux_data), columns=cols)
         df_net_fluxes.index.name = 'rid'
         return df_net_fluxes
+
+    def collect_protein_results(self):
+        return pd.DataFrame()
+
+    def get_predicted_protein_data(self, solution):
+        return pd.DataFrame()

@@ -11,9 +11,6 @@ import urllib.request
 from .biocyc_gene import BiocycGene
 from .biocyc_protein import BiocycProtein
 from .biocyc_rna import BiocycRNA
-# from .biocyc_enxrxn import BiocycEnzRxn
-# from .biocyc_reaction import BiocycReaction
-# from .biocyc_compounds import BiocycCompounds
 
 
 class BiocycData:
@@ -24,7 +21,6 @@ class BiocycData:
         For a given organism, query Biocyc on-line database for specific components in
          suitable detail level. Subsequently, extract relevant information.
         Use already downloaded Biocyc exports in case they exist in biocyc_dir.
-
 
         :param biocyc_dir: directory name, where downloads of Biocyc are stored
         :type biocyc_dir: str
@@ -40,26 +36,15 @@ class BiocycData:
         # Exports with required level of detail.
         self.biocyc_data = {'Gene': ['genes', 'full'],
                             'Protein': ['proteins', 'low'],
-                            'RNA': ['RNAs', 'low'],
-                            # 'ProteinCplxs': ['protein-complexes', 'high'],
-                            # 'Compounds': ['compounds', 'low'],
-                            'Reaction':   ['reactions', 'full'],
-                            'EnzRxn': ['Enzymatic-Reactions', 'full'],
-                            }
+                            'RNA': ['RNAs', 'low']}
 
         if self.is_complete_biocyc_data() is False:
             self.retrieve_biocyc_data()
 
         self.genes = BiocycGene.get_genes(self.biocyc_data_fname('Gene'))
         self.locus2gene = {gene.locus: bc_id for bc_id, gene in self.genes.items()}
-        # if re.match(r'b\d{4}', gene.locus)}
         self.proteins = BiocycProtein.get_proteins(self.biocyc_data_fname('Protein'))
         self.rnas = BiocycRNA.get_rnas(self.biocyc_data_fname('RNA'))
-
-        # We are not using enzyme reaction mapping from ecocyc, neither cofactors/compounds
-        # self.enzrxns = BiocycEnzRxn.get_enzrxns(self.biocyc_data_fname('EnzRxn'))
-        # self.reactions = BiocycReaction.get_reactions(self.biocyc_data_fname('Reaction'))
-        # self.compounds = BiocycCompounds.get_compounds(self.biocyc_data_fname('Compounds'))
 
         # set gene locus on direct gene product and rnas
         for protein in self.proteins.values():
@@ -231,13 +216,6 @@ class BiocycData:
             locus = self.genes[gene].locus
             components['proteins'] = {locus: 1.0}
         else:
-            # for compound_part in self.proteins[protein_id].compound_parts:
-            #    compound, stoic_str = compound_part.split(':')
-            #    stoic = int(stoic_str)
-            #    if compound not in components['compounds']:
-            #        components['compounds'][compound] = stoic
-            #    else:
-            #        components['compounds'][compound] += stoic
             for rna_part in self.proteins[protein_id].rna_parts:
                 rna, stoic_str = rna_part.split(':')
                 gene = self.rnas[rna].gene

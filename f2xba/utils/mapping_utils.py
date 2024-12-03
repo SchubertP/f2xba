@@ -4,6 +4,7 @@ Peter Schubert, HHU Duesseldorf, December 2022
 """
 import re
 import os
+import time
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -33,6 +34,51 @@ def valid_sbml_sid(component_id):
     if re.match('[^a-zA-Z_]', component_id):
         component_id = '_' + component_id
     return re.sub('[^a-zA-Z0-9_]', '_', component_id)
+
+
+def load_parameter_file(fname, sheet_names=None):
+    """Load parameters from parameter Excel spreadsheet file.
+
+    We can limit the sheet names to selected set of sheet names provided.
+    If sheet names are not provide, all sheets of spreadsheet file will be loaded
+
+    :param fname: file name of parameter file (.xlsx)
+    :type fname: str
+    :param sheet_names: sheet names to collect from the parameter file, default None, collect all sheets
+    :type sheet_names: None or list of str
+    :return: data tables collected from the document
+    :rtype: dict of pandas DataFrames
+    """
+    if os.path.exists(fname) is False:
+        print(f'{fname} not found')
+        raise FileNotFoundError
+
+    params = {}
+    with pd.ExcelFile(fname) as xlsx:
+        for sheet in xlsx.sheet_names:
+            if sheet_names is None or sheet in sheet_names:
+                params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
+        print(f'{len(params)} table(s) with parameters loaded from {fname} '
+              f'({time.ctime(os.path.getmtime(fname))})')
+    if len(params) == 0:
+        print(f'None of {sheet_names} sheets have been found in the document')
+        raise ValueError
+    return params
+
+
+def write_parameter_file(fname, params):
+    """Write data tables to a parameter Excel spreadsheet file.
+
+    :param fname: file name of parameter file (*.xlsx)
+    :type fname: str
+    :param params: data tables to write to the document
+    :type params: dict of pandas DataFrames
+    :return:
+    """
+    with pd.ExcelWriter(fname) as writer:
+        for sheet, df in params.items():
+            df.to_excel(writer, sheet_name=sheet)
+        print(f'{len(params)} table(s) with parameters written to  {fname}')
 
 
 def get_srefs(srefs_str):

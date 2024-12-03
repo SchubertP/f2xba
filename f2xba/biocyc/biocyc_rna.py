@@ -18,11 +18,10 @@ class BiocycRNA:
         self.gene = None
         self.complexes = []
         self.gene_composition = {}
-        # self.parents = []
 
     @staticmethod
     def get_rnas(file_name):
-        """Retrieve RNA data from biocyc export.
+        """Retrieve RNA data from BioCyc export.
 
         """
         tree = xml.etree.ElementTree.parse(file_name)
@@ -38,6 +37,5 @@ class BiocycRNA:
             if len(genes) == 1:
                 bc_rna.gene = genes[0]
             bc_rna.complexes = get_sub_obj_ids(el, 'component-of', '*')
-            # bc_rna.parents = get_sub_obj_ids(el, 'parent', '*')
             data[biocyc_id] = bc_rna
         return data

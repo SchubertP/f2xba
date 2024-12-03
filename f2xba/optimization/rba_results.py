@@ -10,7 +10,6 @@ Peter Schubert, HHU Duesseldorf, December2023
 """
 
 import re
-import numpy as np
 import pandas as pd
 from collections import defaultdict
 
@@ -31,6 +30,8 @@ class RbaResults(Results):
         :type df_mpmf: pandas dataframe
         """
         super().__init__(optim, results, df_mpmf)
+        self.gene2name = {row['label']: row.get('name')
+                          for gpid, row in self.optim.m_dict['fbcGeneProducts'].iterrows()}
 
     # TODO combine get_fluxes, get_net_fluxes
     def get_fluxes(self, solution):
@@ -125,7 +126,7 @@ class RbaResults(Results):
         return df_net_fluxes
 
     def get_predicted_protein_data(self, solution):
-        """Get protein data from a single optimization solution.
+        """Determine protein levels for a single optimization solution.
 
         Enzyme, process machinery and dummy protein concentrations
         in µmol/gDW, mg/gDW and pmf (protein mass fraction)
@@ -133,39 +134,38 @@ class RbaResults(Results):
         pmf is calculated by dividing individual protein mass by total protein
         mass for that condition.
 
-        :param solution: Cobra Optimization solution
+        :param solution: optimization solution (as per COBRApy solution)
         :type solution: dict
-        :return: protein concentrationa in µmol/gDW
+        :return: protein concentrations in µmol/gDW, mg/gDW and mg/gP
         :rtype: pandas DataFrame
         """
         protein_mmol_per_gdw = defaultdict(float)
         for var_id, conc in solution.fluxes.items():
-            # iterate through all enzyme concentration reactions
+            # iterate through all enzyme and process machine concentrations
             if re.match(pf.V_EC_, var_id) or re.match(pf.V_PMC_, var_id):
                 scale = self.optim.df_enz_data.at[var_id, 'scale']
-                for pid, stoic in self.optim.enz_mm_composition[var_id].items():
+                for gp_id, stoic in self.optim.enz_mm_composition[var_id].items():
                     # exclude any RNAs (e.g. in ribosome)
-                    if self.optim.df_mm_data.at[pid, 'uniprot']:
-                        protein_mmol_per_gdw[pid] += stoic * conc / scale
+                    if self.optim.df_mm_data.at[gp_id, 'uniprot']:
+                        protein_mmol_per_gdw[gp_id] += stoic * conc / scale
             # include protein concentrations from concentration targets (proteins not included in enzymes)
             elif re.match(pf.V_TMMC_, var_id):
-                pid = re.sub(pf.V_TMMC_, '', var_id)
-                if self.optim.df_mm_data.at[pid, 'type'] == 'proteins':
-                    scale = self.optim.df_mm_data.at[pid, 'scale']
-                    protein_mmol_per_gdw[pid] += conc / scale
+                gp_id = re.sub(pf.V_TMMC_, '', var_id)
+                if self.optim.df_mm_data.at[gp_id, 'type'] == 'proteins':
+                    scale = self.optim.df_mm_data.at[gp_id, 'scale']
+                    protein_mmol_per_gdw[gp_id] += conc / scale
 
-        prot_data = {}
-        for pid, mmol_per_gdw in protein_mmol_per_gdw.items():
-            uniprot = self.optim.df_mm_data.at[pid, 'uniprot']
-            mw_kda = self.optim.df_mm_data.at[pid, 'mw_kDa']
+        prot_data = []
+        for gene, mmol_per_gdw in protein_mmol_per_gdw.items():
+            uniprot = self.optim.df_mm_data.at[gene, 'uniprot']
+            mw_kda = self.optim.df_mm_data.at[gene, 'mw_kDa']
             mg_per_gdw = mmol_per_gdw * mw_kda * 1000.0
-            prot_data[pid] = [uniprot, mw_kda, mmol_per_gdw * 1000.0, mg_per_gdw]
-
-        cols = ['uniprot', 'mw_kDa', 'µmol_per_gDW', 'mg_per_gDW']
-        df_prot_data = pd.DataFrame(prot_data.values(), index=list(prot_data), columns=cols)
+            gene_name = self.gene2name.get(gene)
+            prot_data.append([gene, uniprot, gene_name, mw_kda, mmol_per_gdw * 1000.0, mg_per_gdw])
+        cols = ['gene', 'uniprot', 'gene_name', 'mw_kDa', 'µmol_per_gDW', 'mg_per_gDW']
+        df_prot_data = pd.DataFrame(prot_data, columns=cols).set_index('gene')
         total_gp_per_gdw = df_prot_data['mg_per_gDW'].sum() / 1000.0
         df_prot_data['mg_per_gP'] = df_prot_data['mg_per_gDW'] / total_gp_per_gdw
-        df_prot_data.index.name = 'gene'
         return df_prot_data
 
     def collect_protein_results(self, units='mg_per_gP'):
@@ -185,35 +185,9 @@ class RbaResults(Results):
         supported_units = {'mg_per_gP', 'mg_per_gDW', 'µmol_per_gDW'}
         if units not in supported_units:
             print(f'{units} not support, select any of {supported_units}')
-            return None
-
-        df_proteins = None
-        info_cols = 0
-        for condition, solution in self.results.items():
-            df = self.get_predicted_protein_data(solution)
-            if df_proteins is None:
-                if units == 'mg_per_gP' and self.df_mpmf is not None:
-                    exp_mpmf_cols = ['gene_name', 'avg_mpmf', 'rank']
-                    df_proteins = df[['uniprot', 'mw_kDa']].join(self.df_mpmf[exp_mpmf_cols])
-                    df_proteins.rename(columns={'avg_mpmf': 'exp_avg_mpmf', 'rank': 'exp_rank'}, inplace=True)
-                    df_proteins = pd.concat([df_proteins, df[units]], axis=1)
-                    info_cols = 5
-                else:
-                    df_proteins = df[['uniprot', 'mw_kDa', units]].copy()
-                    info_cols = 2
-            else:
-                df_proteins = pd.concat([df_proteins, df[units]], axis=1)
-            df_proteins.rename(columns={units: f'{condition}'}, inplace=True)
-
-        mean = df_proteins.iloc[:, info_cols:].mean(axis=1).values
-        stdev = df_proteins.iloc[:, info_cols:].std(axis=1).values
-        df_proteins.insert(info_cols, f'mean {units}', mean)
-        df_proteins.insert(info_cols + 1, 'stdev', stdev)
-        df_proteins.index.name = 'gene'
-        df_proteins.sort_values(by=f'mean {units}', ascending=False, inplace=True)
-        rank = np.array(range(1, len(df_proteins)+1))
-        df_proteins.insert(info_cols, column='pred_rank', value=rank)
-        return df_proteins
+            return pd.DataFrame()
+        else:
+            return self._collect_protein_results(units)
 
     def get_predicted_enzyme_usage(self, solution):
         enz_usage = {}

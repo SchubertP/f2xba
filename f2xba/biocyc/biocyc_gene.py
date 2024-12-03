@@ -42,8 +42,6 @@ class BiocycGene:
             bc_gene.rnas = get_gene_products(el, 'product', 'RNA')
             bc_gene.tus = get_sub_obj_ids(el, 'component-of', 'Transcription-Unit')
             # bc_gene.dna_dir = get_child_text(el, 'transcription-direction')
-            # bc_gene.dna_left_pos = to_int(get_child_text(el, 'left-end-position'))
-            # bc_gene.dna_right_pos = to_int(get_child_text(el, 'right-end-position'))
 
             data[biocyc_id] = bc_gene
         return data

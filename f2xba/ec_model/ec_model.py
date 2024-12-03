@@ -8,7 +8,7 @@ import re
 import numpy as np
 import pandas as pd
 import f2xba.prefixes as pf
-from ..utils.mapping_utils import valid_sbml_sid
+from ..utils.mapping_utils import valid_sbml_sid, load_parameter_file
 
 MAX_CONC_PROT = 100  # mg/gDW maximum protein concentration in kpmf (kilo protein mass fraction)
 
@@ -71,13 +71,11 @@ class EcModel:
         :return: success/failure of model configuration
         :rtype: bool
         """
-        sheets = ['general', 'rescale_reactions']
-        ecm_params = {}
-        with pd.ExcelFile(fname) as xlsx:
-            for sheet in sheets:
-                if sheet in xlsx.sheet_names:
-                    ecm_params[sheet] = pd.read_excel(xlsx, sheet_name=sheet, index_col=0)
-            print(f'{len(ecm_params)} tables with EC model configuration parameters loaded from {fname}')
+        sheet_names = ['general', 'rescale_reactions']
+        ecm_params = load_parameter_file(fname, sheet_names)
+        if 'general' not in ecm_params.keys():
+            print(f'mandatory table "general" not found in the document')
+            raise ValueError
 
         general_params = ecm_params['general']['value'].to_dict()
         ecm_type = general_params.get('ecm_type', 'GECKO')

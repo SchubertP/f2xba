@@ -43,6 +43,7 @@ class EcmOptimization(Optimize):
 
     def configure_moment_model_constraints(self):
         """configure constraints related to MOMENT modelling
+
             in MOMENT formalism, promiscuous enszymes can catalyze alternative reactions
             without additional cost. Only most costly reacions flux need to be supported
             and all alternative reactions come for free

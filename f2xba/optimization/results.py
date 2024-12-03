@@ -43,18 +43,14 @@ class Results(ABC):
         """
         self.optim = optim
         self.results = results
-        self.df_mpmf = df_mpmf
-
-        if self.optim.model_type == 'ECM':
-            # get mapping from UniProt Id to gene label via gene reaction rule in protein concentration variables
-            self.uid2gene = {}
-            for rid, row in self.optim.m_dict['reactions'].iterrows():
-                if re.match(pf.V_PC_, rid) and type(row['fbcGeneProdAssoc']) is str:
-                    uid = re.sub(f'^{pf.V_PC_}', '', rid)
-                    gpid = re.sub('^assoc=', '', row['fbcGeneProdAssoc'])
-                    if gpid in self.optim.m_dict['fbcGeneProducts'].index:
-                        gp_data = self.optim.m_dict['fbcGeneProducts'].loc[gpid]
-                        self.uid2gene[uid] = [gp_data['label'], gp_data.get('name')]
+        if type(df_mpmf) is pd.DataFrame:
+            self.df_mpmf = df_mpmf
+            self.gene2uid = df_mpmf['uniprot'] if 'uniprot' in df_mpmf.columns else {}
+            self.gene2name = df_mpmf['gene_name'] if 'gene_name' in df_mpmf.columns else {}
+            self.gene2descr = df_mpmf['description'] if 'description' in df_mpmf.columns else {}
+            self.gene2mw_kda = df_mpmf['mw_Da'] / 1000.0 if 'mw_Da' in df_mpmf.columns else {}
+            self.gene2mpmf = df_mpmf['avg_mpmf'] if 'avg_mpmf' in df_mpmf.columns else {}
+            self.gene2rank = df_mpmf['rank'] if 'rank' in df_mpmf.columns else {}
 
     @abstractmethod
     def get_fluxes(self, solution):
@@ -98,13 +94,51 @@ class Results(ABC):
         df_fluxes.index.name = 'rid'
         return df_fluxes
 
+    @abstractmethod
     def collect_protein_results(self):
-        # should be overwritten by subclasses, when model contains protein concentration variables
         return pd.DataFrame()
 
+    @abstractmethod
     def get_predicted_protein_data(self, solution):
-        # should be overwritten by subclasses, when model contains protein concentration variables
         return pd.DataFrame()
+
+    def _collect_protein_results(self, units):
+        """Collect protein results, encriched with data from proteomics data set, if provided.
+        """
+        df_proteins = None
+        info_cols = 0
+        for condition, solution in self.results.items():
+            df = self.get_predicted_protein_data(solution)
+            if df_proteins is None:
+                if hasattr(self, 'df_mpmf'):
+                    data = []
+                    for gene, row in df.iterrows():
+                        uid = row['uniprot'] if type(row['uniprot']) is str else self.gene2uid.get(gene)
+                        gene_name = row['gene_name'] if type(row['gene_name']) is str else self.gene2name.get(gene)
+                        description = self.gene2descr.get(gene)
+                        mw_kda = row['mw_kDa'] if 'mw_kDa' in row else self.gene2mw_kda.get(gene)
+                        exp_rank = self.gene2rank.get(gene)
+                        exp_mpmf = self.gene2mpmf.get(gene)
+                        data.append([gene, uid, gene_name, description, mw_kda, exp_mpmf, exp_rank])
+                    cols = ['gene', 'uniprot', 'gene_name', 'description', 'mw_kDa', 'exp_avg_mpmf', 'exp_rank']
+                    df_proteins = pd.DataFrame(data, columns=cols).set_index('gene')
+                    info_cols = len(cols) - 1
+                else:
+                    cols = [col for col in df.columns if col in {'uniprot', 'gene_name', 'mw_kDa'}]
+                    df_proteins = df[cols].copy()
+                    info_cols = len(cols)
+            df_proteins = pd.concat([df_proteins, df[units]], axis=1)
+            df_proteins.rename(columns={units: f'{condition}'}, inplace=True)
+
+        mean = df_proteins.iloc[:, info_cols:].mean(axis=1).values
+        stdev = df_proteins.iloc[:, info_cols:].std(axis=1).values
+        df_proteins.insert(info_cols, f'mean {units}', mean)
+        df_proteins.insert(info_cols + 1, 'stdev', stdev)
+        df_proteins.index.name = 'gene'
+        df_proteins.sort_values(by=f'mean {units}', ascending=False, inplace=True)
+        rank = np.array(range(1, len(df_proteins) + 1))
+        df_proteins.insert(info_cols, column='pred_rank', value=rank)
+        return df_proteins
 
     def get_predicted_species_conc(self, solution):
         """Collect species concentrations (mmol/l) for a TD constraint model.
@@ -149,7 +183,7 @@ class Results(ABC):
         df_conc.sort_values(by='mean mmol_per_l', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_conc) + 1))
         df_conc.insert(info_cols, 'rank', rank)
-        df_conc.index.name = 'mid'
+        df_conc.index.name = 'sid'
         return df_conc
 
     def get_rtype_condition_mpmf(self, r_type, condition):
@@ -200,17 +234,15 @@ class Results(ABC):
         rel_error = abs(cond_exp_grs - cond_pred_grs) / cond_exp_grs
         r_value, p_value = scipy.stats.pearsonr(cond_exp_grs, cond_pred_grs)
         print(f'predicted grs ({len(cond_pred_grs)}) vs. experiment: r2 = {r_value ** 2:.4f}, p = {p_value:.2e}, '
-              f'avg rel error = {np.mean(rel_error) * 100:.2f}%')
+              f'relative error = {np.mean(rel_error) * 100:.2f}%')
 
     def report_proteomics_correlation(self, scale='lin'):
-        """Report on correlation predicted vs experimental protein mass fraction (log scale).
-
-        :param scale: 'lin' or 'log' scale correlation (optional, default 'lin')
-        :type scale: str, optional
-        :return: Protein mass fractions for several conditions
-        :rtype: pandas DataFrame
-        :rtype: pandas DataFrame
+        """Report predicted vs experimental protein mass fraction (log scale).
         """
+        if hasattr(self, 'df_mpmf') is False:
+            print('no proteomics data supplied for comparisson')
+            return
+
         df_proteins = self.collect_protein_results()
         for condition in self.results:
             if condition in self.df_mpmf:
@@ -218,20 +250,11 @@ class Results(ABC):
                 pred_mpmfs = df_proteins[condition].to_dict()
 
                 genes = set(exp_mpmfs.keys()).intersection(set(pred_mpmfs.keys()))
-                x = []
-                y = []
-                if scale == 'lin':
-                    for gene in genes:
-                        x.append(exp_mpmfs[gene])
-                        y.append(pred_mpmfs[gene])
-                else:
-                    for gene in genes:
-                        if pred_mpmfs[gene] > 0.0 and exp_mpmfs[gene] > 0.0:
-                            x.append(np.log10(exp_mpmfs[gene]))
-                            y.append(np.log10(pred_mpmfs[gene]))
+                xy = np.array([[exp_mpmfs[gene], pred_mpmfs[gene]] for gene in genes])
+                x, y = (xy[:, 0], xy[:, 1]) if scale == 'lin' else self.get_log10_xy(xy)
                 r_value, p_value = scipy.stats.pearsonr(x, y)
                 print(f'{condition:25s}: r\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
-                      f'({len(x)} proteins {scale} scale)')
+                      f'({len(x):4d} proteins {scale} scale)')
 
     def report_protein_levels(self, condition):
         """Report on experimental vs. predicted protein levels per protein type.
@@ -243,6 +266,10 @@ class Results(ABC):
         :type condition: str
         """
         # For measured proteins collect predicted mass fraction per type
+        if hasattr(self, 'df_mpmf') is False:
+            print('no proteomics data supplied for comparisson')
+            return
+
         metab_gene2mpmfs = self.get_rtype_condition_mpmf('metabolic', condition)
         tx_gene2mpmfs = self.get_rtype_condition_mpmf('transport', condition)
         pm_gene2mpmfs = self.get_rtype_condition_mpmf('process', condition)
@@ -279,7 +306,7 @@ class Results(ABC):
                 if len(mpmfs) > 0:
                     x, y = (mpmfs[:, 0], mpmfs[:, 1]) if scale == 'lin' else self.get_log10_xy(mpmfs)
                     r_value, p_value = scipy.stats.pearsonr(x, y)
-                    print(f'{p_class:16s}: R\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
+                    print(f'{p_class:16s}: r\N{SUPERSCRIPT TWO} = {r_value ** 2:.4f}, p = {p_value:.2e} '
                           f'({len(x):4d} proteins {scale} scale)')
 
     def save_to_escher(self, df, base_fname):
@@ -317,14 +344,25 @@ class Results(ABC):
 
     # PLOT SUPPORT
     @ staticmethod
-    def get_log10_xy(xy):
+    def get_log10_xy(xy, cutoff=1e-6):
+        """Return vectors log10(x) and log10(y) of 2D numpy array with two non-negative values per row
+
+        Drop rows where x or y are below the cutoff (e.g. 1e-6)
+
+        :param xy: 2D array with two float values per row (e.g. predicted vs. experimental values)
+        :type: numpy.ndarray 2D: with two non-negative values per row
+        :param cutoff: minimal values of both x and y to return log10 values
+        :type cutoff: float, default 1e-6
+        :return: two vectors with log10(x) and log10(y) for rows that were not dropped
+        :rtype: two numpy.ndarray with float values
+        """
         log10_x = []
         log10_y = []
         for x, y in xy:
-            if x > 0.0 and y > 0.0:
+            if x > cutoff and y > cutoff:
                 log10_x.append(np.log10(x))
                 log10_y.append(np.log10(y))
-        return log10_x, log10_y
+        return np.array(log10_x), np.array(log10_y)
 
     def plot_grs(self, exp_grs, gr_max=None, highlight=None, plot_fname=None):
         """Plot predicted vs. experimental growth rates.
@@ -348,18 +386,20 @@ class Results(ABC):
         cond_pred_grs = [self.results[cond].objective_value for cond in conds]
         gr_max = gr_max if gr_max else max(max(cond_pred_grs), max(cond_exp_grs)) * 1.15
 
-        fig, axs = plt.subplots(1, 1, figsize=(3, 3), squeeze=False)
+        fig, axs = plt.subplots(1, 1, figsize=(4.0, 4.0 * .618), squeeze=False)
         ax = axs[0, 0]
 
         ax.scatter(cond_exp_grs, cond_pred_grs, marker=marker2)
         if highlight and (highlight in conds):
             ax.scatter(exp_grs[highlight], self.results[highlight].objective_value)
 
-        r_value, p_value = scipy.stats.pearsonr(cond_exp_grs, cond_pred_grs)
-        stats = r'$R^2$' + f'={r_value ** 2:.4f}, p={p_value:.2e}'
-        ax.text(0.5, 0.01, stats, transform=ax.transAxes, va='bottom', ha='center', fontsize=10)
-        ax.text(0.05, 0.99, self.optim.model_name, transform=ax.transAxes, va='top')
-        ax.text(0.05, 0.92, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
+        slope, intercept, rvalue, pvalue, stderr = scipy.stats.linregress(cond_exp_grs, cond_pred_grs)
+        ax.plot((0.0, gr_max), (intercept, slope * gr_max + intercept), 'r:', lw=1)
+
+        stats = r'$R^2$' + f'={rvalue ** 2:.4f}, p={pvalue:.2e}'
+        ax.text(0.5, 0.1, stats, transform=ax.transAxes, va='top', ha='center')
+        ax.text(0.01, 0.99, self.optim.model_name, transform=ax.transAxes, va='top')
+        ax.text(0.01, 0.91, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
 
         ax.set(xlim=(0.0, gr_max), ylim=(0.0, gr_max))
         ax.plot((0.0, 1.0), (0.0, 1.0), 'k--', lw=0.5)
@@ -382,21 +422,30 @@ class Results(ABC):
         :param plot_fname: (optional) file name where to store resulting plot
         :type plot_fname: str if provided (default: None)
         """
+        if hasattr(self, 'df_mpmf') is False:
+            print('no proteomics data supplied for comparisson')
+            return
+
         marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
         log_delta = np.log10(5.0)
         sigma = self.optim.avg_enz_saturation
 
-        metab_mpmfs = np.array(list(self.get_rtype_condition_mpmf('metabolic', condition).values()))
-        tx_mpmfs = np.array(list(self.get_rtype_condition_mpmf('transport', condition).values()))
-        process_mpmfs = np.array(list(self.get_rtype_condition_mpmf('process', condition).values()))
+        metab_gene2mpmfs = self.get_rtype_condition_mpmf('metabolic', condition)
+        tx_gene2mpmfs = self.get_rtype_condition_mpmf('transport', condition)
+        pm_gene2mpmfs = self.get_rtype_condition_mpmf('process', condition)
+        all_gene2mpmfs = metab_gene2mpmfs | tx_gene2mpmfs | pm_gene2mpmfs
 
-        fig, axs = plt.subplots(1, 2, figsize=(8, 4 * .618), squeeze=False)
+        metab_mpmfs = np.array(list(metab_gene2mpmfs.values()))
+        tx_mpmfs = np.array(list(tx_gene2mpmfs.values()))
+        pm_mpmfs = np.array(list(pm_gene2mpmfs.values()))
+        all_mpmfs = np.array(list(all_gene2mpmfs.values()))
+
+        fig, axs = plt.subplots(1, 2, figsize=(8.0, 4.0 * .618), squeeze=False)
         for gcol in [0, 1]:
             ax = axs[0, gcol]
             if gcol == 0:  # lin scale
                 max_lin_val = 0.0
-                for label, mpmfs in {'metabolic': metab_mpmfs, 'transport': tx_mpmfs,
-                                     'process': process_mpmfs}.items():
+                for label, mpmfs in {'metabolic': metab_mpmfs, 'transport': tx_mpmfs, 'process': pm_mpmfs}.items():
                     if len(mpmfs) > 0:
                         ax.scatter(mpmfs[:, 0], mpmfs[:, 1], marker=marker2, label=label)
                         max_lin_val = max(max_lin_val, np.max(mpmfs))
@@ -411,23 +460,28 @@ class Results(ABC):
                 ax.text(0.99, 0.5, f'[... {max_lin_val:.1f}]', transform=ax.transAxes, va='top', ha='right')
 
             else:  # log10 scale
+                xy_range = (-7.0, 3.0)
                 max_log_val = -10.0
                 min_log_val = 10.0
-                for label, mpmfs in {'metabolic': metab_mpmfs, 'transport': tx_mpmfs,
-                                     'process': process_mpmfs}.items():
+                for label, mpmfs in {'metabolic': metab_mpmfs, 'transport': tx_mpmfs, 'process': pm_mpmfs}.items():
                     if len(mpmfs) > 0:
                         log_x, log_y = self.get_log10_xy(mpmfs)
                         ax.scatter(log_x, log_y, marker=marker2, label=label)
                         max_log_val = max(max_log_val, np.max(log_x), np.max(log_y))
                         min_log_val = min(min_log_val, np.min(log_x), np.min(log_y))
-                xy_range = (-7.0, 3.0)
-                ax.set_xlabel(r'experimental mpmf log10')
-                ax.set_ylabel(r'predicted mpmf log10')
-                ax.legend(loc='upper left')
+
+                log_x, log_y = self.get_log10_xy(all_mpmfs)
+                slope, intercept, rvalue, pvalue, stderr = scipy.stats.linregress(log_x, log_y)
+                ax.plot((xy_range[0], xy_range[1]),
+                        (slope * xy_range[0] + intercept, slope * xy_range[1] + intercept), 'r:', lw=1)
+
                 ax.plot((xy_range[0] + log_delta, xy_range[1]), (xy_range[0], xy_range[1] - log_delta), 'k:', lw=0.5)
                 ax.plot((xy_range[0], xy_range[1] - log_delta), (xy_range[0] + log_delta, xy_range[1]), 'k:', lw=0.5)
                 ax.text(0.99, 0.1, f'[{min_log_val:.1f} ... {max_log_val:.1f}]', transform=ax.transAxes,
                         va='top', ha='right')
+                ax.set_xlabel(r'experimental mpmf log10')
+                ax.set_ylabel(r'predicted mpmf log10')
+                ax.legend(loc='upper left')
 
             ax.set(xlim=xy_range, ylim=xy_range)
             ax.plot(xy_range, xy_range, 'k--', lw=0.5)
