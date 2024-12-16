@@ -14,9 +14,11 @@ import f2xba.prefixes as pf
 
 class GeckoFitKcats:
 
-    def __init__(self, optim, orig_kcats_fname):
+    def __init__(self, optim, orig_kcats_fname, min_kcat=0.01, max_kcat=5000.0):
         self.optim = optim
         self.orig_kcats_fname = orig_kcats_fname
+        self.min_kcat = min_kcat
+        self.max_kcat = max_kcat
 
         locus2iso_rids = defaultdict(list)
         net2iso_rids = defaultdict(list)
@@ -188,6 +190,10 @@ class GeckoFitKcats:
                 df_kcats.at[f'{pf.R_}{iso_rid}', 'kcat_per_s'] *= target_saturation_scale
                 df_kcats.at[f'{pf.R_}{iso_rid}', 'notes'] = 'default value adapted to lower enz saturation'
             print(f'{len(balance_keys):4d} kcat values of inactive reactions reduced due to change in saturation')
+
+        # limit kcats to the given range
+        df_kcats['kcat_per_s'].mask(df_kcats['kcat_per_s'] > self.max_kcat, self.max_kcat, inplace=True)
+        df_kcats['kcat_per_s'].mask(df_kcats['kcat_per_s'] < self.min_kcat, self.min_kcat, inplace=True)
 
         # write fitted kcats to file
         with pd.ExcelWriter(fitted_kcats_fname) as writer:

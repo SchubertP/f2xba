@@ -584,7 +584,7 @@ class XbaModel:
             print(f'{len(df_enz_comp)} enzyme compositions exported to', fname)
 
     def generate_turnup_input(self, orig_kcats_fname, kind='metabolic', mids2ref=None,
-                              fname='tmp_turnup_input.csv', max_records=500):
+                              input_basename='tmp_turnup_input', max_records=500):
         """Generate Input files for TurNuP kcat predictions.
 
         Ref: Kroll, et al., 2023, Turnover number predictions for kinetically uncharacterized enzymes using
@@ -606,8 +606,8 @@ class XbaModel:
         :type kind: str, e.g 'metablic', 'all'
         :param mids2ref: manual mapping of metabolite ids to KEGG, InChI or SMILES reference
         :type mids2ref: dict (key: mid/str, value: reference/str), default: None
-        :param fname: file name for TurNuP input file / files, (default: tmp_turnup_input.csv)
-        :type fname: str, with file-suffix '.csv'
+        :param input_basename: file name for TurNuP input file, without suffix, (default: tmp_turnup_input)
+        :type input_basename: str
         :param max_records: maximum number of recored in input file (for splitting of input files) (default: 500)
         :type max_records: int
         :return: metabolites without KEGG, InChi or SMILES reference
@@ -636,8 +636,8 @@ class XbaModel:
                 rev_key = f'{fwd_key}_REV' if f'{fwd_key}_REV' in df_orig_kcats.index else None
 
                 # retrieve KEGG ids for substrates and products
-                missing_ref = False
                 r = self.reactions[row['rid']]
+                missing_ref = False
 
                 substrates = []
                 for sid in r.reactants:
@@ -655,7 +655,6 @@ class XbaModel:
 
                 products = []
                 for sid in r.products:
-                    # remove compartment postfix (assume there is a compartment postfix)
                     mid = re.sub('_[^_]*$', '', sid)
                     if mid not in mids2ref:
                         s = self.species[sid]
@@ -667,8 +666,12 @@ class XbaModel:
                         missing_ref = True
                         mids_no_ref[mid] = sid
 
-                subs_keggs = None if missing_ref else ';'.join(substrates)
-                prod_keggs = None if missing_ref else ';'.join(products)
+                if missing_ref:
+                    subs_keggs = None
+                    prod_keggs = None
+                else:
+                    subs_keggs = ';'.join(substrates)
+                    prod_keggs = ';'.join(products)
 
                 # for enzyme complexes, we concatenate aa sequences of involved proteins
                 e = self.enzymes[row['enzyme']]
@@ -678,10 +681,9 @@ class XbaModel:
                     p = self.proteins[pid]
                     aa_seq += p.aa_sequence
                 valid_aa_seq = re.sub(invalid_aa_ids, 'L', aa_seq)
-                records.append([fwd_key, rev_key, row['enzyme'], row['info_type'],
-                                valid_aa_seq, subs_keggs, prod_keggs])
+                records.append([fwd_key, rev_key, valid_aa_seq, subs_keggs, prod_keggs])
 
-        cols = ['fwd_key', 'rev_key', 'enzyme_id', 'kind', 'Enzyme', 'Substrates', 'Products']
+        cols = ['fwd_key', 'rev_key', 'Enzyme', 'Substrates', 'Products']
         df_input = pd.DataFrame(records, columns=cols)
         df_input.set_index('fwd_key', inplace=True)
 
@@ -692,20 +694,21 @@ class XbaModel:
 
         # store TurNuP input file(s) - split as per max record length
         if len(df_input) <= max_records:
-            df_input.to_csv(fname, sep=';')
+            fname = f'{input_basename}.xlsx'
+            with pd.ExcelWriter(fname) as writer:
+                df_input.to_excel(writer)
             print(f'1 TurNuP input file ({len(df_input)} records) stored under {fname}')
             print(f' - upload file to TurNuP Web Server: https://turnup.cs.hhu.de/Kcat_multiple_input')
         else:
-            base_fname = re.sub('.csv$', '', fname)
-            fnames = []
             idx = 1
             start = 0
             stop = start + max_records
-
+            fnames = []
             while start < len(df_input):
-                input_fname = f'{base_fname}_{idx}_seq.csv'
-                df_input.iloc[start:stop].to_csv(input_fname, sep=';')
-                fnames.append(input_fname)
+                fname = f'{input_basename}_{idx}_seq.xlsx'
+                with pd.ExcelWriter(fname) as writer:
+                    df_input.iloc[start:stop].to_excel(writer)
+                fnames.append(fname)
                 idx += 1
                 start = stop
                 stop = min(len(df_input), start + max_records)
@@ -717,18 +720,17 @@ class XbaModel:
         return mids_no_ref
 
     @staticmethod
-    def process_turnup_output(orig_kcats_fname, pred_kcats_fname, in2out_fnames):
+    def process_turnup_output_old(orig_kcats_fname, pred_kcats_fname, output_fnames):
         """Process TurNuP kcat prediction results and create new kcat parameter file.
 
-        Using as input the list of TurNuP input and corresponding output files.
-        Update predicted kcat values in baseline kcats parameter file and create an updated parameter file.
+        Create a predicted kcats file using TurNuP predictions supplied in list of TurNuP output filenames.
 
         :param orig_kcats_fname: baseline kcat parameter file, e.g. created with export_kcats() method.
         :type orig_kcats_fname: str
         :param pred_kcats_fname: kcat parameter file name with predicted kcats
         :type pred_kcats_fname: str
-        :param in2out_fnames: mapping of TurNuP input to output file names
-        :type in2out_fnames: dict (key: input_fname/str, val: output_fname/str
+        :param output_fnames: list of output file names, with path name
+        :type output_fnames: list of str
         :return:
         """
         # update original kcats parameter file with data from TurNuP predictions, using input files as reference
@@ -738,17 +740,14 @@ class XbaModel:
         pred_fwd = 0
         pred_rev = 0
 
-        for in_fname, out_fname in in2out_fnames.items():
-            print(f'{os.path.basename(in_fname)} - {os.path.basename(out_fname)}')
-            df_input = pd.read_csv(in_fname, sep=';')
-            df_output = pd.read_csv(out_fname, sep=';')
-            assert len(df_input) == len(df_output), 'TurNuP input does not match TurNuP output file'
+        for fname in output_fnames.items():
+            df_output = pd.read_csv(fname, sep=';')
 
-            for idx, row in df_input.iterrows():
-                if type(df_input.at[idx, 'Substrates']) is str and type(df_output.at[idx, 'substrates']) is str:
-                    if df_input.at[idx, 'Substrates'] != df_output.at[idx, 'substrates']:
-                        print(f'{in_fname} not in sync with {out_fname} at record {idx}')
-                        return
+            for idx, row in df_output.iterrows():
+                # if type(df_input.at[idx, 'Substrates']) is str and type(df_output.at[idx, 'substrates']) is str:
+                #    if df_input.at[idx, 'Substrates'] != df_output.at[idx, 'substrates']:
+                #        print(f'{in_fname} not in sync with {out_fname} at record {idx}')
+                #        return
 
                 pred_kcat = df_output.at[idx, 'kcat [s^(-1)]']
                 df_predicted_kcats.at[row['fwd_key'], 'kcat_per_s'] = pred_kcat
@@ -1587,7 +1586,7 @@ class XbaModel:
         """Create optional arm reactions and connecting pseudo metabolites.
 
         Arm reactions is in series to several isoenzyme reactions. It controls
-        total flux through these isoenzyme reactions that all orignate from same
+        total flux through these isoenzyme reactions that all originate from same
         original reaction.
         Isoenzyme reactions consume original reactant and produce a common pseudo metabolite
         Arm reaction consume the pseudo metabolite and produces original product.

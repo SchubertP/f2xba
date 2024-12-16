@@ -197,10 +197,23 @@ class RbaResults(Results):
                 scale = self.optim.df_enz_data.at[vid, 'scale']
                 mmf = flux * mw_kda / scale * 1000.0
                 conc_umol_gdw = flux / scale * 1000.0
-                name = re.sub(f'^({pf.V_EC_}|{pf.V_PMC_})', '', vid)
-                enz_usage[name] = [mw_kda, conc_umol_gdw, mmf]
+                rid = re.sub(f'^({pf.V_EC_}|{pf.V_PMC_})', '', vid)
 
-        cols = ['mw_kDa', 'µmol_per_gDW', 'mg_per_gDW']
+                # collect reaction related information
+                if f'R_{rid}' in self.optim.rdata:
+                    rdata = self.optim.rdata[f'R_{rid}']
+                    gpr = rdata['gpr']
+                    reaction_str = rdata['reaction_str']
+                elif rid in self.optim.rdata:
+                    rdata = self.optim.rdata[rid]
+                    gpr = rdata['gpr']
+                    reaction_str = rdata['reaction_str']
+                else:
+                    gpr = None
+                    reaction_str = None
+                enz_usage[rid] = [mw_kda, reaction_str, gpr, conc_umol_gdw, mmf]
+
+        cols = ['mw_kDa', 'reaction_str', 'gpr', 'µmol_per_gDW', 'mg_per_gDW']
         df_enz_usage = pd.DataFrame(enz_usage.values(), index=list(enz_usage), columns=cols)
         return df_enz_usage
 
@@ -221,11 +234,11 @@ class RbaResults(Results):
             return None
 
         df_enzymes = None
-        info_cols = 1
+        info_cols = 3
         for condition, solution in self.results.items():
             df = self.get_predicted_enzyme_usage(solution)
             if df_enzymes is None:
-                df_enzymes = df[['mw_kDa', units]].copy()
+                df_enzymes = df[['mw_kDa', 'reaction_str', 'gpr', units]].copy()
             else:
                 df_enzymes = pd.concat([df_enzymes, df[units]], axis=1)
             df_enzymes.rename(columns={units: f'{condition}'}, inplace=True)

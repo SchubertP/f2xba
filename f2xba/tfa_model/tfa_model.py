@@ -81,13 +81,6 @@ class TfaModel:
         tfa_solution = tfa_model.optimize()
         tfa_solution.objective_value
 
-    It should therefore be possible to create and simulate TFA models
-    without need of pytfa Python package.
-
-    It should be possible to create from xba mode a TFA model
-    and subsequently continue with the TFA model to create a
-    thermodynamic constraint model.
-
     If not already covered by pyTFA
     constraint
     .. code-block:: python
@@ -95,7 +88,7 @@ class TfaModel:
         xba_model = XbaModel('iJO1366.xml')
         xba_model.configure('iJO1366_xba_TFA_parameters.xlsx')
 
-        tfa_model = EcModel(xba_model)
+        tfa_model = TfaModel(xba_model)
         tfa_model.configure(('iJO1366_TFA_parameters.xlsx')
         if tfa_model.validate():
             tfa_model.export('iJO1366_TFA.xml')
@@ -123,7 +116,7 @@ class TfaModel:
         """Convert the xba model to TFA model using parameters in fname.
 
         to be executed after xba model has been configured
-        This method adds EC-model specific parametrizations to the xba model
+        This method adds TD specific parametrizations to the xba model
 
         The Excel parameters document should contain the sheets:
         - 'general'
@@ -339,7 +332,6 @@ class TfaModel:
             - if there are differences in chemical structure beyond different protonation level
             - if there are differences in charges beyond different protonation levels
 
-
         :param sid: species id in the model
         :type sid: str
         :param metabolite_td_data:
@@ -350,16 +342,21 @@ class TfaModel:
         valid = False
         if metabolite_td_data['deltaGf_std'] < 1e6 and metabolite_td_data['error'] == 'Nil':
             s = self.model.species[sid]
-            s_atoms = {atom: count for atom, count in extract_atoms(s.formula)}
-            # Note: strings loaded via pickle from thermo db have type numpy.str_
-            td_atoms = {atom: count for atom, count in extract_atoms(str(metabolite_td_data['formula']))}
-            atoms = set(s_atoms.keys()).union(set(td_atoms.keys()))
+
             td_atom_delta = {}
-            for atom in atoms:
-                delta = td_atoms.get(atom, 0) - s_atoms.get(atom, 0)
-                if delta != 0:
-                    td_atom_delta[atom] = delta
-            td_charge_delta = metabolite_td_data['charge_std'] - s.charge
+            if hasattr(s, 'formula') and type(s.formula) is str:
+                s_atoms = {atom: count for atom, count in extract_atoms(s.formula)}
+                # Note: strings loaded via pickle from thermo db have type numpy.str_
+                td_atoms = {atom: count for atom, count in extract_atoms(str(metabolite_td_data['formula']))}
+                atoms = set(s_atoms.keys()).union(set(td_atoms.keys()))
+                for atom in atoms:
+                    delta = td_atoms.get(atom, 0) - s_atoms.get(atom, 0)
+                    if delta != 0:
+                        td_atom_delta[atom] = delta
+
+            td_charge_delta = 999
+            if hasattr(s, 'charge') and (isinstance(s.charge, float) or isinstance(s.charge, int)):
+                td_charge_delta = metabolite_td_data['charge_std'] - s.charge
 
             if len(td_atom_delta) == 0 and td_charge_delta == 0:
                 valid = True
@@ -370,7 +367,7 @@ class TfaModel:
     def _select_td_species(self, all_td_data, modify_td_ids):
         """Create TD species for species in the model.
 
-        We make used of seed refs in species model annotation and species name.
+        We make used of SEED refs in species model annotation and species name.
         We configure 'td_sid' attribute on model species to corresponding TD species,
           alternatively it is set to None
         only select TD species, that contain a valid formula
@@ -395,14 +392,15 @@ class TfaModel:
         :rtype: list of str
         """
         # for metabolite name mapping, we create a dict of names in thermo data to respective seed id
-        all_td_sids = {td_sdata['id'] for td_sdata in all_td_data.values()
-                       if td_sdata['formula'] not in ['NA', 'NULL']}
         name2td_sid = {}
-        for td_sid in all_td_sids:
-            td_data = all_td_data[td_sid]
-            name2td_sid[td_data['name'].lower()] = td_sid
-            for name in td_data['other_names']:
-                name2td_sid[name.lower()] = td_sid
+        all_td_sids = set()
+        for seed_id, td_sdata in all_td_data.items():
+            if td_sdata['formula'] not in ['NA', 'NULL']:
+                all_td_sids.add(seed_id)
+                name2td_sid[td_sdata['name'].lower()] = seed_id
+                for name in td_sdata['other_names']:
+                    if len(name) > 0:
+                        name2td_sid[name.lower()] = seed_id
 
         mid_regex_pattern = self.td_params['mid_regex_pattern']
         td_sids = set()
@@ -433,12 +431,19 @@ class TfaModel:
         return td_sids
 
     def _create_td_data(self, thermo_db_fname, tfa_params):
-        """Load and configure thermodyanmics data
+        """Load and configure thermodyanmics data.
 
-        from complete thermo database we only import metabolites and cues
-        required for the specific model.
+        TD metabolites and cues data is only created for required when used by our model.
 
-        create td_metabolites, td_cues, td_compartments
+        - Create td_compartments based on TFA parameter file, table 'td_compartments'.
+        - Configure c_min and c_max on model species, using TdCompartmentData.
+        - Load thermodynamics database from file (format must similar to pyTFA thermo_data.thermodb).
+        - update attribute values of TD metabolites based on TFA parameter file, table 'modify_thermo_data'.
+        - convert energy value from kcal/mol to kJ/mol, if units the TD database are in kcal/mol.
+        - from TFA parameter file, table 'modify_td_sids', get fixed mapping from metabolite id to TD metabolite.
+        - create TD species for species in the model using data from TD database
+
+        td_metabolites, td_cues and
 
         :param thermo_db_fname: file name for thermo data
         :type thermo_db_fname: file

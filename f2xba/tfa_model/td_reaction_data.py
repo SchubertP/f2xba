@@ -1,6 +1,6 @@
 """Implementation of TdMReactionData class.
 
-holding thermodynamic data for a reaction
+holding thermodynamics data for a reaction
 based on pyTFA thermo data
 
 Peter Schubert, HHU Duesseldorf, Octobert 2023
@@ -11,9 +11,9 @@ Peter Schubert, HHU Duesseldorf, Octobert 2023
 class TdReactionData:
 
     def __init__(self, rid, reversible, kind):
-        """Instantiate thermodynamic reaction data.
+        """Instantiate thermodynamics reaction data.
 
-        pased on pyTFA thermo data file
+        based on pyTFA thermo_data.thermodb
 
         Note: for strings we convert the type from numpy.str_ to str
 

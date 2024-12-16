@@ -653,20 +653,20 @@ class Optimize:
                 assert var_id in self.var_id2gpm or pf.R_ + var_id in self.var_id2gpm, f'{var_id} not found'
                 var = self.var_id2gpm[var_id] if var_id in self.var_id2gpm else self.var_id2gpm[pf.R_ + var_id]
                 orig_bounds[var_id] = (var.lb, var.ub)
-                if lb:
+                if lb is not None:
                     var.lb = lb
-                if ub:
+                if ub is not None:
                     var.ub = ub
         else:
             for var_id, (lb, ub) in variable_bounds.items():
                 assert var_id in self.model.reactions, f'{var_id} not found'
                 rxn = self.model.reactions.get_by_id(var_id)
                 orig_bounds[var_id] = rxn.bounds
-                if lb and ub:
+                if (lb is not None) and (ub is not None):
                     rxn.bounds = (lb, ub)
-                elif lb:
+                elif lb is not None:
                     rxn.lower_bound = lb
-                elif ub:
+                elif ub is not None:
                     rxn.upper_bound = ub
         return orig_bounds
 
