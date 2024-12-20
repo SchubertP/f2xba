@@ -29,6 +29,8 @@ from ..uniprot.uniprot_data import UniprotData
 from ..utils.mapping_utils import get_srefs, parse_reaction_string, load_parameter_file
 from ..utils.calc_mw import calc_mw_from_formula
 from ..biocyc.biocyc_data import BiocycData
+import f2xba.prefixes as pf
+
 
 FBC_BOUND_TOL = '.10e'
 
@@ -1582,7 +1584,7 @@ class XbaModel:
 
         return rev_r
 
-    def _create_arm_reaction(self, orig_r):
+    def _create_arm_reaction_old(self, orig_r):
         """Create optional arm reactions and connecting pseudo metabolites.
 
         Arm reactions is in series to several isoenzyme reactions. It controls
@@ -1630,31 +1632,90 @@ class XbaModel:
 
         return arm_r
 
-    def add_isoenzyme_reactions(self, create_arm=True):
+    def add_arm_reactions(self):
+        """Add arm reactions to control combined flux of iso-reactions.
+
+        Arm reactions can be added to combine flux of iso-reactions in forward/reverse direction.
+        This introduces new reactions 'R_<rid>_arm' and 'R_<rid>_arm_REV'
+        This introduces new pseudo metabolites 'M_pmet_<rid>_<cid>' and 'M_pmet_<rid>_REV<cid>'
+        """
+        arm_data = defaultdict(list)
+        for rid, r in self.reactions.items():
+            if re.match(pf.V_, rid) is None:
+                if re.match(r'.*_iso\d+', rid):
+                    arm_rid = re.sub(r'_iso\d+', '_arm', rid)
+                    arm_data[arm_rid].append(rid)
+
+        reactions_to_add = {}
+        for arm_rid, iso_rids in arm_data.items():
+            iso_r = self.reactions[iso_rids[0]]
+
+            # add pseudo metabolite to connect arm reaction to iso reactions
+            product_srefs = {sid: stoic for sid, stoic in iso_r.products.items()
+                             if re.match('C_', sid) is None}
+            cid = self.species[sorted(list(product_srefs))[0]].compartment
+            ridx = re.sub(f'(^{pf.R_})|(_arm)', '', arm_rid)
+
+            # support reaction names having compartment id as postfix
+            pmet_sid = f'M_pmet_{ridx}'
+            if '_' not in ridx or ridx.rsplit('_', 1)[1] != cid:
+                pmet_sid += f'_{cid}'
+            pmet_name = f'pseudo metabolite for arm reaction of {ridx}'
+            pmet_dict = {'id': pmet_sid, 'name': pmet_name, 'compartment': cid,
+                         'hasOnlySubstanceUnits': False, 'boundaryCondition': False, 'constant': False}
+            self.species[pmet_sid] = SbmlSpecies(pd.Series(pmet_dict, name=pmet_sid))
+
+            # add arm reaction to control overall flux, based on original reaction
+            arm_r = SbmlReaction(pd.Series(iso_r.to_dict(), name=arm_rid), self.species)
+            arm_r.orig_rid = re.sub(r'_iso\d+', '', iso_r.id)
+            if hasattr(arm_r, 'name'):
+                arm_r.name = re.sub(r'iso\d+', 'arm', arm_r.name)
+            if hasattr(arm_r, 'metaid'):
+                arm_r.metaid = f'meta_{arm_rid}'
+
+            # arm reaction is connected behind sub-reactions. It produces the original products.
+            arm_r.reactants = {pmet_sid: 1.0}
+            arm_r.products = product_srefs
+            arm_r.gene_product_assoc = None
+            reactions_to_add[arm_rid] = arm_r
+
+            # connect iso reactions to arm reactions
+            for iso_rid in iso_rids:
+                iso_r = self.reactions[iso_rid]
+                iso_r.products = {pmet_sid: 1.0}
+
+        # add arm reactions to the model
+        for new_rid, new_r in reactions_to_add.items():
+            self.reactions[new_rid] = new_r
+        print(f'{len(reactions_to_add):4d} arm reactions added, together with pseudo metabolites')
+
+    def add_isoenzyme_reactions(self):
         """Add reactions catalyzed by isoenzymes.
 
         This will only affect reactions catalyzed by isoenzymes.
         We only split a reaction into isoreactions, if kcat value are defined.
 
+        in non-TD constraint models, e.g. GECKO, a reversible FBA reaction catalyzed by several iso-enzymes will
+        be split in reversible sub-reactions, one per isoenzyme. A subsequent call in ECM configuration can
+        split these reversible sub-reactions in irreversible forward/reverse sub reactions
+
+        TD configuration may split reversible FBA reactions catalyzed by several iso-enzymes in irreversible
+        forward/reverse reactions. Subsequenlly, this function (add_isoenzyme_reactions) will split
+        irreversible forward/reverse reactions in irreversible forward/reverse sub-reactions
+
         Integration with Thermodynamic FBA (TFA):
             TFA splits TD related reations in fwd/rev (_REV)
-            TFA also split reactions that in base model are not reversible
+            TFA may also split reactions that in base model are not reversible
             TFA adds forward flux coupling constraint (C_FFC_<rid>) as product to fwd reaction
             TFA adds reverse flux coupling constraint (C_RFC_<rid>) as product or rev reaction
-            new reaction ids: for reverse direction add _isox_ and _arm_ prior to _REV
+            new reaction ids: for reverse direction add _isox_ prior to _REV
             keep flux coupling constraints as products in _isox_ reactions
-            have no flux coupling constraints in _arm_ reaction
 
         reactions catalyzed by isoenzymes get split up
         - new reactions are created based on original reaction
-        - one new arm reaction to control overall flux (optional, see create_arm)
         - several new iso reactions, each catalyzed by a single isoenzyme
-        - one new pseudo metabolite to connect iso reactions with arm reaction (optional, see create_arm)
         - reaction parameters are updated accordingly
         - original reaction is removed
-
-        :param create_arm: Flag to indicate if arm reactions and pseudo metabolites should be created
-        :type create_arm: bool (default: True)
         """
         reactions_to_add = {}
         rids_to_del = []
@@ -1666,24 +1727,15 @@ class XbaModel:
                 if valid_kcatsf + valid_kcatsr > 0:
                     orig_r_dict = orig_r.to_dict()
                     rids_to_del.append(rid)
-                    iso_arm_products = None
-                    if create_arm is True:
-                        arm_r = self._create_arm_reaction(orig_r)
-                        reactions_to_add[arm_r.id] = arm_r
-                        constraint_refs = {sid: stoic for sid, stoic in orig_r.products.items() if re.match('C_', sid)}
-                        iso_arm_products = arm_r.reactants | constraint_refs
-
                     # add iso reactions, one per isoenzyme
-                    # support iso and arm reactions after reaction has been split (i.e. <base_rid>_REV)
+                    # support iso reactions after reaction has been split by TD configuration
                     for idx, eid in enumerate(orig_r.enzymes):
                         if re.search('_REV$', rid):
-                            iso_rid = f"{re.sub('_REV$', '', rid)}_iso{idx+1}_REV"
+                            iso_rid = re.sub('_REV$', f'_iso{idx+1}_REV', rid)
                         else:
                             iso_rid = f"{rid}_iso{idx + 1}"
                         iso_r = SbmlReaction(pd.Series(orig_r_dict, name=iso_rid), self.species)
                         iso_r.orig_rid = rid
-                        if create_arm is True:
-                            iso_r.products = iso_arm_products
                         if hasattr(iso_r, 'name'):
                             iso_r.name += f' (iso{idx+1})'
                         if hasattr(iso_r, 'metaid'):
@@ -1699,7 +1751,7 @@ class XbaModel:
                             iso_r.kcatsr = [orig_r.kcatsr[idx]] if orig_r.kcatsr is not None else None
                         reactions_to_add[iso_rid] = iso_r
 
-        # add arm (optional) and iso reactions to the model
+        # add iso reactions to the model
         for new_rid, new_r in reactions_to_add.items():
             self.reactions[new_rid] = new_r
 
@@ -1739,14 +1791,6 @@ class XbaModel:
                     if self.parameters[r.fbc_upper_bound].value < 0.0:
                         r.modify_bounds({'ub': zero_flux_bnd_pid})
                     r.kcat = None if r.kcatsf is None or not np.isfinite(r.kcatsf[0]) else r.kcatsf[0]
-            elif rid.endswith('arm'):
-                if r.reversible:
-                    self.split_reversible_reaction(r)
-                else:
-                    if self.parameters[r.fbc_lower_bound].value < 0.0:
-                        r.modify_bounds({'lb': zero_flux_bnd_pid})
-                    if self.parameters[r.fbc_upper_bound].value < 0.0:
-                        r.modify_bounds({'ub': zero_flux_bnd_pid})
 
     def remove_unused_gps(self):
         """Remove unused genes, proteins, enzymes from the model

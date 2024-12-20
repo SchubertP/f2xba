@@ -42,6 +42,7 @@ class EcModel:
         :type xba_model: Class f2xba.XbaModel
         """
         self.model = xba_model
+        self.arm_flag = False
 
     def configure(self, fname):
         """Convert the xba model to an enzyme constraint model using parameters in fname.
@@ -81,17 +82,28 @@ class EcModel:
         ecm_type = general_params.get('ecm_type', 'GECKO')
         p_total = general_params.get('p_total', 0.5)
         avg_enz_sat = general_params.get('avg_enz_sat', 0.5)
+        self.arm_flag = general_params.get('arm_flag', False)
+
+        if 'pm2totpm' in general_params:
+            pm2totpm = general_params['pm2totpm']
+        else:
+            assert 'pm2totpm_val_or_paxdb' in general_params, 'parameter "pm2totpm_val_or_paxdb" is required'
+            if type(general_params['pm2totpm_val_or_paxdb']) is float:
+                pm2totpm = general_params['pm2totpm_val_or_paxdb']
+            else:
+                pm2totpm = self.get_modelled_protein_mass_fraction(general_params['pm2totpm_val_or_paxdb'])
+        print(f'modeled protein fraction of total protein mass {pm2totpm:.4f} g/g')
 
         if 'rescale_reactions' in ecm_params:
             self._rescale_reactions(ecm_params['rescale_reactions'])
 
         # create enzyme constraint model
         if ecm_type in ['GECKO', 'MOMENTmr']:
-            self.model.add_isoenzyme_reactions(create_arm=True)
+            self.model.add_isoenzyme_reactions()
             self.model.make_irreversible()
             self._add_gecko_protein_species()
         elif ecm_type == 'MOMENT':
-            self.model.add_isoenzyme_reactions(create_arm=True)
+            self.model.add_isoenzyme_reactions()
             self._add_moment_protein_species()
             self.model.make_irreversible()
         elif ecm_type == 'ccFBA':
@@ -103,18 +115,11 @@ class EcModel:
             print(f'model not constructed, invalid ecm_type {ecm_type}')
             return False
 
-        if 'p_abundance_fname' in general_params:
-            pax_db_fname = general_params['p_abundance_fname']
-            pm2totpm = self.get_modelled_protein_mass_fraction(pax_db_fname)
-        else:
-            assert 'pm2totpm' in general_params, ("to determine modeled protein mass fraction, either provide in "
-                                                  "ECM parameters sheet 'general' a corresponding value in field "
-                                                  "'pm2totpm' or a PAXdb file name in field 'p_abundance_fname'")
-            pm2totpm = general_params['pm2totpm']
-        print(f'modeled protein fraction {pm2totpm:.4f} g/g')
+        if self.arm_flag is True:
+            self.model.add_arm_reactions()
+
         protein_pool = p_total * pm2totpm
         print(f'protein constraint: {protein_pool*1000.0:.2f} mg/gDW - modeled protein')
-
         self._add_total_protein_constraint(protein_pool)
         self._reaction_enzyme_coupling(avg_enz_sat)
 

@@ -140,4 +140,3 @@ class EcmResults(Results):
         df_net_fluxes = pd.DataFrame(net_flux_data.values(), index=list(net_flux_data), columns=cols)
         df_net_fluxes.index.name = 'rid'
         return df_net_fluxes
-

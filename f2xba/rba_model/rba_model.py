@@ -249,7 +249,7 @@ class RbaModel:
 
         # split reactions into (reversible) isoreactions
         n_r = len(self.model.reactions)
-        self.model.add_isoenzyme_reactions(create_arm=False)
+        self.model.add_isoenzyme_reactions()
         n_isor = len(self.model.reactions)
         print(f'{n_r} reactions -> {n_isor} isoreactions, including pseudo reactions')
 
