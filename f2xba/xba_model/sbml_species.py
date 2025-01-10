@@ -4,9 +4,9 @@ based on XbaSpecies implementation
 
 Peter Schubert, HHU Duesseldorf, February 2023
 """
+import re
 
 from .sbml_sbase import SbmlSBase
-from sbmlxdf.misc import get_miriam_refs
 
 
 class SbmlSpecies(SbmlSBase):
@@ -50,18 +50,17 @@ class SbmlSpecies(SbmlSBase):
         if 'fbcChemicalFormula' in s_species:
             self.formula = s_species['fbcChemicalFormula']
 
-        # additional attributes
-        if 'miriamAnnotation' in s_species:
-            chebi_refs = get_miriam_refs(s_species['miriamAnnotation'], 'chebi', 'bqbiol:is')
-            self.chebi_refs = [ref.split(':')[1] for ref in chebi_refs]
-            kegg_refs = get_miriam_refs(s_species['miriamAnnotation'], 'kegg.compound', 'bqbiol:is')
-            self.kegg_refs = [ref for ref in kegg_refs]
-            seed_refs = get_miriam_refs(s_species['miriamAnnotation'], 'seed.compound', 'bqbiol:is')
-            self.seed_refs = [ref for ref in seed_refs]
-        else:
-            self.chebi_refs = []
-            self.kegg_refs = []
-            self.seed_refs = []
+    @property
+    def chebi_refs(self):
+        return [re.sub('CHEBI:', '', ref) for ref in self.miriam_annotation.get_qualified_refs('bqbiol:is', 'chebi')]
+
+    @property
+    def kegg_refs(self):
+        return self.miriam_annotation.get_qualified_refs('bqbiol:is', 'kegg.compound')
+
+    @property
+    def seed_refs(self):
+        return self.miriam_annotation.get_qualified_refs('bqbiol:is', 'seed.compound')
 
     def modify_attribute(self, attribute, value):
         """modify attribute value.

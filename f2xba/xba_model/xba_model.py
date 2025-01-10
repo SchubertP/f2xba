@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 import sbmlxdf
-from sbmlxdf.misc import get_miriam_refs
 
 from .sbml_unit_def import SbmlUnitDef
 from .sbml_compartment import SbmlCompartment
@@ -190,9 +189,17 @@ class XbaModel:
         general_params = xba_params['general']['value'].to_dict() if 'general' in xba_params.keys() else {}
         self.cofactor_flag = general_params.get('cofactor_flag', False)
 
+        #####################
+        # Update References #
+        #####################
+
+        if 'bulk_mappings_fname' in general_params:
+            self.update_references(general_params['bulk_mappings_fname'])
+
         #############################
         # modify/correct components #
         #############################
+
         protect_ids = []
         if 'modify_attributes' in xba_params:
             self.modify_attributes(xba_params['modify_attributes'], 'gp')
@@ -341,6 +348,67 @@ class XbaModel:
         self.clean(protect_ids)
         self.print_size()
         print('>>> BASELINE XBA model configured!\n')
+
+    def update_references(self, bulk_mappings_fname):
+        """Bulk update of references in the model, mainly MiriamAnnotation data.
+
+        Excel spreadsheet document with bulk mapping tables. Supported tables:
+          'fbcGeneProducts', 'species', 'reactions', 'groups'
+
+        Attributes of existing components will be updated if value in supplied table is
+        different from None. For updating references in Miriam Annotations, supply new reference
+        in data column starting with 'MA:' followed by the database reference, e.g.,
+        for updating kegg compound ids on 'species', provide new kegg id in column 'MA:kegg.compound'
+
+        'fbcGeneProducts': gene products ids newly introduced will be created, allowing replacement
+        of gene product ids. Note: 'gene_product_assoc' in 'reactions' need to be updated as well.
+
+        'groups' is special, as it will be used to (re-)create complete GROUPS component.
+        Existing data will be overwritten.
+
+        :param bulk_mappings_fname: file name of Excel spreadsheet document containing mapping tables.
+        :type bulk_mappings_fname: str
+        """
+
+        bulk_mappings = load_parameter_file(bulk_mappings_fname, ['fbcGeneProducts', 'species', 'reactions', 'groups'])
+
+        # create gene products, if they do not yet exist
+        count = 0
+        if 'fbcGeneProducts' in bulk_mappings and 'label' in bulk_mappings['fbcGeneProducts'].columns:
+            df_mapping = bulk_mappings['fbcGeneProducts']
+            for gp_id, row in df_mapping.iterrows():
+                if gp_id not in self.gps:
+                    self.gps[gp_id] = FbcGeneProduct(pd.Series({'id': gp_id, 'label': row['label']}, name=gp_id))
+                    count += 1
+            print(f'{count:4d} gene products added to the model based on supplied references')
+
+        component2instances = {'reactions': self.reactions, 'species': self.species, 'fbcGeneProducts': self.gps}
+        for component, instances in component2instances.items():
+            if component in bulk_mappings:
+                df_mapping = bulk_mappings[component]
+                annot_refs = {col for col in df_mapping.columns if re.match('MA:', col)}
+                attributes = set(df_mapping.columns).difference(annot_refs)
+                count = 0
+                for component_id, row in df_mapping.iterrows():
+                    if component_id in instances:
+                        instance = instances[component_id]
+                        for attr in attributes:
+                            if type(row.get(attr)) is str:
+                                instance.modify_attribute(attr, row[attr])
+                        for annot_ref in annot_refs:
+                            if type(row[annot_ref]) is str:
+                                instance.miriam_annotation.replace_refs('bqbiol:is', re.sub('^MA:', '', annot_ref),
+                                                                        row[annot_ref])
+                        count += 1
+                print(f'{count:4d} {component} records updated with supplied references')
+
+        # this actually (re-) creates GROUPS component. Any original data will be overwritten
+        if 'groups' in bulk_mappings:
+            df_groups = bulk_mappings['groups'].reset_index()
+            self.groups = {row['id']: SbmlGroup(row) for _, row in df_groups.iterrows()}
+            if 'name=groups' not in self.sbml_container.packages:
+                self.sbml_container.packages += '; name=groups, version=1, required=False'
+            print(f'{len(df_groups):4d} groups with reaction data added to the model')
 
     def get_compartments(self, component_type):
         """Get lists of component ids per compartment.
@@ -534,7 +602,7 @@ class XbaModel:
         for rid, r in self.reactions.items():
             if len(r.enzymes) > 0:
                 name = getattr(r, 'name', '')
-                ecns = ', '.join(get_miriam_refs(r.miriam_annotation, 'ec-code', 'bqbiol:is'))
+                ecns = ', '.join(r.miriam_annotation.get_qualified_refs('bqbiol:is', 'ec-code'))
                 for idx, enzid in enumerate(sorted(r.enzymes)):
                     key = f'{rid}_iso{idx + 1}' if len(r.enzymes) > 1 else rid
                     e = self.enzymes[enzid]
@@ -1015,7 +1083,7 @@ class XbaModel:
         """Create proteins related to gene products used in the model.
 
         For each gene product create a related protein
-        - if cooresponding uniprot record exists (loaded from UniProt file), use uniprot id
+        - if corresponding uniprot record exists (loaded from UniProt file), use uniprot id
           as reference and configure model protein with data from uniprot record
           - try extracting the uniprot id from gene product MiriamAnnotation
           - alternatively check mapping of uniprot records to gene labels
@@ -1028,15 +1096,14 @@ class XbaModel:
         n_created = 0
         for gp in self.gps.values():
 
-            # in case of invalid uniprot id, assign uid based on uniprot_data, alternatively create dummy id
+            # in case of invalid uniprot id, assign uid based on uniprot_data
             if gp.uid not in self.uniprot_data.proteins:
                 if gp.label in self.uniprot_data.locus2uid:
-                    gp.uid = self.uniprot_data.locus2uid[gp.label]
-                else:
-                    gp.uid = f'GP{gp.label}'
+                    gp.miriam_annotation.replace_refs('bqbiol:is', 'uniprot', self.uniprot_data.locus2uid[gp.label])
 
             # add protein related to gene product to model proteins
-            if gp.uid not in self.proteins:
+            pid = gp.uid
+            if pid not in self.proteins:
                 cid = None
 
                 # for gene products used in reaction gene product rules, use compartment of first reaction
@@ -1050,8 +1117,8 @@ class XbaModel:
                 if cid is not None:
                     p = None
                     # try retrieving protein data from Uniprot Proteins (normal case)
-                    if gp.uid in self.uniprot_data.proteins:
-                        p = Protein(self.uniprot_data.proteins[gp.uid], gp.label, cid)
+                    if pid in self.uniprot_data.proteins:
+                        p = Protein(self.uniprot_data.proteins[pid], gp.label, cid)
 
                     # as fallback, retrieve protein data from NCBI Proteins
                     elif gp.label in self.ncbi_data.label2locus:
@@ -1060,7 +1127,7 @@ class XbaModel:
                     else:
                         proteins_not_found.append(gp.id)
                     if p:
-                        self.proteins[gp.uid] = p
+                        self.proteins[pid] = p
                         gp.add_notes(f'[{p.gene_name}], {p.name}')
                         n_created += 1
 

@@ -7,6 +7,7 @@ Computational Cell Design, HHU Duesseldorf
 """
 import re
 from abc import ABC, abstractmethod
+from .miriam_annotation import MiriamAnnotation
 
 
 class SbmlSBase(ABC):
@@ -24,8 +25,7 @@ class SbmlSBase(ABC):
             self.sboterm = s_data['sboterm']
         if s_data.get('metaid') is not None:
             self.metaid = s_data['metaid']
-        if s_data.get('miriamAnnotation') is not None:
-            self.miriam_annotation = s_data['miriamAnnotation']
+        self.miriam_annotation = MiriamAnnotation(s_data.get('miriamAnnotation'))
         if s_data.get('xmlAnnotation') is not None:
             self.xml_annotation = s_data['xmlAnnotation']
         if s_data.get('notes') is not None:
@@ -40,10 +40,10 @@ class SbmlSBase(ABC):
             data['name'] = self.name
         if hasattr(self, 'sboterm'):
             data['sboterm'] = self.sboterm
-        if hasattr(self, 'metaid'):
-            data['metaid'] = self.metaid
-        if hasattr(self, 'miriam_annotation'):
-            data['miriamAnnotation'] = self.miriam_annotation
+        annot_str = self.miriam_annotation.get_annot_str()
+        if len(annot_str) > 0:
+            data['miriamAnnotation'] = annot_str
+            data['metaid'] = getattr(self, 'metaid', f'meta_{self.id}')
         if hasattr(self, 'xml_annotation'):
             data['xmlAnnotation'] = self.xml_annotation
         if hasattr(self, 'notes'):

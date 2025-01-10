@@ -68,6 +68,10 @@ class SbmlReaction(SbmlSBase):
         self.orig_rid = self.id
 
     @property
+    def ec_codes(self):
+        return self.miriam_annotation.get_qualified_refs('bqbiol:is', 'ec-code')
+
+    @property
     def reactants(self):
         return self._reactants
 

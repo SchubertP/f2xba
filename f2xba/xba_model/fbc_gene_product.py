@@ -5,7 +5,6 @@ Peter Schubert, HHU Duesseldorf, July 2022
 import re
 
 from .sbml_sbase import SbmlSBase
-from sbmlxdf.misc import get_miriam_refs
 
 
 class FbcGeneProduct(SbmlSBase):
@@ -13,9 +12,12 @@ class FbcGeneProduct(SbmlSBase):
     def __init__(self, s_gp):
         super().__init__(s_gp)
         self.label = s_gp['label']
-        ids = get_miriam_refs(s_gp.get('miriamAnnotation'), 'uniprot', 'bqbiol:is')
-        self.uid = ids[0] if len(ids) > 0 else None
         self.compartment = s_gp.get('compartment')
+
+    @property
+    def uid(self):
+        uids = self.miriam_annotation.get_qualified_refs('bqbiol:is', 'uniprot')
+        return uids[0] if len(uids) > 0 else f'GP_{self.label}'
 
     def modify_gene_label(self, pattern, replacement):
         if re.search(pattern, self.label):

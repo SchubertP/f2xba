@@ -10,7 +10,7 @@ from .ncbi_ft_record import NcbiFtRecord
 
 map_complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
 record_types = {'gene', 'mRNA', 'CDS', 'tRNA', 'rRNA', 'ncRNA'}
-attr_types = {'gene', 'locus_tag', 'old_locus_tag', 'product', 'db_xref', 'EC_number', 'note'}
+attr_types = {'gene', 'locus_tag', 'old_locus_tag', 'product', 'protein_id', 'db_xref', 'EC_number', 'note'}
 
 
 class NcbiFeature:
@@ -34,6 +34,7 @@ class NcbiFeature:
         self.locus = None
         self.gene = None
         self.product = None
+        self.protein_id = None
         self.ecns = None
         self.xrefs = None
         self.old_locus = None
@@ -54,7 +55,7 @@ class NcbiFeature:
     def add_attribute(self, record_type, attr_id, attr_val):
         """Add a collected attribute/value pair to current record.
 
-        Only specified attribures 'attr_types' will be collected
+        Only specified attributes 'attr_types' will be collected
 
         :param record_type:
         :param attr_id:
@@ -84,6 +85,7 @@ class NcbiFeature:
             self.spliced_length = record.length
             self.spliced_nt_composition = record.get_composition(chrom_seq)
             self.product = getattr(record, 'product', None)
+            self.protein_id = getattr(record, 'protein_id', None)
             self.ecns = getattr(record, 'EC_number', None)
             self.xrefs = getattr(record, 'db_xref', None)
             self.note = getattr(record, 'note', None)

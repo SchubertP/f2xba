@@ -146,6 +146,7 @@ class UniprotProtein:
         self.ec_numbers = get_refs(s_data.get('EC number'))
         self.biocyc_ids = get_refs(s_data.get('BioCyc'))
         self.location = get_location(s_data.get(['Subcellular location [CC]']))
+        self.subunit = s_data['Subunit structure']
         self.go_components = get_go_terms(s_data.get('Gene Ontology (cellular component)'))
         self.go_processes = get_go_terms(s_data.get('Gene Ontology (biological process)'))
         self.go_functions = get_go_terms(s_data.get('Gene Ontology (molecular function)'))
