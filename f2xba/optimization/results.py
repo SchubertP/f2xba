@@ -73,24 +73,27 @@ class Results(ABC):
         :return: Reaction Fluxes for several conditions with addition reaction data
         :rtype: pandas DataFrame
         """
-        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh']
+        if net is True:
+            info_cols = ['reaction_str', 'gpr']
+        else:
+            info_cols = ['reaction_str', 'net_rid', 'gpr']
+        n_info_cols = len(info_cols)
         df_fluxes = None
-        info_cols = 2
         for condition, solution in self.results.items():
             df = self.get_net_fluxes(solution) if net is True else self.get_fluxes(solution)
             if df_fluxes is None:
-                df_fluxes = df[cols].copy()
+                df_fluxes = df[info_cols + ['mmol_per_gDWh']].copy()
             else:
                 df_fluxes = pd.concat([df_fluxes, df['mmol_per_gDWh']], axis=1)
             df_fluxes.rename(columns={'mmol_per_gDWh': f'{condition}'}, inplace=True)
-        mean = df_fluxes.iloc[:, info_cols:].mean(axis=1).values
-        stdev = df_fluxes.iloc[:, info_cols:].std(axis=1).values
-        df_fluxes.insert(info_cols, 'mean mmol_per_gDWh', mean)
-        df_fluxes.insert(info_cols + 1, 'abs_mean mmol_per_gDWh', abs(mean))
-        df_fluxes.insert(info_cols + 2, 'stdev', stdev)
+        mean = df_fluxes.iloc[:, n_info_cols:].mean(axis=1).values
+        stdev = df_fluxes.iloc[:, n_info_cols:].std(axis=1).values
+        df_fluxes.insert(n_info_cols, 'mean mmol_per_gDWh', mean)
+        df_fluxes.insert(n_info_cols + 1, 'abs_mean mmol_per_gDWh', abs(mean))
+        df_fluxes.insert(n_info_cols + 2, 'stdev', stdev)
         df_fluxes.sort_values(by='abs_mean mmol_per_gDWh', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_fluxes) + 1))
-        df_fluxes.insert(info_cols, column='rank', value=rank)
+        df_fluxes.insert(n_info_cols, column='rank', value=rank)
         df_fluxes.index.name = 'rid'
         return df_fluxes
 
@@ -106,7 +109,7 @@ class Results(ABC):
         """Collect protein results, encriched with data from proteomics data set, if provided.
         """
         df_proteins = None
-        info_cols = 0
+        n_info_cols = 0
         for condition, solution in self.results.items():
             df = self.get_predicted_protein_data(solution)
             if df_proteins is None:
@@ -122,22 +125,22 @@ class Results(ABC):
                         data.append([gene, uid, gene_name, description, mw_kda, exp_mpmf, exp_rank])
                     cols = ['gene', 'uniprot', 'gene_name', 'description', 'mw_kDa', 'exp_avg_mpmf', 'exp_rank']
                     df_proteins = pd.DataFrame(data, columns=cols).set_index('gene')
-                    info_cols = len(cols) - 1
+                    n_info_cols = len(cols) - 1
                 else:
                     cols = [col for col in df.columns if col in {'uniprot', 'gene_name', 'mw_kDa'}]
                     df_proteins = df[cols].copy()
-                    info_cols = len(cols)
+                    n_info_cols = len(cols)
             df_proteins = pd.concat([df_proteins, df[units]], axis=1)
             df_proteins.rename(columns={units: f'{condition}'}, inplace=True)
 
-        mean = df_proteins.iloc[:, info_cols:].mean(axis=1).values
-        stdev = df_proteins.iloc[:, info_cols:].std(axis=1).values
-        df_proteins.insert(info_cols, f'mean {units}', mean)
-        df_proteins.insert(info_cols + 1, 'stdev', stdev)
+        mean = df_proteins.iloc[:, n_info_cols:].mean(axis=1).values
+        stdev = df_proteins.iloc[:, n_info_cols:].std(axis=1).values
+        df_proteins.insert(n_info_cols, f'mean {units}', mean)
+        df_proteins.insert(n_info_cols + 1, 'stdev', stdev)
         df_proteins.index.name = 'gene'
         df_proteins.sort_values(by=f'mean {units}', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_proteins) + 1))
-        df_proteins.insert(info_cols, column='pred_rank', value=rank)
+        df_proteins.insert(n_info_cols, column='pred_rank', value=rank)
         return df_proteins
 
     def get_predicted_species_conc(self, solution):
@@ -167,22 +170,22 @@ class Results(ABC):
         :rtype: pandas DataFrame
         """
         df_conc = None
-        info_cols = 0
+        n_info_cols = 0
         for condition, solution in self.results.items():
             df = self.get_predicted_species_conc(solution)
             if df_conc is None:
                 df_conc = df.copy()
-                info_cols = df_conc.shape[1] - 1
+                n_info_cols = df_conc.shape[1] - 1
             else:
                 df_conc = pd.concat([df_conc, df['mmol_per_l']], axis=1)
             df_conc.rename(columns={'mmol_per_l': f'{condition}'}, inplace=True)
-        mean = df_conc.iloc[:, info_cols:].mean(axis=1).values
-        stdev = df_conc.iloc[:, info_cols:].std(axis=1).values
-        df_conc.insert(info_cols, 'mean mmol_per_l', mean)
-        df_conc.insert(info_cols + 1, 'stdev', stdev)
+        mean = df_conc.iloc[:, n_info_cols:].mean(axis=1).values
+        stdev = df_conc.iloc[:, n_info_cols:].std(axis=1).values
+        df_conc.insert(n_info_cols, 'mean mmol_per_l', mean)
+        df_conc.insert(n_info_cols + 1, 'stdev', stdev)
         df_conc.sort_values(by='mean mmol_per_l', ascending=False, inplace=True)
         rank = np.array(range(1, len(df_conc) + 1))
-        df_conc.insert(info_cols, 'rank', rank)
+        df_conc.insert(n_info_cols, 'rank', rank)
         df_conc.index.name = 'sid'
         return df_conc
 

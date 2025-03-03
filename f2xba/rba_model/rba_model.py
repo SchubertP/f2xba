@@ -56,13 +56,14 @@ class RbaModel:
     """
 
     def __init__(self, xba_model):
-        """Instantiate a RBA model
+        """Instantiate the RBA model
 
         XbaModel created from a genome-scale metabolic model and
         adequately configured.
 
-        :param xba_model: XbaModel
-        :type xba_model: Class f2xba.XbaModel
+        :param xba_model: a handle to the :class:`f2xba.XbaModel` object
+            containing information derived from the genome-scale metabolic model.
+        :type xba_model: class:`f2xba.XbaModel`
         """
         self.model = xba_model
         self.dna = RbaMacromolecules('dna')
@@ -229,10 +230,15 @@ class RbaModel:
         if len(cs_config) > 0:
             print(f'{len(cs_config):4d} compartment(s) added')
 
-        # add gene products required for RBA machineries
+        # add gene products for coenzymes
+        if 'coenzymes' in rba_params:
+            count = self.model.add_gps(rba_params['coenzymes'].set_index('gpid', drop=False))
+            print(f'{count:4d} gene product(s) added for coenzumes')
+            self.model.update_gp_mappings()
+
+        # add gene products for process machineries
         df_mach_data = rba_params['machineries']
-        df_add_gps = df_mach_data[df_mach_data['macromolecules'] == 'proteins'].set_index('gpid')
-        count = self.model.add_gps(df_add_gps)
+        count = self.model.add_gps(df_mach_data[df_mach_data['macromolecules'] == 'proteins'].set_index('gpid'))
         if count > 0:
             print(f'{count:4d} gene product(s) added for process machineries')
             self.model.update_gp_mappings()
@@ -269,10 +275,12 @@ class RbaModel:
         :param fname: file name of Excel document with RBA specific parameters
         :type fname: str
         """
-        sheet_names = ['general', 'trna2locus', 'compartments', 'targets',
+        sheet_names = ['general', 'trna2locus', 'coenzymes', 'compartments', 'targets',
                        'functions', 'processing_maps', 'processes', 'machineries']
+        required_sheets = {'general', 'trna2locus', 'compartments', 'targets',
+                           'functions', 'processing_maps', 'processes', 'machineries'}
         rba_params = load_parameter_file(fname, sheet_names)
-        missing_sheets = set(sheet_names).difference(set(rba_params.keys()))
+        missing_sheets = required_sheets.difference(set(rba_params.keys()))
         if len(missing_sheets) > 0:
             print(f'missing required tables {missing_sheets}')
             raise ValueError
@@ -767,7 +775,7 @@ class RbaModel:
     def _couple_weights(self, srefs):
         """Calculate enzymes/process machines weight and couple to density constraints.
 
-        :param srefs: species reference with reactants and stoic coefficient of compostion
+        :param srefs: species reference with reactants and stoic coefficient of composition
         :type srefs: dict (key: mmid / str, val: stoic / float)
         :return: density constraints affected by weight
         :rtype: dict: (key: density constraint id / str, val: stoic / float)
@@ -1026,7 +1034,7 @@ class RbaModel:
         """
         # target concentration variables are constants, i.e. fixed at value 1
         var_id = pf.V_TSMC
-        one_umol_pid = self.model.get_fbc_bnd_pid(1.0e-3, 'mmol_per_gDW', 'one_umol_aa_per_gDW', reuse=False)
+        one_umol_pid = self.model.get_fbc_bnd_pid(1.0e-3, 'mmol_per_gDW', 'one_umol_per_gDW', reuse=False)
         scale = 1000.0
 
         conc_targets = {}

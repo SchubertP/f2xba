@@ -160,7 +160,7 @@ class BiocycData:
     def set_enzyme_composition(self):
         """Retrieve enzyme gene and cofactor composition on protein data
 
-        Cofactor composition in Ecocyc protein export is not complete.
+        Cofactor composition in Biocyc protein export is not complete.
         Instead, we use the cofactor composition information stored in Uniprot
         """
         for protein_id, p in self.proteins.items():

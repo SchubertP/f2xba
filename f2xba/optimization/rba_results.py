@@ -33,9 +33,8 @@ class RbaResults(Results):
         self.gene2name = {row['label']: row.get('name')
                           for gpid, row in self.optim.m_dict['fbcGeneProducts'].iterrows()}
 
-    # TODO combine get_fluxes, get_net_fluxes
     def get_fluxes(self, solution):
-        """Get metabolic isoreaction fluxes from a single optmizatin solution.
+        """Collect metabolic isoreaction fluxes for a single optimization solution.
 
         Excluding flux information for variables starting with 'V_'
 
@@ -65,16 +64,16 @@ class RbaResults(Results):
                 else:
                     # metabolic reaction fluxes are considered to be in units of mmol/gDWh
                     mmol_per_gdwh = flux
-                reaction_str = self.optim.rdata[rid]['reaction_str']
-                gpr = self.optim.rdata[rid]['gpr']
-                fluxes[rid] = [reaction_str, gpr, mmol_per_gdwh, abs(mmol_per_gdwh)]
-        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+                rdata = self.optim.rdata[rid]
+                fluxes[rid] = [rdata['reaction_str'], rdata['net_rid'], rdata['gpr'],
+                               mmol_per_gdwh, abs(mmol_per_gdwh)]
+        cols = ['reaction_str', 'net_rid', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=cols)
         df_fluxes.index.name = 'reaction'
         return df_fluxes
 
     def get_net_fluxes(self, solution):
-        """Get net metabolic reaction fluxes from a single optmizatin solution.
+        """Collect net metabolic reaction fluxes for a single optimization solution.
 
         Combinding fluxes of isoreactions on reaction level.
         Including forward/reverse fluxes
@@ -234,18 +233,19 @@ class RbaResults(Results):
             return None
 
         df_enzymes = None
-        info_cols = 3
+        info_cols = ['mw_kDa', 'reaction_str', 'gpr']
+        n_info_cols = len(info_cols)
         for condition, solution in self.results.items():
             df = self.get_predicted_enzyme_usage(solution)
             if df_enzymes is None:
-                df_enzymes = df[['mw_kDa', 'reaction_str', 'gpr', units]].copy()
+                df_enzymes = df[info_cols + [units]].copy()
             else:
                 df_enzymes = pd.concat([df_enzymes, df[units]], axis=1)
             df_enzymes.rename(columns={units: f'{condition}'}, inplace=True)
-        mean = df_enzymes.iloc[:, info_cols:].mean(axis=1).values
-        stdev = df_enzymes.iloc[:, info_cols:].std(axis=1).values
-        df_enzymes.insert(info_cols, f'mean {units}', mean)
-        df_enzymes.insert(info_cols + 1, 'stdev', stdev)
+        mean = df_enzymes.iloc[:, n_info_cols:].mean(axis=1).values
+        stdev = df_enzymes.iloc[:, n_info_cols:].std(axis=1).values
+        df_enzymes.insert(n_info_cols, f'mean {units}', mean)
+        df_enzymes.insert(n_info_cols + 1, 'stdev', stdev)
         df_enzymes.index.name = 'enzyme'
         df_enzymes.sort_values(by=f'mean {units}', ascending=False, inplace=True)
         return df_enzymes
@@ -296,18 +296,19 @@ class RbaResults(Results):
             return None
 
         df_rnas = None
-        info_cols = 1
+        info_cols = ['mw_kDa']
+        n_info_cols = 1
         for condition, solution in self.results.items():
             df = self.get_predicted_rna_usage(solution)
             if df_rnas is None:
-                df_rnas = df[['mw_kDa', units]].copy()
+                df_rnas = df[info_cols + [units]].copy()
             else:
                 df_rnas = pd.concat([df_rnas, df[units]], axis=1)
             df_rnas.rename(columns={units: f'{condition}'}, inplace=True)
-        mean = df_rnas.iloc[:, info_cols:].mean(axis=1).values
-        stdev = df_rnas.iloc[:, info_cols:].std(axis=1).values
-        df_rnas.insert(info_cols, f'mean {units}', mean)
-        df_rnas.insert(info_cols + 1, 'stdev', stdev)
+        mean = df_rnas.iloc[:, n_info_cols:].mean(axis=1).values
+        stdev = df_rnas.iloc[:, n_info_cols:].std(axis=1).values
+        df_rnas.insert(n_info_cols, f'mean {units}', mean)
+        df_rnas.insert(n_info_cols + 1, 'stdev', stdev)
         df_rnas.index.name = 'rna'
         df_rnas.sort_values(by=f'mean {units}', ascending=False, inplace=True)
         return df_rnas
@@ -345,16 +346,17 @@ class RbaResults(Results):
         """
         col_name = 'capacity mmolAA_per_gDW' if capacity else 'utilization'
         df_occupancy = None
-        info_cols = 0
+        info_cols = []
+        n_info_cols = len(info_cols)
         for condition, solution in self.results.items():
             df = self.get_occupancy(solution)
             if df_occupancy is None:
-                df_occupancy = df[[col_name]].copy()
+                df_occupancy = df[info_cols + [col_name]].copy()
             else:
                 df_occupancy = pd.concat([df_occupancy, df[col_name]], axis=1)
             df_occupancy.rename(columns={col_name: f'{condition}'}, inplace=True)
-        mean = df_occupancy.iloc[:, info_cols:].mean(axis=1).values
-        stdev = df_occupancy.iloc[:, info_cols:].std(axis=1).values
+        mean = df_occupancy.iloc[:, n_info_cols:].mean(axis=1).values
+        stdev = df_occupancy.iloc[:, n_info_cols:].std(axis=1).values
         df_occupancy.insert(0, f'mean {col_name}', mean)
         df_occupancy.insert(1, 'stdev', stdev)
         df_occupancy.sort_values(by=f'mean {col_name}', ascending=False, inplace=True)

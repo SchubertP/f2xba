@@ -104,13 +104,22 @@ class EcmResults(Results):
             return self._collect_protein_results(units)
 
     def get_fluxes(self, solution):
+        """Collect metabolic isoreaction fluxes for a single optimization solution.
+
+        Excluding variables starting with 'V_', and exclude ARM reaction fluxes.
+
+        :param solution: Cobra Optimization solution
+        :type solution: dict
+        :return: Reaction Fluxes with addition reaction data added
+        :rtype: pandas DataFrame
+        """
         fluxes = {}
         for rid, mmol_per_gdwh in solution.fluxes.items():
             if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
-                reaction_str = self.optim.rdata[rid]['reaction_str']
-                gpr = self.optim.rdata[rid]['gpr']
-                fluxes[rid] = [reaction_str, gpr, mmol_per_gdwh, abs(mmol_per_gdwh)]
-        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+                rdata = self.optim.rdata[rid]
+                fluxes[rid] = [rdata['reaction_str'], rdata['net_rid'], rdata['gpr'],
+                               mmol_per_gdwh, abs(mmol_per_gdwh)]
+        cols = ['reaction_str', 'net_rid', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=cols)
         df_fluxes.index.name = 'reaction'
         return df_fluxes

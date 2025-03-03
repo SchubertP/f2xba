@@ -182,6 +182,9 @@ class RbaOptimization(Optimize):
         # configure RBA related medium concentrations
         medium_conc = {sid: ex_metabolites_mmol_per_l.get(re.sub(f'^{pf.M_}', '', sid), 0.0)
                        for ex_rid, sid in self.ex_rid2sid.items()}
+        # TODO all other medium_conc to be set to high value, e.g. 1000
+
+
         self.initial_assignments.set_medium(medium_conc)
 
     def set_growth_rate(self, growth_rate):

@@ -202,6 +202,7 @@ class XbaModel:
 
         protect_ids = []
         if 'modify_attributes' in xba_params:
+            self.modify_attributes(xba_params['modify_attributes'], 'modelAttrs')
             self.modify_attributes(xba_params['modify_attributes'], 'gp')
             self.modify_attributes(xba_params['modify_attributes'], 'species')
             self.modify_attributes(xba_params['modify_attributes'], 'reaction')
@@ -372,7 +373,7 @@ class XbaModel:
 
         bulk_mappings = load_parameter_file(bulk_mappings_fname, ['fbcGeneProducts', 'species', 'reactions', 'groups'])
 
-        # create gene products, if they do not yet exist
+        # create gene products, if they do not yet exist (so we can update attributes subsequently)
         count = 0
         if 'fbcGeneProducts' in bulk_mappings and 'label' in bulk_mappings['fbcGeneProducts'].columns:
             df_mapping = bulk_mappings['fbcGeneProducts']
@@ -380,7 +381,8 @@ class XbaModel:
                 if gp_id not in self.gps:
                     self.gps[gp_id] = FbcGeneProduct(pd.Series({'id': gp_id, 'label': row['label']}, name=gp_id))
                     count += 1
-            print(f'{count:4d} gene products added to the model based on supplied references')
+            if count > 0:
+                print(f'{count:4d} gene products added to the model based on supplied references')
 
         component2instances = {'reactions': self.reactions, 'species': self.species, 'fbcGeneProducts': self.gps}
         for component, instances in component2instances.items():
@@ -643,9 +645,9 @@ class XbaModel:
         for eid, e in self.enzymes.items():
             genes = sorted(list(e.composition))
             composition = '; '.join([f'gene={gene}, stoic={e.composition[gene]}' for gene in genes])
-            enz_comp.append([eid, composition, e.active_sites, e.mw / 1000.0, len(e.rids), e.rids[0]])
+            enz_comp.append([eid, e.name, composition, e.active_sites, e.mw / 1000.0, len(e.rids), e.rids[0]])
 
-        cols = ['eid', 'composition', 'active_sites', 'info_mw_kDa', 'info_n_reactions', 'info_sample_rid']
+        cols = ['eid', 'name', 'composition', 'active_sites', 'info_mw_kDa', 'info_n_reactions', 'info_sample_rid']
         df_enz_comp = pd.DataFrame(enz_comp, columns=cols)
         df_enz_comp.set_index('eid', inplace=True)
 
@@ -984,10 +986,10 @@ class XbaModel:
         """Modify model attributes for specified component ids.
 
         DataFrame structure:
-            index: component id to modify
+            index: component id to modify or None
             columns:
                 'component': one of the supported model components
-                    'gp', 'species', 'reaction', 'protein', 'enzyme',
+                    'modelAttrs', 'gp', 'species', 'reaction', 'protein', 'enzyme',
                     'parameter', 'compartment'
                     'uniprot', 'ncbi'
                 'attribute': the attribute name to modify
@@ -1017,7 +1019,10 @@ class XbaModel:
         value_counts = df_modify['component'].value_counts().to_dict()
         if component_type in value_counts:
             df_modify_attrs = df_modify[df_modify['component'] == component_type]
-            if component_type == 'uniprot':
+            if component_type == 'modelAttrs':
+                for _, row in df_modify_attrs.iterrows():
+                    self.model_attrs[row['attribute']] = row['value']
+            elif component_type == 'uniprot':
                 self.uniprot_data.modify_attributes(df_modify_attrs)
             elif component_type == 'ncbi':
                 self.ncbi_data.modify_attributes(df_modify_attrs)
@@ -1154,7 +1159,7 @@ class XbaModel:
         optionally we add compartment info to support RBA machinery related gene products
                 'compartment': location of gene product, e.g. 'c'
 
-        Add miriamAnnotation with Uniprot id, if not mirimaAnnotation has been provided
+        Add miriamAnnotation with Uniprot id, if no mirimaAnnotation has been provided
         Uniprot ID is retrieved with Uniprot data
 
         :param df_add_gps: configuration data for gene product, see sbmlxdf
@@ -1317,26 +1322,31 @@ class XbaModel:
         """
         biocyc = BiocycData(biocyc_dir, org_prefix=org_prefix)
         biocyc.set_enzyme_composition()
+
+        cols = ['name', 'synonyms', 'composition', 'enzyme']
         enz_comp = {}
         for enz_id, enz in biocyc.proteins.items():
-            if len(enz.gene_composition) > 0 and len(enz.enzrxns) > 0:
+            # exclude monomeric enzymes. Either enzyme is used in reactions or it is not included in complexes
+            if len(enz.gene_composition) > 0 and (len(enz.enzrxns) > 0 or len(enz.complexes) == 0):
                 gene_comp = '; '.join([f'gene={gene}, stoic={stoic}'
                                        for gene, stoic in enz.gene_composition.items()])
-                enz_comp[enz_id] = [enz.name, enz.synonyms, gene_comp]
-        df = pd.DataFrame(enz_comp.values(), index=list(enz_comp), columns=['name', 'synonyms', 'composition'])
+                eid = 'enz_' + '_'.join(sorted(enz.gene_composition.keys()))
+                enz_comp[enz_id] = [enz.name, enz.synonyms, gene_comp, eid]
+        df = pd.DataFrame(enz_comp.values(), index=list(enz_comp), columns=cols)
+        df.drop_duplicates(['enzyme'], inplace=True)
+        df = df.reset_index().set_index('enzyme')
         print(f'{len(df)} enzymes extracted from Biocyc')
-
-        biocyc_enz_comp = [get_srefs(re.sub('gene', 'species', srefs)) for srefs in df['composition'].values]
-        biocyc_eid2comp = {'enz_' + '_'.join(sorted(comp.keys())): comp for comp in biocyc_enz_comp}
 
         # update model enzymes with biocyc composition data
         # enzyme in the model are based on reaction gene product associations.
-        #  These enzymes might be composesd of one or several Biocyc enzyme sub-complexes.
+        #  These enzymes might be composed of one or several Biocyc enzyme sub-complexes.
         #  We try to identify such sub-complexes and update that part of the enzyme compositoin.
+        biocyc_eid2comp = {eid: biocyc.proteins[row['index']].gene_composition for eid, row in df.iterrows()}
         count = 0
         for eid, e in self.enzymes.items():
             if eid in biocyc_eid2comp:
-                e.composition = biocyc_eid2comp[eid]
+                e.name = df.at[eid, 'name']
+                e.composition = biocyc_eid2comp[eid].copy()
                 count += 1
             else:
                 updates = False

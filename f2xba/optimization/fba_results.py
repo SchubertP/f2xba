@@ -34,8 +34,8 @@ class FbaResults(Results):
             if re.match(pf.V_, rid) is None:
                 reaction_str = self.optim.rdata[rid]['reaction_str']
                 gpr = self.optim.rdata[rid]['gpr']
-                fluxes[rid] = [reaction_str, gpr, mmol_per_gdwh, abs(mmol_per_gdwh)]
-        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+                fluxes[rid] = [reaction_str, rid, gpr, mmol_per_gdwh, abs(mmol_per_gdwh)]
+        cols = ['reaction_str', 'net_rid', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=cols)
         df_fluxes.index.name = 'reaction'
         return df_fluxes
