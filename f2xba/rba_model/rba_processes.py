@@ -48,18 +48,15 @@ class RbaProcesses:
         Cofactors are automatically added to translation map.
 
         'input_filter' for set 'rna'
-        - empty: select all rnas in the RBA model as input
-        - list of patterns, e.g. 'mrna': select rnas with name starting with any of the patterns
+        - comma-separated list of regular expression patterns that will be checked against the macromolecule id
             - e.g. 'mrna' to select only mrna
             - e.g. 'trna, b' to select only tRNAs and E. coli gene loci (used for rRNA)
 
         'input_filter' for set 'protein':
-        - empty: select all proteins in the RBA model as input
-        - 'secreted': all RBA proteins not located in cytoplasm (based on reaction reactants location)
-           - NOTE: previously we checked UniProt signal_sequence
-           - NOTE: in Yeast with ribosomal and cytosolic DNA we would have to rework 'secreted'
-        - list of patterns, e.g. select proteins with name starting with any of the patterns
-            - e.g. 'dummy_protein_c'
+        - 'signal_peptide': select proteins having a signal peptide as per UniProt data
+          plus dummy_proteins not located in the cytoplasm.
+        - comma-separated list of valid RBA compartment ids (select proteins accordingly)
+        - comma-separated list of regular expression patterns that will be checked against protein id
 
         :param rba_params: RBA model specific parametrization
         :type rba_params: dict of pandas DataFrames
@@ -237,15 +234,15 @@ class RbaProcesses:
             valid = False
 
         missing = self.ref_molecules_machinery().difference(component_ids['species']) \
-            .difference(component_ids['rnas']) \
-            .difference(component_ids['proteins'])
+            .difference(component_ids['rna']) \
+            .difference(component_ids['protein'])
         if len(missing) > 0:
             print('species/macromolecules used in processes not defined:', missing)
             valid = False
 
         missing = self.ref_molecules_inputs().difference(component_ids['dna']) \
-            .difference(component_ids['rnas']) \
-            .difference(component_ids['proteins'])
+            .difference(component_ids['rna']) \
+            .difference(component_ids['protein'])
         if len(missing) > 0:
             print('macromolecules used in processes not defined:', missing)
             valid = False

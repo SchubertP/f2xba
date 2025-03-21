@@ -36,25 +36,24 @@ class RbaTargets:
             print(f'targets not imported!')
 
     @staticmethod
-    def get_precursor_metabolites(macromolecules, df_pmaps):
+    def get_precursor_metabolites(macromolecule_set, df_pmaps):
         """For DNA and RNA get precursor metabolites.
 
         Using information from sheet 'processing_maps', reactants are
         extracted. Precursor metabolites are extracted based on some
         heuristics (i.e. metabolites that only appear once).
 
-        E.g. for macromolecues='rnas' select 'M_atp_c, M_ctp_c, M_gtp_c, M_utp_c',
+        E.g. for macromolecues='rna' select 'M_atp_c, M_ctp_c, M_gtp_c, M_utp_c',
         other metabolites would be 'M_h2o_c'
 
-        :param macromolecules: macromolecule 'dna' or 'rnas'
-        :type macromolecules: str
+        :param str macromolecule_set: macromolecule set 'dna' or 'rna'
         :param df_pmaps: processing map configuration
-        :type df_pmaps: pandas DataFrame
+        :type df_pmaps: pandas.DataFrame
         :return: set of precursor metabolites and set of other metabolites
         :rtype: 2-tuple of sets of strings
         """
         reactant_srefs = defaultdict(int)
-        for _, row in df_pmaps[df_pmaps['macromolecules'] == macromolecules].iterrows():
+        for _, row in df_pmaps[df_pmaps['set'] == macromolecule_set].iterrows():
             reactants, _ = translate_reaction_string(row['reaction_string'])
             for sid in reactants:
                 reactant_srefs[sid] += 1
@@ -76,20 +75,18 @@ class RbaTargets:
         Require sheet 'trna2locus' to identify tRNA mapping to amino acid metabolites, e.g.
         'M_trnaala_c' mapped to 'M_ala__L_c'
 
-        :param biomass_rid: biomass reaction id
-        :type biomass_rid: str
-        :param component_type: 'metabolites', 'dna' or 'amino_acids'
-        :type component_type: str
+        :param str biomass_rid: biomass reaction id
+        :param str component_type: 'metabolites', 'dna' or 'amino_acids'
         :param rba_params: RBA model specific parametrization
         :type rba_params: dict of pandas DataFrames
         :param xba_model: xba model based on genome scale metabolic model
-        :type xba_model: Class XbaModel
+        :type xba_model: class:`XbaModel`
         :return: biomass composition for selected component type
         :rtype: dict (key: sid/str, val: stoichiometry/float)
         """
         # identify precursor species ids of DNA/RNA based on 'reaction_string' in sheet 'processing_maps'
         dna_nt_sids, other_sids = self.get_precursor_metabolites('dna', rba_params['processing_maps'])
-        rna_nt_sids, _ = self.get_precursor_metabolites('rnas', rba_params['processing_maps'])
+        rna_nt_sids, _ = self.get_precursor_metabolites('rna', rba_params['processing_maps'])
 
         # map amino acid species ids to tRNAs based on sheet 'trn2locus'
         aa2trna = {aa_sid: trna for trna, aa_sid in rba_params['trna2locus']['biomass_aa'].items()
@@ -136,11 +133,11 @@ class RbaTargets:
         in 'target_constant' provide a scaling factor.
 
         :param rba_params: RBA model specific parametrization
-        :type rba_params: dict of pandas DataFrames
+        :type rba_params: dict of pandas.DataFrames
         :param xba_model: xba model based on genome scale metabolic model
-        :type xba_model: Class XbaModel
+        :type xba_model: class:`XbaModel`
         :param parameters: RBA model parameters
-        :type parameters: Class RbaParameters
+        :type parameters: class:`RbaParameters`
         """
         n_targets = 0
         for tgid in set(rba_params['targets'].index):
@@ -213,9 +210,9 @@ class RbaTargets:
     def validate(self, component_ids):
         valid = True
         missing = self.ref_molecules().difference(component_ids['species']) \
-            .difference(component_ids['rnas']) \
+            .difference(component_ids['rna']) \
             .difference(component_ids['dna']) \
-            .difference(component_ids['proteins'])
+            .difference(component_ids['protein'])
         if len(missing) > 0:
             print('species/macromolecules used in targets not defined:', missing)
             valid = False

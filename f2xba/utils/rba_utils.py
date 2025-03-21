@@ -146,8 +146,7 @@ def get_function_params(kv_str):
     Note: RBA inverse function not supported
     Note: parameters are not checked for completeness
 
-    :param kv_str: function parameters
-    :type kv_str: str
+    :param str kv_str: function parameters
     :return: function definition
     :rtype: dict
     """
@@ -173,10 +172,8 @@ def get_function_params(kv_str):
             f_params['params']['X_MAX'] = float('inf')
     elif 'RATE' in f_params['params']:
         f_params['type'] = 'exponential'
-    elif 'I' in f_params['params']:
-        f_params['type'] = 'competitiveInhibition'
     elif 'kmax' in f_params['params']:
         f_params['type'] = 'michaelisMenten'
-    elif ('X_MIN' in f_params['params']) and ('X_MIN' in f_params['params']) and len(f_params['params']) == 2:
+    elif ('X_MIN' in f_params['params']) and ('X_MAX' in f_params['params']) and len(f_params['params']) == 2:
         f_params['type'] = 'indicator'
     return f_params

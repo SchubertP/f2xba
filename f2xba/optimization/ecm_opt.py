@@ -1,6 +1,6 @@
 """Implementation of EcmOptimization class.
 
-Support functions for CobraPy and GurobiPy optimization of EC (enzyme constraint) models
+Support functions for cobrapy and gurobipy optimization of EC (enzyme constraint) models
 that have been created using the f2xba modelling package.
 
 Support of GECKO, ccFBA, MOMENTmr and MOMENT optimization, as well
@@ -25,14 +25,19 @@ from .optimize import Optimize, status2text
 
 
 class EcmOptimization(Optimize):
+    """Optimization support for enzyme constraint models.
+
+    Optimization support is provided via cobrapy and guropibpy interfaces for
+    enzyme constraint models created by f2xba. When utilizing cobrapy, it is
+    necessary to first load the model using SBML.
+    """
 
     def __init__(self, fname, cobra_model=None):
-        """Instantiate EcmOptimization class
+        """Instantiate the EcmOptimization instance.
 
-        :param fname: path name of SBML coded metabolic model
-        :type fname: str
-        :param cobra_model: (optional) the corresponding cobra model
-        :type cobra_model: cobra.core.model.Model if supplied
+        :param str fname: filename of the SBML coded extended model
+        :param cobra_model: reference to a cobrapy model (default: None)
+        :type cobra_model: cobra.Model
         """
         super().__init__('ECM', fname, cobra_model)
         self.orig_coupling = {}
@@ -42,11 +47,11 @@ class EcmOptimization(Optimize):
             self.configure_moment_model_constraints()
 
     def configure_moment_model_constraints(self):
-        """configure constraints related to MOMENT modelling
+        """Configure constraints related to MOMENT model optimization.
 
-            in MOMENT formalism, promiscuous enszymes can catalyze alternative reactions
-            without additional cost. Only most costly reacions flux need to be supported
-            and all alternative reactions come for free
+        Must be invoked after loading a MOMENT type model (not MOMENTmr). MOMENT implements promiscuous
+        enzymes, that can catalyze alternative reactions without additional costs. The most costly
+        reaction flux needs to be supported and all alternative reaction fluxes come for free.
         """
         if self.is_gpm:
             for constr in self.gpm.getConstrs():
@@ -59,19 +64,20 @@ class EcmOptimization(Optimize):
         print(f'MOMENT protein constraints configured ≥ 0')
 
     def scale_kcats(self, scale_kcats):
-        """Scale selected kcat values for model tuning/fitting.
+        """Scale turnover number values for model tuning.
 
-        Used to manually tune kcat parameters.
-        - supports both COBFAPpy and Gurobi interfaces
-        - to reset, call unscale_kcats()
-        - example:
-          scale_kcats= {'BPNT': 0.2, 'TMPK':0.2, 'TMPK_REV':0.2, 'CLPNS':0.25}
-          geo.scale_kcats(scale_kcats)
-          solution = geo.optimize()
-          geo.unscale_kcats()
+        Use unscale_kcats() to return to original values, e.g.
 
-        :param scale_kcats: selected reaction ids (without 'R_' prefix) with kcat scaling factor
-        :type scale_kcats: dict (key: reaction id without 'R_' prefix, val: float)
+        .. code-block:: python
+
+            eo = EcmOptimization('iJO1366_GECKO.xml)
+            scale_kcats= {'BPNT': 0.2, 'TMPK':0.2, 'TMPK_REV':0.2, 'CLPNS':0.25}
+            eo.scale_kcats(scale_kcats)
+            solution = eo.optimize()
+            eo.unscale_kcats()
+
+        :param scale_kcats: reaction identifiers (without prefix `R_`) and scaling factor
+        :type scale_kcats: dict (key: reaction id/str, val: factor/float)
         """
         if self.is_gpm:
             self._gp_scale_kcats(scale_kcats)
@@ -79,7 +85,7 @@ class EcmOptimization(Optimize):
             self._cp_scale_kcats(scale_kcats)
 
     def unscale_kcats(self):
-        """Unscale previously scaled kcat values and return to original coupling coefficients
+        """Reset previously scaled turnover numbers.
         """
         if self.is_gpm:
             self._gp_unscale_kcats()

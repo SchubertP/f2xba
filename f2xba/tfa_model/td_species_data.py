@@ -18,14 +18,14 @@ DEBYE_HUCKEL_A = 0.51065        # √(l/mol) - Alberty, 2003, section 3.6
 DEBYE_HUCKEL_B = 1.6            # √(l/mol) - Alberty, 2003, section 3.6
 PH_MARGIN = 0.0                 # PH margin to be added to compartment pH to determine isomer group
 MAX_ABS_CHARGE = 4              # maximum absolute electrical charge (to consider for activity reduction)
-
+CPD_PROTON = 'cpd00067'        # seed id for protons (H) - not part of TD formulations
 
 class TdSpeciesData:
 
     def __init__(self, td_sid, td_sdata, conv_factor=1.0):
-        """Instantiate thermodynamic Metabolite data
+        """Instantiate thermodynamic Metabolite data.
 
-        Thermodyanmic data for unique metabolites
+        Thermodynamics data for unique metabolites
         Several model species in different compartments can link to same td_metabolite.
 
         Energy units in thermo data get converted, if required, to kJ/mol
@@ -43,22 +43,17 @@ class TdSpeciesData:
           'charged_std': electical charge in standard conditions
           'mass_std': (g/mol) molecular weight in standard conditions
           'nH_std': number of protons in standard conditions
-          'deltaGf_std': gibbs free energy of formation in std. cond
-                (units as given it thermo data)
-          'deltaGf_err': estimation error, however it may be better
-                to base error on struct_cues
+          'deltaGf_std': Standard Gibbs energy of formation (units as given in thermo data)
+          'deltaGf_err': estimation error
           'pKa': list of pKa values
           'struct_cues': dict of cues in metabolite with stoichiometry
           'error': error information (str)
 
         Note: for strings we convert the type from numpy.str_ to str
 
-        :param td_sid: id of TD species (e.g. seed id)
-        :type td_sid: str
-        :param td_sdata: thermodynamic data for metabolite
-        :type td_sdata: dict
-        :param conv_factor: energy units conversion factor
-        :type conv_factor: float (optional, default 1.0)
+        :param str td_sid: id of TD species (e.g. seed id)
+        :param dict td_sdata: thermodynamics data record for metabolite extracted from TD database
+        :param float conv_factor: optional, energy units conversion factor, default 1.0
         """
         self.id = td_sid
         self.name = str(td_sdata['name'])
@@ -72,12 +67,12 @@ class TdSpeciesData:
         self.error = str(td_sdata['error'])
         self.struct_cues = td_sdata['struct_cues']
 
-    def get_transformed_std_gibbs_formation(self, compartment_ph, ionic_str, rt):
-        """ Calculate the transformed Gibbs energy of formation of species with
-        given pH and ionic strength using formula given by Goldberg and Tewari,
-        1991
+    def get_std_transformed_gibbs_formation(self, compartment_ph, ionic_str, rt):
+        """Calculate the standard transformed Gibbs energy of formation.
 
         based on pyTFA MetaboliteThermo.calcDGis()
+
+        Using formula given by Goldberg and Tewari, 1991
 
         Thermodymamics of pseudoisomer groups at specified pH
         Equation 4.5-6 in Alberty's book:
@@ -90,16 +85,13 @@ class TdSpeciesData:
             ∆fG_H+'˚ = RT ln(10) pH
             ∆fG_H+' = ∆fG_H+'˚ - RT ln(10) ph = 0
 
-        :param compartment_ph: compartment ph
-        :type compartment_ph: float
-        :param ionic_str: compartment ionic strength in mol/l
-        :type ionic_str: float
-        :param rt: product RT in kJ/mol
-        :type rt: float
-        :returns: transformed standard Gibbs energy of formation, avg H atoms, avg charge
+        :param float compartment_ph: compartment ph
+        :param float ionic_str: compartment ionic strength in mol/l
+        :param float rt: product RT in kJ/mol
+        :returns: standard transformed Gibbs energy of formation, avg H atoms, avg charge
         :rtype: float, float, float
         """
-        if self.id == 'cpd00067':
+        if self.id == CPD_PROTON:
             # actually not required, as protons get removed from TD calculations
             dfg0_tr = rt * np.log(10) * compartment_ph
             return dfg0_tr, self.nh_std, self.charge_std
@@ -107,7 +99,7 @@ class TdSpeciesData:
         # protonation steps for metabolite up to max_ph
         deprot_steps = self._deprotonations_upto(compartment_ph + PH_MARGIN)
 
-        # transformed standard Gibbs energy of formation
+        # standard transformed Gibbs energy of formation
         dfg0_tr_lp = self._get_dfg0_tr_lp(compartment_ph, ionic_str, deprot_steps, rt)
         binding_polynomial_tr, avg_h_binding = self._get_binding_polynomial_tr(compartment_ph, ionic_str, deprot_steps)
         dfg0_tr = dfg0_tr_lp - rt * np.log(binding_polynomial_tr)
@@ -130,13 +122,12 @@ class TdSpeciesData:
         - if final charge is above or equal to standard charge, no deprotonation required
         - if deprotonation steps > 2: assume that struction is already at pH 7.0 and
           just add deprotonations above pH 7.0
-        - (Note: this is not fully consistent, however the thermo data seem not to be
+        - (Note: this is not fully consistent, however the thermo data seems not to be
            consistent at all, as per Jankowski all structures should be in the predominant
            state as pH 7.0)
         - We only deprotonate as long there are still protons in the structure
 
-        :param max_ph: maximal pH for deprononation
-        :type max_ph: float
+        :param float max_ph: maximal pH for deprononation
         :return: number of required deprotonation steps from current structure
         :rtype: int
         """
@@ -178,14 +169,11 @@ class TdSpeciesData:
             charge at least protonated state: -4
             ∑v_i z_i^2 = -2 * charge = 8
 
-        :param ionic_str: compartment ionic strength in mol/l
-        :type ionic_str: float
-        :param max_ph: maximum pH for which to consider deprotonations
-        :type max_ph: float
-        :param deprot_steps: deprotonation steps till maximum pH
-        :type deprot_steps: int (>= 0)
+        :param float ionic_str: compartment ionic strength in mol/l
+        :param float max_ph: maximum pH for which to consider deprotonations
+        :param int deprot_steps: deprotonation steps till maximum pH (>= 0)
         :returns: metabolite pkas in valid range in reverse order (highest to lowest)
-        :rtype: list of floats
+        :rtype: list[float]
         """
         least_prot_charge = self.charge_std - deprot_steps
         extended_dh_factor = DEBYE_HUCKEL_A * np.sqrt(ionic_str) / (1.0 + DEBYE_HUCKEL_B * np.sqrt(ionic_str))
@@ -207,7 +195,7 @@ class TdSpeciesData:
         binding polynomial
         Alberty, 2003, equation 4.5-7:
             P = 1 + [H+]/K1 + [H+]^2/K1K2 +
-            - K1, K2: equilibrium constants wiht K1 having the smallest value (highest pKa)
+            - K1, K2: equilibrium constants with K1 having the smallest value (highest pKa)
 
         average binding of hydrogen ion avg_NH
         Alberty, 2003, equations 1.3-7, -8, -9
@@ -216,12 +204,9 @@ class TdSpeciesData:
         - N = [H+] dP/d[H+] = [H+]/K1 + 2*[H+]^2/K1K2 +
         - NH = N/P = ([H+]/K1 + 2*[H+]^2/K1K2 + )/(1 + [H+]/K1 + [H+]^2/K1K2 + )   (1.3-7)
 
-        :param compartment_ph: compartment ph
-        :type compartment_ph: float
-        :param ionic_str: compartment ionic strength in mol/l
-        :type ionic_str: float
-        :param deprot_steps: deprotonation steps till maximum pH
-        :type deprot_steps: int (>= 0)
+        :param float compartment_ph: compartment ph
+        :param float ionic_str: compartment ionic strength in mol/l
+        :param int deprot_steps: deprotonation steps till maximum pH (>= 0)
         :returns: binding polynomial, averge hydrogen ion binding
         :rtype: float, float
         """
@@ -239,7 +224,7 @@ class TdSpeciesData:
         return polynomial, avg_h_binding
 
     def _get_dfg0_tr_lp(self, compartment_ph, ionic_str, deprot_steps, rt):
-        """Calculate transformed standard Gibbs free energy for least protonated species.
+        """Calculate standard transformed Gibbs energy of formation for least protonated species.
 
         .. in an isomeric group, based on compartment pH and ionic strength.
 
@@ -260,18 +245,11 @@ class TdSpeciesData:
                 ln(aH) = ln(γH [H+]); γH = 10^(-(A √I / (1 + B √I))); [H+] = 10^(-ph(I=0))
                 ln(aH) = - ln(10) (pH(I=0) + (A √I / (1 + B √I))) = ln(10) pH(I)
 
-        We limit absolute charges > 4 to 4. Assuming the larger absolute charges are on larger
-        molecules, wherease activity reduction due to ionic strength might have lesser impact
-
-        :param compartment_ph: compartment ph
-        :type compartment_ph: float
-        :param ionic_str: compartment ionic strength in mol/l
-        :type ionic_str: float
-        :param deprot_steps: deprotonation steps till maximum pH
-        :type deprot_steps: int (>= 0)
-        :param rt: product RT in kJ/mol
-        :type rt: float
-        :returns: transported gibbs energy of formation at given ionic strength
+        :param float compartment_ph: compartment ph
+        :param float ionic_str: compartment ionic strength in mol/l
+        :param int deprot_steps: deprotonation steps till maximum pH (>= 0)
+        :param float rt: product RT in kJ/mol
+        :returns: transported Gibbs energy of formation at given ionic strength
         :rtype: float
         """
         dfg0_lp = self.dfg0
@@ -283,7 +261,6 @@ class TdSpeciesData:
         extended_dh_factor = DEBYE_HUCKEL_A * np.sqrt(ionic_str) / (1.0 + DEBYE_HUCKEL_B * np.sqrt(ionic_str))
         least_prot_n_h = self.nh_std - deprot_steps
         least_prot_charge = self.charge_std - deprot_steps
-        # abs_least_prot_charge = min(abs(least_prot_charge), MAX_ABS_CHARGE)
 
         dfg0_lp_h = rt * np.log(10) * least_prot_n_h * compartment_ph
         ionic_str_tr = rt * np.log(10) * (least_prot_charge ** 2 - least_prot_n_h) * extended_dh_factor
@@ -292,12 +269,11 @@ class TdSpeciesData:
         return dfg0_tr_lp
 
     def modify_attribute(self, attribute, value):
-        """modify attribute value.
+        """Modify attribute value.
 
-        :param attribute: attribute name
-        :type attribute: str
+        :param str attribute: attribute name
         :param value: value to be configured
-        :type value: str
+        :type value: str, float, int
         """
         if hasattr(self, attribute):
             setattr(self, attribute, value)

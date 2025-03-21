@@ -14,20 +14,19 @@ import sbmlxdf
 def valid_sbml_sid(component_id):
     """Make component id compliant to SBML SId.
 
-    ensure that id starts with letter or '_'
-    replace invalid characters by '_'
+    ensure that id starts with letter or `_`
+    replace invalid characters by `_`
 
     Ref: The Systems Biology Markup Language (SBML):
     Language Specification for Level 3 Version 2 Core
 
     Definition of SiD
-        letter ::= ’a’..’z’,’A’..’Z’
-        digit ::= ’0’..’9’
-        idChar ::= letter | digit | ’_’
-        SId ::= ( letter | ’_’ ) idChar*
+        letter ::= `a`..`z`,`A`..`Z`
+        digit ::= `0`..`9`
+        idChar ::= letter | digit | `_`
+        SId ::= ( letter | `_` ) idChar*
 
-    :param component_id: component id
-    :type component_id: str
+    :param str component_id: component id
     :return: valid SBML SId
     :rtype: str
     """
@@ -37,17 +36,15 @@ def valid_sbml_sid(component_id):
 
 
 def load_parameter_file(fname, sheet_names=None):
-    """Load parameters from parameter Excel spreadsheet file.
+    """Load tables from configuration file.
 
     We can limit the sheet names to selected set of sheet names provided.
     If sheet names are not provide, all sheets of spreadsheet file will be loaded
 
-    :param fname: file name of parameter file (.xlsx)
-    :type fname: str
-    :param sheet_names: sheet names to collect from the parameter file, default None, collect all sheets
-    :type sheet_names: None or list of str
-    :return: data tables collected from the document
-    :rtype: dict of pandas DataFrames
+    :param str fname: filename of XBA configuration file (.xlsx)
+    :param list sheet_names: list of table to import (default: None)
+    :return: imported tables
+    :rtype: dict[pandas.DataFrame]
     """
     if os.path.exists(fname) is False:
         print(f'{fname} not found')
@@ -67,13 +64,11 @@ def load_parameter_file(fname, sheet_names=None):
 
 
 def write_parameter_file(fname, params):
-    """Write data tables to a parameter Excel spreadsheet file.
+    """Write tables to configuration file.
 
-    :param fname: file name of parameter file (*.xlsx)
-    :type fname: str
-    :param params: data tables to write to the document
-    :type params: dict of pandas DataFrames
-    :return:
+    :param str fname: filename of XBA configuration file (.xlsx)
+    :param params: tables to export
+    :type params: dict[pandas.DataFrame]
     """
     with pd.ExcelWriter(fname) as writer:
         for sheet, df in params.items():
@@ -88,8 +83,7 @@ def get_srefs(srefs_str):
     Each record contains ',' separated key=value pairs. Required keys are
     'species' and 'stoic'.
 
-    :param srefs_str: species references string with attibutes 'species' and 'stoic'
-    :type srefs_str: str
+    :param str srefs_str: species references string with attibutes 'species' and 'stoic'
     :return: composition (components with stoichiometry
     :rtype: dict (key: species id, value: stoichiometry (float)
     """
@@ -104,7 +98,7 @@ def generate_srefs_str(stoichometric_str):
     """Generate species references from one side of reaction string.
 
     E.g. '2.0 M_h_e + M_mal__L_e' gets converted to
-    {'species=M_h_e, stoic=2.0; species=M_mal__L_e, stoic=1.0}
+    {'species=M_h_e, stoic=2.0; species=M_mal__L_e, stoic=1.0'}
 
     :param stoichometric_str: stoichiometric string
     :type stoichometric_str: str
@@ -133,8 +127,7 @@ def parse_reaction_string(reaction_str):
       products: 'species=M_mal__L_c, stoic=1.0'}
     e.g. 'M_ac_e => ' for an irreversible reaction with no product
 
-    :param reaction_str: reaction string
-    :type reaction_str: str
+    :param str reaction_str: reaction string
     :returns: dict with reactions string converted to species refs string
     :rtype: dict with keys 'reversible', 'reactants', 'products'
     """
@@ -156,8 +149,7 @@ def stoicstr2srefs(stoichometric_str):
     E.g. '2.0 M_h_e + M_mal__L_e' transformed to
     {'M_h_e': 2.0, 'M_mal__L_e': 1.0}
 
-    :param stoichometric_str: stoichiometric string
-    :type stoichometric_str: str
+    :param str stoichometric_str: stoichiometric string
     :returns: species with stoichiometry
     :rtype: dict (key: species/str, val: stoic/float)
     """
@@ -203,14 +195,13 @@ def update_master_kcats(df_master_kcats, fname):
         - info_genes: comma separated, e.g. 'b3212, b3213'
         - info_name: reaction name, str
         - info_reaction: reaction string in given direction, str, e.g.
-            'M_akg_c + M_h_c + M_nadph_c + M_nh4_c -> M_glu__L_c + M_h2o_c + M_nadp_c'
+            `M_akg_c + M_h_c + M_nadph_c + M_nh4_c -> M_glu__L_c + M_h2o_c + M_nadp_c`
 
     :param df_master_kcats: master kcats table in f2xba kcats format
-    :type df_master_kcats: pandas DataFrame
-    :param fname: relative or absolute pathname of a kcats file in f2xba kcats format
-    :type fname: str
+    :type df_master_kcats: pandas.DataFrame
+    :param str fname: relative or absolute pathname of a kcats file in f2xba kcats format
     :return: return modified master kcats table
-    :rtype: pandas DataFrame
+    :rtype: pandas.DataFrame
     """
     # load data with kcats records to be updated from file.
     if os.path.exists(fname) is False:

@@ -66,8 +66,7 @@ class RbaParameters:
 
         Create constant, general function or aggregate.
 
-        :param f_name_base: base name of parameter name
-        :type f_name_base: str
+        :param str f_name_base: base name of parameter name
         :param constant: constant parameter
         :type constant: int/float or nan
         :param func: function definition with required keywords

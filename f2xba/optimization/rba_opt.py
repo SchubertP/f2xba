@@ -1,22 +1,20 @@
 """Implementation of RbaOptimization class.
 
-Support both CobraPy and GurobiPy interfaces
+Support both cobrapy and gurobipy interfaces
 
-Note: RBA is a feasibility problem. Using a bisection algorithm
-the highest growth rate is retrived where the LP is still feasible.
+Note: RBA is a feasibility problem. Using a bisection algorithm as implemented in RbaPy
+(Bulović et al., 2019), the highest growth rate is retrived where the LP is still feasible.
 RBA model includes variable bounds and stoichiometric coefficients that
 are dependent on selected growth rate and medium.
 
-Model parameter updated in handled inline with SBML specifications using
-an initial assignment procedure.
+Optimization problem related parameters need to be updated during optimization. This is performed
+in according to SBML specifications using initial assignment procedures.
 
-Here we implement the specific requirement to optimize SBML coded RBA models
-in CobraPy, including support for TRBA. This mainly includes.
-
+The class takes care of
 - initial variable and constraints configuration
-- extraction of require data from SBML model using sblxdf package,
-  e.g.function definitions, initial assignments, species references, XML annotations, Miriam annotations
-- setting of model parameters for each new feasiblilty check
+- extraction data configured in the SBML model, such as function definitions, initial assignments,
+species references, XML annotations, Miriam annotations
+- reconfiguration of optimization problem related paramters prior to each feasiblilty loop
 
 Peter Schubert, HHU Duesseldorf, January 2024
 """
@@ -29,7 +27,7 @@ from collections import defaultdict
 import sbmlxdf
 import f2xba.prefixes as pf
 from .rba_initial_assignments import InitialAssignments
-from .optimize import Optimize
+from .optimize import Optimize, extract_net_fluxes
 
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
@@ -37,14 +35,19 @@ XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
 
 
 class RbaOptimization(Optimize):
+    """Optimization support for RBA models.
+
+    Optimization support is provided via cobrapy and guropibpy interfaces for RBA models
+    created by f2xba, utilizing the bisection algorithm of RbaPy (Bulović et al., 2019).
+    When utilizing cobrapy, it is necessary to first load the model using SBML.
+    """
 
     def __init__(self, fname, cobra_model=None):
-        """Instantiation of RbaOptimization class
+        """Instantiation of RbaOptimization instance.
 
-        :param fname: path name of SBML coded metabolic model
-        :type fname: str
-        :param cobra_model: (optional) the corresponding cobra model (not required for GurobiPy model)
-        :type cobra_model: cobra.core.model.Model if supplied
+        :param str fname: filename of the SBML coded extended model
+        :param cobra_model: reference to cobra model (default: None)
+        :type cobra_model: cobra.Model
         """
         super().__init__('RBA', fname, cobra_model)
 
@@ -57,9 +60,7 @@ class RbaOptimization(Optimize):
         self.df_mm_data = self.get_macromolecule_data()
         self.df_enz_data = self.get_enzyme_data()
         self.enz_mm_composition = self.get_enzyme_mm_composition()
-
         self.initial_assignments = InitialAssignments(self)
-
         self.configure_rba_model_constraints()
 
         # for CobraPy models using cplex, switch off scaling
@@ -153,27 +154,18 @@ class RbaOptimization(Optimize):
         return dict(enz_mm_composition)
 
     def set_medium_conc(self, ex_metabolites_mmol_per_l):
-        """RBA optimization: Configure external metabolite concentrations (in mmol/l).
+        """Configure external metabolite concentrations (mmol/l).
 
-        Notes:
-        - for FBA and GECKO (ECM) model optimization, the medium is defined
-          as exchange reaction id and uptake flux rate in mmol/gDWh.
-        - In RBA we define medium as external metabolite id (without leading 'M_') and
-          external metabolite concentration in mmol/l.
-        - in RBA medium concentrations should be defined with respect to default Michaelis constant of transporter
-          (check model parameter DEFAULT_MICHAELIS_CONSTANT)
+        In the RBA, the growth medium is defined by external metabolite concentrations (mmol/L).
+        These concentrations are used to determine the media-dependent transporter saturation
+        levels of the uptake reactions. This determination is made using a Michaelis-Menten type
+        saturation function with a default Michaelis constant (Km) of 1.0 mmol/L.
+        External media concentration should be scaled to the default Km value.
+        This implementation of RBA still uses uptake reactions, which will be opened for
+        the specified medium.
 
-        e.g.: medium = {'glc__D_e': 111.0, 'o2_e': 20.0, 'ca2_e': 0.5, 'cbl1_e': 0.01,
-         'cl_e': 60.0, 'co2_e': 0.00003, ...}
-
-        SBML coded RBA model still contains exchange reactions that control exchange of metabolites
-        across the modeling environment. These need to be considered as well
-
-        1. open up exchange reactions for external metabolites of the medium (so they can be imported)
-        2. configure external metabolite concentrations via initial assignments
-
-        :param ex_metabolites_mmol_per_l: external metabolites with respective concentrations in mmol/l
-        :type ex_metabolites_mmol_per_l: dict, key = metabolite id, val = metabolite concentration in mmol/l
+        :param ex_metabolites_mmol_per_l: external metabolite concentrations (mmol/l)
+        :type ex_metabolites_mmol_per_l: dict (key: metabolite id/str, val: concentration/float)
         """
         # open up related exchange reactions
         # self.model.medium = {self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_metabolites_mmol_per_l}
@@ -182,57 +174,47 @@ class RbaOptimization(Optimize):
         # configure RBA related medium concentrations
         medium_conc = {sid: ex_metabolites_mmol_per_l.get(re.sub(f'^{pf.M_}', '', sid), 0.0)
                        for ex_rid, sid in self.ex_rid2sid.items()}
+
         self.initial_assignments.set_medium(medium_conc)
 
     def set_growth_rate(self, growth_rate):
         """RBA optimization: set growth rate dependent model parameters
 
-        :param growth_rate: selected growth rate in h-1
-        :type growth_rate: float
+        :param float growth_rate: selected growth rate in h-1
         :return:
         """
         self.initial_assignments.set_growth_rate(growth_rate)
 
     def solve(self, gr_min=0.0, gr_max=1.5, bisection_tol=1e-5, max_iter=40, make_non_neg=False):
-        """Solve RBA feasibility problem using bisection algorithem of RbaPy 1.0.
+        """Solve RBA feasibility problem using bisection algorithm.
 
-        Support both CobraPy and GurobyPy
+        Support both cobrapy and gurobipy interfaces.
 
-        :param gr_min: minimum growth rate to test in h-1, might have to be > 0.0 depending on targets
-        :type gr_min: float ≥ 0.0
-        :param gr_max: maximum growth rate to test in h-1
-        :type gr_max: float ≥ gr_min
-        :param bisection_tol: stop criteria based on different between max feasibility, min infeasibility growth rates
-        :type bisection_tol: float, default (1e-5)
-        :param max_iter: stop criteria base on number of iterations
-        :type max_iter: int > 0, default 40
-        :param make_non_neg: (optional) if model should be converted to non-negative variables only
-        :type make_non_neg: bool, default False
-        :return: solution
-        :rtype: Class solution
+        :param float gr_min: minimum growth rate in h-1
+        :param float gr_max: maximum growth rate in h-1
+        :param float bisection_tol: stop criteria based on growth rate tolerances (default: 1e-3)
+        :param int max_iter:  stop criteria based on iteration number (default: 40)
+        :param bool make_non_neg: converted model to non-negative variables only (default: False)
+        :return: optimization solution
+        :rtype: class:`Solution`
         """
         if self.is_gpm:
-            return self.gp_solve(gr_min, gr_max, bisection_tol, max_iter, make_non_neg)
+            return self._gp_solve(gr_min, gr_max, bisection_tol, max_iter, make_non_neg)
         else:
-            return self.cp_solve(gr_min, gr_max, bisection_tol, max_iter)
+            return self._cp_solve(gr_min, gr_max, bisection_tol, max_iter)
 
-    def gp_solve(self, gr_min, gr_max, bisection_tol, max_iter, make_non_neg):
+    def _gp_solve(self, gr_min, gr_max, bisection_tol, max_iter, make_non_neg):
         """Solve RBA feasibility problem using bisection algorithem of RbaPy 1.0.
 
         Optionally we can modify the model to non-negative variables only.
 
-        :param gr_min: minimum growth rate to test in h-1, might have to be > 0.0 depending on targets
-        :type gr_min: float ≥ 0.0
-        :param gr_max: maximum growth rate to test in h-1
-        :type gr_max: float ≥ gr_min
-        :param bisection_tol: stop criteria based on different between max feasibility, min infeasibility growth rates
-        :type bisection_tol: float
-        :param max_iter: stop criteria base on number of iterations
-        :type max_iter: int > 0
-        :param make_non_neg: if model should be converted to non-negative variables only
-        :type make_non_neg: None or bool
-        :return: solution
-        :rtype: Class solution
+        :param float gr_min: minimum growth rate to test in h-1, might have to be > 0.0 depending on targets
+        :param float gr_max: maximum growth rate to test in h-1
+        :param float bisection_tol: (optional, default 1e-3) stop criteria based on growth rate tolerances
+        :param int max_iter: (optional, default 40) stop criteria basde on number of iterations
+        :param bool make_non_neg: (optional, default False) converted model to non-negative variables only
+        :return: optimization solution
+        :rtype: class:`Solution`
         """
         # convert the model to non-negative variables only
         if make_non_neg:
@@ -257,14 +239,15 @@ class RbaOptimization(Optimize):
             if (gr_max - gr_min) < bisection_tol:
                 gr_opt = gr_min
                 self.set_growth_rate(gr_opt)
-                solution = self.optimize().get_net_fluxes()
+                solution = self.optimize()
 
-                # if solution with gr_min is no longer optimal, lower gr_opt slighlty and try again
+                # if solution with gr_min is no longer optimal, lower gr_opt slightly and try again
                 if solution.status != 'optimal':
                     gr_opt = max(0.0, gr_opt - 0.5 * bisection_tol)
                     self.set_growth_rate(gr_opt)
-                    solution = self.optimize().get_net_fluxes()
+                    solution = self.optimize()
 
+                solution.fluxes = extract_net_fluxes(solution.fluxes)
                 solution.objective_value = gr_opt
                 solution.n_iter = n_iter
                 # determine final density constraint
@@ -279,22 +262,17 @@ class RbaOptimization(Optimize):
             self.gp_model_original()
         return solution
 
-    def cp_solve(self, gr_min, gr_max, bisection_tol, max_iter):
+    def _cp_solve(self, gr_min, gr_max, bisection_tol, max_iter):
         """Solve RBA feasibility problem usin bisection algorithem of RbaPy 1.0.
 
         Use CobraPy model contexts, so we can support outer model contexts
 
-        :param gr_min: minimum growth rate to test in h-1, might have to be > 0.0 depending on targets
-        :type gr_min: float ≥ 0.0
-        :param gr_max: maximum growth rate to test in h-1
-        :type gr_max: float ≥ gr_min
-        :param bisection_tol: stop criteria based on different between max feasibility, min infeasibility growth rates
-        :type bisection_tol: float
-        :param max_iter: stop criteria base on number of iterations
-        :type max_iter: int > 0
-
-        :return: solution
-        :rtype: Class solution
+        :param float gr_min: minimum growth rate to test in h-1, might have to be > 0.0 depending on targets
+        :param float gr_max: maximum growth rate to test in h-1
+        :param float bisection_tol: (optional, default 1e-3) stop criteria based on growth rate tolerances
+        :param int max_iter: (optional, default 40) stop criteria basde on number of iterations
+        :return: optimization solution
+        :rtype: class:`Solution`
         """
         # first, check feasibility a minimal (or zero) growth
         # with self.model:

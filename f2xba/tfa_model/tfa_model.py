@@ -1,17 +1,15 @@
 """Implementation of TfaModel class.
 
-Adaptation from pytfa https://github.com/EPFL-LCSB/pytfa
-
-However, inline with xba modelling package and creation of a sbml code
-TFA model that can be processed using CobraPy package
-
-Thermodynamic data in kJ/mol.
+Extend the XbaModel to become a thermodynamics constraint model.
+The implementation of TFA is based on pyTFA (Salvy et al., 2019).
+Thermodynamics data is converted to kJ/mol.
 
 Peter Schubert, HHU Duesseldorf, October 2023
 """
 
 import os
 import re
+
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -30,9 +28,7 @@ import f2xba.prefixes as pf
 
 
 # TD parameters
-TEMPERATURE = 298.15                      # 25 ˚C - fixed, as ∆fG˚ based on 298.15 K
-GAS_CONSTANT = 8.314462                   # J mol-1 K-1
-RT = TEMPERATURE * GAS_CONSTANT / 1000.0  # kJ mol-1
+GAS_CONSTANT = 8.314462/1000.0            # kJ mol-1 K-1
 FARADAY_CONSTANT = 9.648533e4 / 1000.0    # kC mol-1  or kJ mol-1 V-1
 CAL_PER_J = 4.184                         # cal/J
 
@@ -46,62 +42,26 @@ CPD_WATER = 'cpd00001'         # seed id for H2O - not used in reaction quotient
 
 
 class TfaModel:
-    """Class TfaModel
+    """Extend a XbaModel to a thermodynamics constraint model.
 
-    Build upon XbaModel (genome-scale metabolic model), create
-    a thermodynamic fba model (TFA), by modifying the XbaModel.
-    The resulting TFA model is exported into a SBML compliant file.
-    This SBML file can directly be loaded in e.g. CobraPy. Prior to
-    execution few lines of code are required to configure binary
-    variables as binary and to configure inequality TD constraint.
+    The implementation of TFA is based on Python package pyTFA (Salvy et al., 2019).
 
-    :: code:: python
-
-        import cobra
-
-        tfa_model = cobra.io.read_sbml_model('iJO1366_TFA.xml')
-        tfa_model.solver = 'optlang-gurobi'
-
-        # configure TD binary variables and TD constraint bounds
-        modify_var_types = {'V_FU_': 'binary', 'V_RU_': 'binary'}
-        for var in tfa_model.variables:
-            for vprefix, vtype in modify_var_types.items():
-                if re.match(vprefix, var.name) and 'reverse' not in var.name:
-                    var.type = vtype
-                    break
-        modify_constr_bounds = {'C_FFC_': [None, 0.0], 'C_FRC_': [None, 0.0],
-                                'C_GFC_': [None, 999.99], 'C_GRC_': [None, 999.99],
-                                'C_SU_': [None, 1.0]}
-        for constr in tfa_model.constraints:
-            for cprefix, bounds in modify_constr_bounds.items():
-                if re.match(cprefix, constr.name):
-                    constr.lb, constr.ub = bounds
-                    break
-
-        tfa_solution = tfa_model.optimize()
-        tfa_solution.objective_value
-
-    If not already covered by pyTFA
-    constraint
     .. code-block:: python
 
         xba_model = XbaModel('iJO1366.xml')
-        xba_model.configure('iJO1366_xba_TFA_parameters.xlsx')
+        xba_model.configure()
 
         tfa_model = TfaModel(xba_model)
-        tfa_model.configure(('iJO1366_TFA_parameters.xlsx')
+        tfa_model.configure('iJO1366_tfa_parameters.xlsx')
         if tfa_model.validate():
             tfa_model.export('iJO1366_TFA.xml')
     """
 
     def __init__(self, xba_model):
-        """Instantiate tfaModel
+        """Instantiate the TfaModel instance.
 
-        XbaModel created from a genome-scale metabolic model and
-        adequately configured
-
-        :param xba_model: XbaModel
-        :type xba_model: Class f2xba.XbaModel
+        :param xba_model: a reference to a XbaModel instance
+        :type xba_model: :class:`f2xba.XbaModel`
         """
         self.model = xba_model
         self.td_params = {}
@@ -111,21 +71,20 @@ class TfaModel:
         self.td_reactions = {}
         self.td_reactants = {}
         self.td_units = None
+        self.temperature = 298.15 # temperature in Kevlin (25 ˚C)
+
+    @property
+    def rt(self):
+        return GAS_CONSTANT * self.temperature
 
     def configure(self, fname):
-        """Convert the xba model to TFA model using parameters in fname.
+        """Configuration with TFA configuration data.
 
-        to be executed after xba model has been configured
-        This method adds TD specific parametrizations to the xba model
+        Accepted tables: 'general', 'td_compartments', 'modify_td_sids', 'modify_thermo_data',
+        'modify_drg0_bounds'
 
-        The Excel parameters document should contain the sheets:
-        - 'general'
-        - 'td_compartments'
-        - 'modify_td_sids'
-
-        :param fname: file name for configuration parameters
-        :type fname: str
-        :return: success/failure of model configuration
+        :param str fname: filename of TFA configuration file (.xlsx)
+        :return: success
         :rtype: bool
         """
         sheet_names = ['general', 'td_compartments', 'modify_td_sids', 'modify_thermo_data', 'modify_drg0_bounds']
@@ -135,6 +94,7 @@ class TfaModel:
             raise ValueError
 
         self.td_params = tfa_params['general']['value'].to_dict()
+        self.temperature = 273.15 + self.td_params.get('temperature', 25.0)
 
         # load and configure thermodynamics data
         self._create_td_data(self.td_params['thermo_data_fname'], tfa_params)
@@ -168,43 +128,13 @@ class TfaModel:
         return True
 
     def export_slack_model(self, fname):
-        """Create a slack model and export as sbml.
+        """Create a slack model and export it as SBML coded file.
 
-        This slack model needs to be loaded in CobraPy and optimized.
+        The slack model is used for model parameter relaxation.
 
-        :: code:: python
-
-            import cobra
-
-            slack_model = cobra.io.read_sbml_model(fname)
-
-            # modification of variables and constraints required for TFA model
-            modify_var_types = {'V_FU_': 'binary', 'V_RU_': 'binary'}
-            for var in slack_model.variables:
-                for vprefix, vtype in modify_var_types.items():
-                    if re.match(vprefix, var.name) and 'reverse' not in var.name:
-                        var.type = vtype
-            modify_constr_bounds = {'C_FFC_': [None, 0.0], 'C_FRC_': [None, 0.0],
-                                    'C_GFC_': [None, 999.99], 'C_GRC_': [None, 999.99],
-                                    'C_SU_': [None, 1.0]}
-            for constr in slack_model.constraints:
-                for cprefix, bounds in modify_constr_bounds.items():
-                    if re.match(cprefix, constr.name):
-                        constr.lb, constr.ub = bounds
-
-            biomass_rxn = 'BIOMASS_Ec_iJO1366_core_53p95M'
-            slack_model.reactions.get_by_id(biomass_rxn).lower_bound = 0.5
-
-            slack_solution = slack_model.optimize()
-
-            slack_model.reactions.get_by_id(biomass_rxn).lower_bound = 0.0
-
-
-        Results for the optimization can subsequently be integrated
-        into the TFA model using integrate_min_slack(slack_solution.fluxes).
-
-        :param fname:
-        :return:
+        :param str fname: filename (with extension '.xml' or '.xlsx')
+        :return: success
+        :rtype: bool
         """
         self._add_slack_variables()
         self._add_slack_objective()
@@ -251,7 +181,7 @@ class TfaModel:
         Summary of updates is returned
 
         :param fba_fluxes: CobraPy fluxes from solution object
-        :type fba_fluxes: pandas Series or dict (key: rid / str, val: flux / float)
+        :type fba_fluxes: pandas.Series or dict (key: rid / str, val: flux / float)
         :return: summary of ∆Gr˚ bound updates performed
         :rtype: dict
         """
@@ -271,7 +201,7 @@ class TfaModel:
                 value: new bound value / float
 
         :param df_modify_drg0_bounds: data on bounds to be updated
-        :type df_modify_drg0_bounds: pandas DataFrame
+        :type df_modify_drg0_bounds: pandas.DataFrame
         :param remove_slack: if True, remove slack variables
         :type remove_slack: bool (default: True)
         """
@@ -289,10 +219,9 @@ class TfaModel:
             self._remove_slack_configuration()
 
     def add_displacement(self):
-        """Add displacement variable from ∆Gr.
+        """Add displacement variable for ∆Gr.
 
-        How far reactions are operating from TD equilibrium.
-        Based on pyTFA translation variables and constraints.
+        The subsequent investigation will explore how far reactions are operating from TD equilibrium.
         """
         self._add_displacement_constraints()
         self._add_displacement_variables()
@@ -300,42 +229,30 @@ class TfaModel:
     def validate(self):
         """Validate compliance to SBML standards.
 
-        :return: flag of compliance
+        :return: success
         :rtype: bool
         """
         return self.model.validate()
 
     def export(self, fname):
-        """Export TFA model to either SBML or Excel.
+        """Export TfaModel to SBML coded file or in tabular format.
 
-        :param fname: filename with extension .xml or .xlsx
-        :type fname: str
-        :return: success flag
+        :param str fname: filename (with extension '.xml' or '.xlsx')
+        :return: success
         :rtype: bool
         """
         return self.model.export(fname)
 
     def check_compatible_thermo_data(self, sid, metabolite_td_data):
-        """Check compatibility between species and thermo data record.
+        """Check compatibility between the model species corresponding thermo data record.
 
-        Metbolic model assumed to carry formula and electrical charge.
-        If metabolic model does not carry a chemical formula, the formula check is positive
+        For the check to pass, the TD record must have a valid ∆Gf° and be error free.
+        Further, the formula and chemical charge, if configured on the model species, must
+        be compatible with the formula and chemical charge configured in the TD record. The number
+        of protons and corresponding charges are allowed to differ.
 
-        These data values are compared with the selected thermo_data record.
-
-        Check is passed successfully in the following cases:
-            - chemical structures and electrical chages are identical
-            - chemical structures differ only in number of hydrogen atoms, and match charge difference
-
-        Check is not passed
-            - if thermo data record contains invalid data
-            - if there are differences in chemical structure beyond different protonation level
-            - if there are differences in charges beyond different protonation levels
-
-        :param sid: species id in the model
-        :type sid: str
-        :param metabolite_td_data:
-        :type metabolite_td_data: dict, extracted from all thermo data
+        :param str sid: species id in the model
+        :param dict metabolite_td_data: metabolite record extracted from TD data
         :return: success/failure of test
         :rtype: bool
         """
@@ -360,7 +277,7 @@ class TfaModel:
 
             if len(td_atom_delta) == 0 and td_charge_delta == 0:
                 valid = True
-            elif len(td_atom_delta) == 1 and 'H' in td_atom_delta and td_atom_delta['H'] == td_charge_delta:
+            elif (len(td_atom_delta) == 1) and ('H' in td_atom_delta) and (td_atom_delta['H'] == td_charge_delta):
                 valid = True
         return valid
 
@@ -381,15 +298,20 @@ class TfaModel:
                 - first seed id in a sorted list of model seed references
                 - Note: thermo data ids are based on seed ids, however they are not fully compliant to Model.Seed
 
-            TD species is also checked for compatibility with species formula and charge.
-            selected td_sid is configured in species
+            Finaly, we check that selected TD record has a valid ∆Gf° and is error free. In addition, the
+            chemical formula and electrical charge, if configured on the model species, must be compatible
+            with the TD data record. Only exception is a difference in protonation state and corresponding
+            charge.
 
-        :param all_td_data: all thermodynamic metabolite data
-        :type all_td_data: dict (key: td_sid / str, val: dict with TD parameters)
-        :param modify_td_ids: mapping of metabolite ids to TD species ids
-        :type modify_td_ids: dict (key: metabolite id /str, value: td_sid /str)
-        :return: td_sids used in the model
-        :rtype: list of str
+        If no valid TD record can be found fo a model species, reactions using the species cannot
+        be configured with TD constraints.
+
+        :param all_td_data: reference to all TD metabolite records in the TD database
+        :type all_td_data: dict (key: td_sid / str, val: dict with TD data)
+        :param modify_td_ids: mapping of metabolite ids to TD species id (seed compound id)
+        :type modify_td_ids: dict (key: metabolite id / str, value: td_sid / str)
+        :return: TD species ids that have been selected for the species in the model
+        :rtype: set(str)
         """
         # for metabolite name mapping, we create a dict of names in thermo data to respective seed id
         name2td_sid = {}
@@ -402,14 +324,14 @@ class TfaModel:
                     if len(name) > 0:
                         name2td_sid[name.lower()] = seed_id
 
-        mid_regex_pattern = self.td_params['mid_regex_pattern']
+        mid_regex_pattern = self.td_params.get('mid_regex_pattern', r'^M_(\w+)_\w+$')
         td_sids = set()
         for sid, s in self.model.species.items():
             selected_td_sid = None
             m = re.match(mid_regex_pattern, sid)
             if m:
                 mid = m.group(1)
-                if mid in modify_td_ids:
+                if (mid in modify_td_ids) and (modify_td_ids[mid] in all_td_sids):
                     selected_td_sid = modify_td_ids[mid]
                 else:
                     name = s.name.lower()
@@ -431,30 +353,33 @@ class TfaModel:
         return td_sids
 
     def _create_td_data(self, thermo_db_fname, tfa_params):
-        """Load and configure thermodyanmics data.
+        """Load TD database and configure TD data based on TFA configuration file.
 
-        TD metabolites and cues data is only created for required when used by our model.
+        We only extract records from the TD database that relate to our model.
+        TD database must be formated as per TD database used by pyTFA (Salvy et al., 2019), see
+        https://github.com/EPFL-LCSB/pytfa/raw/refs/heads/master/data/thermo_data.thermodb
 
-        - Create td_compartments based on TFA parameter file, table 'td_compartments'.
-        - Configure c_min and c_max on model species, using TdCompartmentData.
-        - Load thermodynamics database from file (format must similar to pyTFA thermo_data.thermodb).
-        - update attribute values of TD metabolites based on TFA parameter file, table 'modify_thermo_data'.
+        - Create td_compartments based on TFA configuration table 'td_compartments'.
+        - Configure c_min and c_max on model species.
+        - Load TD database from file (format must similar to pyTFA thermo_data.thermodb).
+        - update TD database record attributes based on TFA configuration table 'modify_thermo_data'.
         - convert energy value from kcal/mol to kJ/mol, if units the TD database are in kcal/mol.
         - from TFA parameter file, table 'modify_td_sids', get fixed mapping from metabolite id to TD metabolite.
-        - create TD species for species in the model using data from TD database
+        - identify for each model species a valid TD record, based on TFA configuration table 'modify_td_sids',
+          name matching and alternatively based on SEED compound ID configured. TD record must have valid
+          ∆Gf°, be error free and formula/charge must be compatible. Protonation states can be different.
+        - create TD species for species in the model where a valid TD record has been found
 
-        td_metabolites, td_cues and
-
-        :param thermo_db_fname: file name for thermo data
-        :type thermo_db_fname: file
-        :param tfa_params:
+        :param str thermo_db_fname: file name of thermodynamics database
+        :param tfa_params: configuration tables from TFA configuration file
+        :type tfa_params: dict of pandas.DataFrames
         :return:
         """
-        # configure thermodyamic values for compartments
+        # TD configuration of compartments
         self.td_compartments = {cid: TdCompartmentData(str(cid), row)
                                 for cid, row in tfa_params['td_compartments'].iterrows()}
 
-        # set species concentration based on td_compartments data, unless concentrations are set in GEM
+        # set species concentrations, unless concentrations are configured already in XbaModel
         for sid, s in self.model.species.items():
             cid = s.compartment
             if hasattr(s, 'c_min') is False:
@@ -469,19 +394,19 @@ class TfaModel:
         with open(thermo_db_fname, 'rb') as file:
             all_thermo_data = pickle.loads(zlib.decompress(file.read()))
 
+        # update TD data records based on TFA configuration table 'modify_thermo_data'
         if 'modify_thermo_data' in tfa_params:
             count = 0
             for td_sid, row in tfa_params['modify_thermo_data'].iterrows():
                 if td_sid in all_thermo_data['metabolites']:
-                    all_thermo_data['metabolites'][td_sid][row['attribute']] = row['value']
-                    count += 1
+                    if row['attribute'] in all_thermo_data['metabolites'][td_sid]:
+                        all_thermo_data['metabolites'][td_sid][row['attribute']] = row['value']
+                        count += 1
+                    else:
+                        print(f'{td_sid} has no attribute {row["attribute"]} in TD database')
                 else:
-                    print(f'{td_sid} not found in thermo data (modify_thermo_data)')
+                    print(f'{td_sid} id not found in TD database (check table "modify_thermo_data")')
             print(f'{count:4d} thermo data attributes updated')
-
-        conv_factor = 1.0
-        if all_thermo_data['units'] == 'kcal/mol':
-            conv_factor = CAL_PER_J
 
         modify_td_ids = {}
         if 'modify_td_sids' in tfa_params:
@@ -490,6 +415,7 @@ class TfaModel:
         # create td_metabolites with valid thermo data, filtered by required metabolites
         all_td_data = all_thermo_data['metabolites']
         td_sids = self._select_td_species(all_td_data, modify_td_ids)
+        conv_factor = CAL_PER_J if all_thermo_data['units'] == 'kcal/mol' else 1.0
         self.td_species = {td_sid: TdSpeciesData(td_sid, all_td_data[td_sid], conv_factor) for td_sid in td_sids}
         n_td_sids = sum([1 for s in self.model.species.values() if s.td_sid is not None])
         not_supported = len(self.model.species) - n_td_sids
@@ -512,20 +438,17 @@ class TfaModel:
                     del td_sdata.struct_cues[cue_id]
 
     def _create_td_reactions(self):
-        """Create TD reactions for model reacitons where TD data is fully available.
+        """Create TD reactions for model reactions where TD data is fully available.
 
-        We create TD reactions in case all thermo dynamic data is available,
-        i.e. all species contain a valid td_sid to a TD reactant
+        TD reactions are created when all reactants and products have a valid TD data record with
+        standard Gibbs free energy of formation.
 
-        We need to remove transport reactions for water. Water can have different ∆fG'˚
+        We remove transport reactions for water. Water can have different ∆fG'˚
         in different compartments and there would be no way to reverse reaction
         directionality, as water is not included in reaction quotient.
 
-        We are not replacing structure and formula from td_metabolites. While
-        linking model species to td_metabolite, we ensure compatibility of
-        structure and electrical charge.
-        Caluation of ∆fG'˚ is anyway based on isomer group thermodynamics
-        using least protonated species near the compartment pH
+        Caluation of ∆fG'˚ is based on isomer group thermodynamics
+        using least protonated species at the compartmental pH
         """
         not_supported = 0
         for rid, r in self.model.reactions.items():
@@ -539,7 +462,8 @@ class TfaModel:
                     else:
                         td_sids.add(self.model.species[sid].td_sid)
 
-                if valid_dfg0_tr is True and len(td_sids.union({CPD_WATER})) == 1:
+                # do not consider reactions for pure water transport
+                if td_sids == {CPD_WATER}:
                     valid_dfg0_tr = False
 
                 if valid_dfg0_tr is True:
@@ -549,46 +473,50 @@ class TfaModel:
         print(f'{len(self.td_reactions):4d} reactions supported by TD data; ({not_supported} not supported)')
 
     def _create_td_reactants(self):
-        """Creates TD reactants when linked to TD species
+        """Create TD reactants for model species that have a valid TD data record.
 
-        creates self.td_reactants
+        For each species in the model with TD data, create a TdReactant with same
+        identifier and configure compartmental pH and ionic strength.
         """
         for sid, s in self.model.species.items():
-            if s.td_sid is not None:
-                ph = self.td_compartments[s.compartment].ph
-                ionic_str = self.td_compartments[s.compartment].ionic_strength
-                self.td_reactants[sid] = TdReactantData(sid, {'td_sid': s.td_sid, 'ph': ph, 'ionic_str': ionic_str})
+            if s.td_sid:
+                td_rdata = {'td_sid': s.td_sid,
+                            'ph': self.td_compartments[s.compartment].ph,
+                            'ionic_str': self.td_compartments[s.compartment].ionic_strength}
+                self.td_reactants[sid] = TdReactantData(sid, td_rdata)
 
     def _set_td_reactant_dfg0_tr(self):
-        """configure transformed Gibbs energy of formation
+        """Calculate standard transformed Gibbs free energies of formation for TdReactants.
 
-        creates self.td_reactants
+        Based on compartmental pH and ionic strength, calculate transformed Gibbs free energy
+        of formation, determine avg number of protons and charge using on Isomer Group Theory.
+        Update these values in TdReactant objects.
         """
         for sid, td_rdata in self.td_reactants.items():
             td_sdata = self.td_species[td_rdata.td_sid]
             dfg0_tr, avg_h_atoms_tr, avg_charge_tr = \
-                td_sdata.get_transformed_std_gibbs_formation(td_rdata.ph, td_rdata.ionic_str, RT)
+                td_sdata.get_std_transformed_gibbs_formation(td_rdata.ph, td_rdata.ionic_str, self.rt)
             td_rdata.modify_attribute('dfg0_tr', dfg0_tr)
             td_rdata.modify_attribute('avg_h_atoms_tr', avg_h_atoms_tr)
             td_rdata.modify_attribute('avg_charge_tr', avg_charge_tr)
 
-    def _get_total_charge_transport(self, rid):
+    def _get_total_charge_transport(self, r):
         """Determine positive charge transport across membrane.
 
-        Charges of reaction reactants and products are added to corresponding
-        compartment charge balance. Stoichiometry is considered.
         Transfer of electrons, e.g. iJO1366 reaction R_FDH4pp, is implicitly supported.
+        Charge transport across multiple compartments is supported.
 
-        Here we use the charges configured for model species (i.e. biochemical reactants)
-        Optionally, we could (and not avg charges based on isomeric groups)
+        We use the charges configured for model species (i.e. biochemical reactants),
+        as we assume that a specific charged chemical species from within the pseudoisomer group
+        is transported and not a mixture of chemical species.
 
-        We return total postive charge transfer from donor to destination compartment.
+        We return total postive charge transfer from source to destination compartments.
 
-        :param rid: reaction id
+        :param r: model reaction
+        :type r: :class:`f2xba.xba_model.sbml_reaction.SbmlReaction`
         :return: direction of
         :rtype: dict (key: src_cid -> dest_cid / str, val: charge amount
         """
-        r = self.model.reactions[rid]
         charge_balance = {cid: 0.0 for cid in r.compartment.split('-')}
         if len(charge_balance) == 1:
             return {}
@@ -600,8 +528,8 @@ class TfaModel:
             s = self.model.species[sid]
             charge_balance[s.compartment] += stoic * s.charge
 
-        dest = {cid: charge for cid, charge in charge_balance.items() if charge > 0}
         src = {cid: -charge for cid, charge in charge_balance.items() if charge < 0}
+        dest = {cid: charge for cid, charge in charge_balance.items() if charge > 0}
         src_cids = list(src.keys())
 
         charge_transport = {}
@@ -618,10 +546,10 @@ class TfaModel:
                         src[src_cid] = 0.0
         return charge_transport
 
-    def _get_transformed_std_gibbs_reaction(self, rid):
+    def _get_std_transformed_gibbs_reaction(self, r):
         """Calculate standard transformed Gibbs energy of reaction
 
-        both for reactions in singel compartent and transport reactions
+        both for reactions in single compartent and transport reactions
 
         Equation 4.4-2 in Alberty's book, 2003:
             ∆rG'˚ = ∑ v_i ∆fG'˚
@@ -633,29 +561,30 @@ class TfaModel:
             - ∆G' = -S'dT + VdP + ∑^(Ns-1) µ_j' dn_j - RT ln(10) dpH    (4.1.13)
                 - as µ_H+' = 0
 
-        For transport reactions we have to add electrical work terms: F ∆φm ∑ v_i z_i
-                - ∆φm: membrane potential (dest - src) in V, e.g. -0.15 V for import p->c
-                - electrical transported charges are summed up
+        For transport reactions electrical work terms have to be added: F ∑ ∆φm_sd z_sd
+                - ∆φm_sd: membrane potential (dest minus src potential) in V, e.g. -0.15 V for import p->c
+                - z_sd: positive or negative charges transported along reaction direction (src -> dest)
+                - electrical transported charges are summed up (based on model species charges)
                 - charge transport spanning several compartments is considered
 
-        :param rid: reaction id
-        :type rid: str
-        :return: transformed standard Gibbs energy for reactions (or None for invalid)
+        :param r: model reaction
+        :type r: :class:`f2xba.xba_model.sbml_reaction.SbmlReaction`
+        :return: standard transformed Gibbs energy for reactions (or None for invalid)
         :rtype: float
         """
-        r = self.model.reactions[rid]
         srefs = {sid: -stoic for sid, stoic in r.reactants.items()}
         srefs |= {sid: stoic for sid, stoic in r.products.items()}
 
+        # ∆rG'˚ = ∑ v_i ∆fG'˚
         drg0_tr = 0.0
         for sid, met_stoic in srefs.items():
             td_rdata = self.td_reactants[sid]
-            # protons get removed for TD calculations when using transformed properties
+            # protons are removed for TD calculations when using transformed properties
             if td_rdata.td_sid != CPD_PROTON:
                 drg0_tr += td_rdata.dfg0_tr * met_stoic
 
-        # for transprot reactions, add electrical work
-        charge_transport = self._get_total_charge_transport(rid)
+        # F ∑ ∆φm_sd z_sd
+        charge_transport = self._get_total_charge_transport(r)
         if len(charge_transport) > 0:
             electrical_work = 0.0
             for transport_dir, charge in charge_transport.items():
@@ -666,26 +595,29 @@ class TfaModel:
 
         return drg0_tr
 
-    def _get_gibbs_reaction_error(self, rid):
+    def _get_gibbs_reaction_error(self, r):
         """Calculate ∆Gr error related to ∆Gf of metabolites using group contribution method.
 
-        :param rid: reaction id
-        :type rid: str
+        The actual cues being modified by the reaction are considered for the error estimation.
+        drg_error == sqrt(∑ (cue_est_error * stoic)^2)
+
+        :param r: model reaction
+        :type r: :class:`f2xba.xba_model.sbml_reaction.SbmlReaction`
         :return: estimated error relating to species ∆Gf (or 1e7 for invalid)
         :tupe: float
         """
-        r = self.model.reactions[rid]
         srefs = {sid: -stoic for sid, stoic in r.reactants.items()}
         srefs |= {sid: stoic for sid, stoic in r.products.items()}
 
+        # for the reaction, we identify the actual cues being converted
         cues_balance = defaultdict(float)
         for sid, met_stoic in srefs.items():
             td_sid = self.td_reactants[sid].td_sid
             td_sdata = self.td_species[td_sid]
             for cue_id, cue_stoic in td_sdata.struct_cues.items():
                 cues_balance[cue_id] += cue_stoic * met_stoic
-
         cues_unbalance = {cue_id: balance for cue_id, balance in cues_balance.items() if balance != 0.0}
+
         total_cues_dg_error = 0.0  # pyTFA calculation sqrt of sum of squared errors
         # TODO use sum of errors instead of sqrt of sum of squared errors
         # sum_cue_dfg_error_sum = 0.0  # alternative
@@ -706,9 +638,10 @@ class TfaModel:
         Note: ∆rG'˚ are based on ∆fG'˚ and electrical work terms for transporters
         """
         for rid, td_rdata in self.td_reactions.items():
+            r = self.model.reactions[rid]
             if td_rdata.kind in ['metabolic', 'transporter']:
-                td_rdata.modify_attribute('drg0_tr', self._get_transformed_std_gibbs_reaction(rid))
-                td_rdata.modify_attribute('drg0_tr_error', self._get_gibbs_reaction_error(rid))
+                td_rdata.modify_attribute('drg0_tr', self._get_std_transformed_gibbs_reaction(r))
+                td_rdata.modify_attribute('drg0_tr_error', self._get_gibbs_reaction_error(r))
                 if td_rdata.reversible or td_rdata.drg0_tr > IRR_NO_TD_DRG0:
                     td_rdata.modify_attribute('add_td_constraints', True)
             else:
@@ -749,24 +682,24 @@ class TfaModel:
 
         based on pyTFA
 
-        Variable V_DRG0_<rid> holds the value for the transformed standard Gibbs
-        energy of reaction ∆rG'˚, which is constructed from transformed standard Gibbs
-        energies of formation for participating reactants plus electrical work in case
+        Variable V_DRG0_<rid> holds the value for the standard transformed Gibbs
+        energy of reaction ∆rG'˚, which is constructed from standard transformed Gibbs
+        energies of formation of participating reactants plus electrical work terms in case
         of charge transport across membranes.
-        ∆rG'˚ is implemented as a variable that is allowed to vary between around
-        the computed value and an error margine.
+        ∆rG'˚ is implemented as a variable that is allowed to vary between
+        the computed value and the estimation error.
 
-        Variable V_DRG_<rid> holds the value for the transformed Gibbs energy of reaction ∆rG' ,
+        Variable V_DRG_<rid> holds the value for the transformed Gibbs energy of reaction ∆rG',
         which is based on ∆rG'˚ and the reaction quotient, a summation over the
         ln metabolite concentrations.
-        ∆rG' is bounded by minimum and maximul allowed Gibbs energy of reaction.
-        Constraint C_DRG_<rid> contains the calculation for ∆rG'
-        - C_DRG_<rid>: - V_DRG_<rid> + V_DRG0_<rid> + RT ∑ v_i * V_LC_<sid>_i = 0
-        V_DRG_<rid> is also connected via coupling constraints C_GFC_<rid> and C_GRC_<rid>
-         to forward V_FU_<rid> and reverse V_RU_<rid> use variables.
+        ∆rG' has 'unlimited' bounds.
+        Constraint C_DRG_<rid> implements the calculation for ∆rG'
+        - C_DRG_<rid>: V_DRG_<rid>  = V_DRG0_<rid> + RT ∑ v_i * V_LC_<sid>_i
+        V_DRG_<rid> is  connected via coupling constraints C_GFC_<rid> and C_GRC_<rid>
+        to forward V_FU_<rid> and reverse V_RU_<rid> use variables.
         """
         var2name = {'DRG': 'transformed Gibbs energy of reaction',
-                    'DRG0': 'transformed standard Gibbs energy of reaction'}
+                    'DRG0': 'standard transformed Gibbs energy of reaction'}
 
         drg_lb_pid = self.model.get_fbc_bnd_pid(-MAX_DRG, 'kJ_per_mol', 'drg_lb', reuse=False)
         drg_ub_pid = self.model.get_fbc_bnd_pid(MAX_DRG, 'kJ_per_mol', 'drg_ub', reuse=False)
@@ -892,7 +825,7 @@ class TfaModel:
                         # if sid in lc_variables and ridx in lc_variables[sid]:
                         #     lc_variables[sid][ridx] += stoic * RT
                         # else:
-                        lc_variables[sid][ridx] = stoic * RT
+                        lc_variables[sid][ridx] = stoic * self.rt
 
         # second we implement variables
         pseudo_rids = {}
@@ -932,12 +865,6 @@ class TfaModel:
                     r = self.model.reactions[rid]
                     rev_r = self.model.split_reversible_reaction(r)
                     modify_attrs.append([rev_r.id, 'reaction', 'product', f'{pf.C_FRC_}{ridx}=1.0'])
-                # if all_reversible is True:
-                #     r_lb = self.model.parameters[r.fbc_lower_bound].value
-                #     rev_r_ub = self.model.parameters[rev_r.fbc_upper_bound].value
-                #     if rev_r_ub == 0.0 and r_lb == 0.0:
-                #         modify_attrs.append([rev_r.id, 'reaction', 'fbc_upper_bound', fbc_max_flux_pid])
-                #         count_opened_rev_dir += 1
                 count += 1
         print(f'{count:4d} TD reactions split in forward/reverse, {count_opened_rev_dir} opened reverse direction')
 
@@ -972,10 +899,11 @@ class TfaModel:
 
         based on pyTFA
         TFA specific variables are created and connected to constraints. Variables include:
-        - transfromed standard Gibbs eneryg of reaction ∆rG'˚ and ∆rG' variables
-        - forward/reverse use binary variables for direction / ∆rG' coupling
-        - loc concentration variable for reactants
+        - [standard] transformed Gibbs energy of reaction variables ∆rG'˚ and ∆rG'
+        - forward/reverse use binary variables for flux direction / ∆rG' coupling
+        - log concentration variables for reactants
         - split reactions with TD info in fwd/rev and connect to coupling constraints
+        - right-hand-side variables with fixed values to handle RHS not equal zero
         """
         self._add_gibbs_reaction_variables()
         self._add_use_variables()
@@ -1053,7 +981,7 @@ class TfaModel:
         A summary of updated values is returned
 
         :param fluxes: CobraPy fluxes from solution object
-        :type fluxes: pandas Series or dict (key: rid / str, val: flux / float)
+        :type fluxes: pandas.Series or dict (key: rid / str, val: flux / float)
         :return: summary of ∆Gr˚ bound updates performed
         :rtype: dict
         """
@@ -1164,7 +1092,7 @@ class TfaModel:
         modify_attrs = {}
         for rid, td_rdata in self.td_reactions.items():
             ridx = re.sub(f'^{pf.R_}', '', rid)
-            modify_attrs[pf.V_DRG_ + ridx] = ['reaction', 'reactant', f'{pf.C_DC_}{ridx}={1/RT}']
+            modify_attrs[pf.V_DRG_ + ridx] = ['reaction', 'reactant', f'{pf.C_DC_}{ridx}={1.0/self.rt}']
 
         cols = ['component', 'attribute', 'value']
         df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)

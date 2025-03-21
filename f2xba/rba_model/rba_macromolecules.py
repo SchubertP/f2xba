@@ -9,7 +9,7 @@ import pandas as pd
 from xml.etree.ElementTree import parse, ElementTree, Element, SubElement, indent
 from ..utils.calc_mw import get_seq_composition
 
-type2tag = {'dna': 'RBADna', 'rnas': 'RBARnas', 'proteins': 'RBAProteins'}
+type2tag = {'dna': 'RBADna', 'rna': 'RBARnas', 'protein': 'RBAProteins'}
 
 
 class RbaMacromolecules:
@@ -40,10 +40,8 @@ class RbaMacromolecules:
     def add_macromolecule(self, mm_id, c_name, composition):
         """Add a macromolecule and determine weight.
 
-        :param mm_id: id of macromolecule
-        :type mm_id: str
-        :param c_name: RBA compartment name
-        :type c_name: str
+        :param str mm_id: id of macromolecule
+        :param str c_name: RBA compartment name
         :param composition: composition
         :type composition: dict (key: component/str, val: stoic/float)
         :return:
@@ -62,32 +60,31 @@ class RbaMacromolecules:
 
         Macromolecules get configured based xba model and RBA parameters
         - 'dna': 'dna' is added with relative nucleotide composition based on DNA GC content
-        - 'rnas': 'mrna' is added with relative nucleotide compostion based on all mRNAs in DNA
+        - 'rna': 'mrna' is added with relative nucleotide compostion based on all mRNAs in DNA
             - tRNAs and rRNAs are added from RBA parameters using NCBI derived composition
-        - 'proteins': add proteins from XBA model
+        - 'protein': add proteins from XBA model
 
         :param rba_params: RBA model specific parametrization
         :type rba_params: dict of pandas DataFrames
         :param xba_model: xba model based on genome scale metabolic model
-        :type xba_model: Class XbaModel
-        :param cid_mappings: dictionary of specific compartment names
-        :type cid_mappings: dict
+        :type xba_model: class:`XbaModel`
+        :param dict cid_mappings: dictionary of specific compartment names
         """
         df_pmaps_data = rba_params['processing_maps']
         df_mach_data = rba_params['machineries']
         df_trna_data = rba_params['trna2locus']
-        df_components = df_pmaps_data[df_pmaps_data['macromolecules'] == self.type]
+        df_components = df_pmaps_data[df_pmaps_data['set'] == self.type]
         cytoplasm_cid = cid_mappings['cytoplasm_cid']
         rcid2cid = cid_mappings['rcid2cid']
 
         # configure components
-        if self.type in ['dna', 'rnas']:
+        if self.type in ['dna', 'rna']:
             for _, row in df_components.iterrows():
                 cmp_id = row['component']
                 name = row['name'] if type(row['name']) is str else None
                 self.components[cmp_id] = RbaComponent(cmp_id, name=name, c_type='nucleotide', weight=row['weight'])
 
-        if self.type == 'proteins':
+        if self.type == 'protein':
             for _, row in df_components.iterrows():
                 cmp_id = row['component']
                 if cmp_id != 'cofactor':
@@ -107,7 +104,7 @@ class RbaMacromolecules:
             rel_conc = {'G': gc / 2.0, 'C': gc / 2.0, 'A': (1.0 - gc) / 2.0, 'T': (1.0 - gc) / 2.0}
             self.macromolecules['dna'] = RbaMacromolecule('dna', compartment=cytoplasm_cid, composition=rel_conc)
 
-        if self.type == 'rnas':
+        if self.type == 'rna':
             # add mRNA using average mRNA composition
             mrna_avg_comp = xba_model.ncbi_data.get_mrna_avg_composition()
             self.macromolecules['mrna'] = RbaMacromolecule('mrna', compartment=cytoplasm_cid,
@@ -119,13 +116,13 @@ class RbaMacromolecules:
                 composition = record.spliced_nt_composition
                 self.macromolecules[trna_id] = RbaMacromolecule(trna_id, compartment=cid, composition=composition)
             # add rRNAs
-            for _pm, row in df_mach_data[df_mach_data['macromolecules'] == 'rnas'].iterrows():
+            for _pm, row in df_mach_data[df_mach_data['set'] == 'rna'].iterrows():
                 cid = rcid2cid[row['compartment']]
                 record = xba_model.ncbi_data.locus2record[row['label']]
                 rrna_id = row['id']
                 composition = record.spliced_nt_composition
                 self.macromolecules[rrna_id] = RbaMacromolecule(rrna_id, compartment=cid, composition=composition)
-        if self.type == 'proteins':
+        if self.type == 'protein':
             for p in xba_model.proteins.values():
                 locus = p.locus
                 cid = rcid2cid[p.compartment]
@@ -140,7 +137,9 @@ class RbaMacromolecules:
         print(f'{len(self.macromolecules):4d} macromolecules ({len(self.components)} components) in {self.type} ')
 
     def export_xml(self, model_dir):
-        file_name = os.path.join(model_dir, self.type + '.xml')
+
+        mm_set = {'rna': 'rnas', 'protein': 'proteins'}.get(self.type, self.type)
+        file_name = os.path.join(model_dir, mm_set + '.xml')
         root = Element(type2tag[self.type])
 
         components = SubElement(root, 'listOfComponents')
@@ -170,8 +169,10 @@ class RbaMacromolecules:
         df_mm.set_index('id', inplace=True)
         cols = ['compartment'] + df_comp.index.to_list()
         df = pd.concat((df_comp.T, df_mm)).reindex(columns=cols)
-        df.index.name = self.type
-        return {self.type: df}
+
+        mm_set = {'rna': 'rnas', 'protein': 'proteins'}.get(self.type, self.type)
+        df.index.name = mm_set
+        return {mm_set: df}
 
 
 class RbaComponent:

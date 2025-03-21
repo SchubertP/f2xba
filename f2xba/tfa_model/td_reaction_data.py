@@ -17,12 +17,9 @@ class TdReactionData:
 
         Note: for strings we convert the type from numpy.str_ to str
 
-        :param rid: reaction id
-        :type rid: str
-        :param reversible: reversible status from genome scale metabolic model
-        :type reversible: bool
-        :param kind: reaction type, e.g. 'metabolic' or 'transport', from original GEM
-        :type: str
+        :param str rid: reaction id
+        :param bool reversible: reversible status from genome scale metabolic model
+        :param str kind: reaction type, e.g. 'metabolic' or 'transport', from original GEM
         """
         self.id = rid
         self.reversible = reversible
@@ -34,10 +31,9 @@ class TdReactionData:
     def modify_attribute(self, attribute, value):
         """modify attribute value.
 
-        :param attribute: attribute name
-        :type attribute: str
+        :param str attribute: attribute name
         :param value: value to be configured
-        :type value: str
+        :type value: str, float, bool
         """
         if hasattr(self, attribute):
             setattr(self, attribute, value)

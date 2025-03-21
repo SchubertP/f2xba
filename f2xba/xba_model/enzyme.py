@@ -34,16 +34,13 @@ class Enzyme:
         Enzyme compartment is set based on a reaction, catalyzed by the enzyme.
         Note: multiple compartments could be possible, only one is selected
 
-        :param enz_id: enzyme id, e.g. 'enz_b1094_b2836'
-        :type enz_id: str
-        :param name: enzyme name
-        :type name: str
+        :param str enz_id: enzyme id, e.g. 'enz_b1094_b2836'
+        :param str name: enzyme name
         :param model: reference to underlying model
-        :type model: Class XbaModel
+        :type model: class:`XbaModel`
         :param composition: protein composition of enzyme
         :type composition: dict (key: locus/str, val: stoichiometry/float)
-        :param compartment: compartment of enzyme
-        :type compartment: str
+        :param str compartment: compartment of enzyme
         """
         self.id = enz_id
         self.name = name
@@ -75,20 +72,18 @@ class Enzyme:
         return cofactors
 
     def add_reaction(self, rid):
-        """add reaction id to enzyme.
+        """Add reaction identifier.
 
-        :param rid: reaction id
-        :type rid: str
+        :param str rid: reaction id
         """
         self.rids.append(rid)
 
     def modify_attribute(self, attribute, value):
-        """modify attribute value.
+        """Modify attribute value.
 
-        :param attribute: attribute name
-        :type attribute: str
+        :param str attribute: attribute name
         :param value: value to be configured
-        :type value: str
+        :type value: str or int or list[str]
         """
         if attribute == 'composition' and type(value) is str:
             value = get_srefs(re.sub('gene', 'species', value))

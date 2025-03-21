@@ -20,14 +20,8 @@ class TdReactantData:
         contains reactant TD data for reactant at specific pH and ionic strength
         based on pyTFA thermo data file
 
-        s_data expected to have the keys:
-
-        Note: for strings we convert the type from numpy.str_ to str
-
-        :param sid: model species id
-        :type sid: str
-        :param td_rdata: thermodynamic data for TD reactant
-        :type td_rdata: dict
+        :param str sid: model species id
+        :param dict td_rdata: thermodynamics data for TD reactant
         """
         self.id = sid
         self.td_sid = td_rdata['td_sid']
@@ -40,10 +34,9 @@ class TdReactantData:
     def modify_attribute(self, attribute, value):
         """modify attribute value.
 
-        :param attribute: attribute name
-        :type attribute: str
+        :param str attribute: attribute name
         :param value: value to be configured
-        :type value: str
+        :type value: str, float, int
         """
         if hasattr(self, attribute):
             setattr(self, attribute, value)

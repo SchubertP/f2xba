@@ -30,7 +30,7 @@ class SbmlParameter(SbmlSBase):
             - 'notes': str - handled in parent class
 
         :param s_parameter: parameter data from SBML import
-        :type s_parameter: pandas Series
+        :type s_parameter: pandas.Series
         """
         super().__init__(s_parameter)
         self.value = s_parameter['value']
@@ -46,12 +46,11 @@ class SbmlParameter(SbmlSBase):
         return data
 
     def modify_attribute(self, attribute, value):
-        """modify attribute value.
+        """Modify attribute value.
 
-        :param attribute: attribute name
-        :type attribute: str
+        :param str attribute: attribute name
         :param value: value to be configured
-        :type value: str
+        :type value: str or bool
         """
         if hasattr(self, attribute):
             setattr(self, attribute, value)

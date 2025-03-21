@@ -24,19 +24,16 @@ class TdCueData:
           'charged_std': electical charge in standard conditions
           'mass_std': (g/mol) molecular weight in standard conditions
           'nH_std': number of protons in standard conditions
-          'deltaGf_std': (kcal/mol??) gibbs free energy of formation in std. cond
+          'deltaGf_std': standard Gibbs energy of formation (25˚C, pHo, zero ionic strength)
           'pKa': list of pKa values
           'struct_cues': dict of cues in metabolite with stoichiometry
-          'error': error information
+          'error': estimation error
 
         Note: for strings we convert the type from numpy.str_ to str
 
-        :param cue_id: cue id
-        :type cue_id: str
-        :param cue_data: thermodynamic data for cue
-        :type cue_data: dict
-        :param conv_factor: energy units conversion factor
-        :type conv_factor: float (optional, default 1.0)
+        :param str cue_id: cue id
+        :param dict cue_data: thermodynamic data for cue
+        :param float conv_factor: optional, energy units conversion factor, default 1.0
         """
         self.id = cue_id
         self.names = cue_data['names']

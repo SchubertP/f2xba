@@ -22,10 +22,9 @@ class TdCompartmentData:
           'c_max_M': maximum metabolite concentrations in mol/l
           '<cid>_mV': membrane potential in mV (other compartment potential - own compartment potential)
 
-        :param cid: compartment id (as in the model)
-        :type cid: str
+        :param str cid: compartment id
         :param c_data: thermodynamics data
-        :type c_data: dict or dict-like (e.g. pandas Series)
+        :type c_data: dict or dict-like (e.g. pandas.Series)
         """
         self.id = cid
         self.ph = c_data['ph']

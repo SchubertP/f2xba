@@ -1,5 +1,9 @@
 """Implementation of EcModel class.
 
+Extend the XbaModel to become an enzyme constraint model.
+The implementation of GECKO is based on the GECKO 1.0 matlab package (Sánchez et al., 2017).
+The implementation of ccFBA and MOMENTmr is based on the R-package sybilccFBA (Desouki, 2015)
+The implementation of MOMENT is based on literature (Adadi et al., 2012)
 
 Peter Schubert, HHU Duesseldorf, October 2023
 """
@@ -14,62 +18,39 @@ MAX_CONC_PROT = 100  # mg/gDW maximum protein concentration in kpmf (kilo protei
 
 
 class EcModel:
-    """Class EcModel
+    """Extend a XbaModel to an enzyme constraint model.
 
-    Build upon XbaModel (genome-scale metabolic model), create
-    an enzyme constraint model (GECKO, ccFBA, MOMENT, MOMENTmr),
-    by modifying the XbaModel.
+    The implementation of GECKO is based on the GECKO 1.0 matlab package (Sánchez et al., 2017),
+    ccFBA and MOMENTmr on the R-package sybilccFBA (Desouki, 2015) and MOMENT on literature
+    (Adadi et al., 2012).
 
     .. code-block:: python
 
         xba_model = XbaModel('iJO1366.xml')
-        xba_model.configure('iJO1366_xba_GECKO_parameters.xlsx')
+        xba_model.configure('iJO1366_GECKO_xba_parameters.xlsx')
 
         ec_model = EcModel(xba_model)
-        ec_model.configure(('iJO1366_ec_GECKO_parameters.xlsx')
+        ec_model.configure('iJO1366_GECKO_ecm_parameters.xlsx')
         if ec_model.validate():
-            ec_model.export('iJO1366_GECKO_batch.xml')
-
+            ec_model.export('iJO1366_GECKO.xml')
     """
 
     def __init__(self, xba_model):
-        """Instantiate EcModel
+        """Instantiate the EcModel instance.
 
-        XbaModel created from a genome-scale metabolic model and
-        adequately configured
-
-        :param xba_model: XbaModel
-        :type xba_model: Class f2xba.XbaModel
+        :param xba_model: a reference to a XbaModel instance
+        :type xba_model: :class:`f2xba.XbaModel`
         """
         self.model = xba_model
         self.arm_flag = False
 
     def configure(self, fname):
-        """Convert the xba model to an enzyme constraint model using parameters in fname.
+        """Configuration with ECM configuration data.
 
-        to be executed after xba model has been configured
-        This method adds EC-model specific parametrizations to the xba model
+        Accepted table: 'general'
 
-        Excel spreadsheet document requires sheet 'general' with configuration data for
-        'ecm_type', 'p_total', 'avg_enz_sat', ('p_abundance_fname' or 'pm2totpm')
-
-        Notes:
-        - GECKO considers isoenzymes, promiscuous enzymes and stoichiometry
-          of enzymes/complexes.
-        - MOMENTmr is similar to GECKO, except that stoichiometry of enzymes and enzyme
-          complexes is fixed at 1 for participating proteins
-        - ccFBA is similar to GECKO, with the modification that for reactions catalyzed
-          by isoenzymes only one isoreaction with the lease expensive MW/kcat isoenzymes
-          is retained in the model, the other isoreactions are removed
-          (i.e. loss of isoenzyme redundancy)
-        - MOMENT model is similar to MOMENTmr, with the modification the for promiscuous
-          enzymes only the most expensive reaction is relevant, all other reactions
-          catalyzed by same promiscuous enzyme have no added protein cost.
-          Protein species have to be added, before making reactions irreversible
-
-        :param fname: file name for ECM configuration parameters
-        :type fname: str
-        :return: success/failure of model configuration
+        :param str fname: filename of ECM configuration file (.xlsx)
+        :return: success
         :rtype: bool
         """
         sheet_names = ['general', 'rescale_reactions']
@@ -287,8 +268,7 @@ class EcModel:
 
         protein concentration in model has units of mg/gDW (i.e. 1000.0 * pmf)
 
-        :param total_protein: total modeled protein mass in g/gDW
-        :type total_protein: float
+        :param float total_protein: total modeled protein mass in g/gDW
         """
         # add total protein pool species in default compartment
         pool_sid = f'{pf.C_prot_pool}'
@@ -334,8 +314,7 @@ class EcModel:
         Determine which part of organism protein mass fraction is modelled.
         Protein abundance file needs first to be downloaded from Pax-db.org
 
-        :param fname: file path/name of protein abundance data collected from Pax-db.org
-        :type fname: str
+        :param str fname: file path/name of protein abundance data collected from Pax-db.org
         :return: relative pmf of model based
         :rtype: float
         """
@@ -397,8 +376,7 @@ class EcModel:
           constraint per protein: C_prot_uid couples reaction flux R_xxx with protein concentration V_PC_uid
           C_prot_uid: (-1/(kcat * 3600 * n_AS * avg_enz_sat) * stoic * MW) * R_xxx + 1 * V_PC_uid = (≤) 0
 
-        :param avg_enz_sat: average enzyme saturation applicable to all reactions
-        :type avg_enz_sat: float
+        :param float avg_enz_sat: average enzyme saturation applicable to all reactions
         """
         for r in self.model.reactions.values():
             assert len(r.enzymes) <= 1, ('Something went wrong, at this stage of isoreactions, we expect a maximum'
@@ -426,7 +404,7 @@ class EcModel:
                     r.reactants[prot_sid] = (stoic / enz_kcat_per_h) * p.mw
 
     def _rescale_reactions(self, df_rescale):
-        """rescale reactions (e.g. Biomass) as per ecYeast7 (Sanchez, 2017)
+        """Rescale reactions (e.g. Biomass) as per ecYeast7 (Sanchez, 2017)
 
         biomass dict contains
         - biomass reaction id 'rid'
@@ -439,7 +417,7 @@ class EcModel:
         GAM related species get set to gam level
 
         :param df_rescale: biomass rescaling parameters
-        :type df_rescale: pandas DataFrame
+        :type df_rescale: pandas.DataFrame
         :return:
         """
         modify_reactants = {}
@@ -495,7 +473,7 @@ class EcModel:
         Generate a table that can be used to configure kcats
 
         :return: table with kcat values
-        :rtype: pandas DataFrame
+        :rtype: pandas.DataFrame
         """
         notes = f'kcat export from {self.model.model_attrs.id}'
         rid_kcats = []
@@ -515,19 +493,18 @@ class EcModel:
         return df_rid_kcats
 
     def validate(self):
-        """Validate compliance to SBML standards
+        """Validate compliance to SBML standards.
 
-        :return: flag of compliance
+        :return: success
         :rtype: bool
         """
         return self.model.validate()
 
     def export(self, fname):
-        """Export ec model to either SBML or Excel
+        """Export EcModel to SBML coded file or in tabular format.
 
-        :param fname: filename with extension .xml or .xlsx
-        :type fname: str
-        :return: success flag
+        :param str fname: filename (with extension '.xml' or '.xlsx')
+        :return: success
         :rtype: bool
         """
         return self.model.export(fname)

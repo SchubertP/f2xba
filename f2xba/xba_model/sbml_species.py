@@ -65,10 +65,9 @@ class SbmlSpecies(SbmlSBase):
     def modify_attribute(self, attribute, value):
         """modify attribute value.
 
-        :param attribute: attribute name
-        :type attribute: str
+        :param str attribute: attribute name
         :param value: value to be configured
-        :type value: str
+        :type value: str, int, float or bool
         """
         setattr(self, attribute, value)
 

@@ -1,6 +1,6 @@
 """Implementation of GeckoFitKcats class.
 
-Fit kcat values to proteomics
+Support fitting of turnover numbers to proteomics data in GECKO models.
 
 Peter Schubert, HHU Duesseldorf, CCB, September 2024
 """
@@ -13,8 +13,26 @@ import f2xba.prefixes as pf
 
 
 class GeckoFitKcats:
+    """Support fitting of turnover numbers to proteomics data.
+
+    Usage, with the dictionary measured_mpmfs of measured protein levels:
+
+    .. code-block:: python
+
+        eo = EcmOptimization('iJO1366_GECKO.xml)
+        solution = eo.optimize()
+        gfk = GeckoFitKcats(eo, 'iJO1366_predicted_kcats.xlsx')
+        tot_fitted_mpmf = gfk.process_data(solution.fluxes, measured_mpmfs)
+        exceeding_max_scale = gfk.update_kcats('iJO1366_fitted_kcats.xlsx', target_sat=0.5, max_scale_factor=100.0)
+    """
 
     def __init__(self, optim, orig_kcats_fname):
+        """Instantiate the GeckoFitKcats instance.
+
+        :param optim: a reference to a EcmOptimization instance
+        :type optim: :class:`EcmOptimization`
+        :param str orig_kcats_fname: filename containing original turnover numbers (.xlsx)
+        """
         self.optim = optim
         self.orig_kcats_fname = orig_kcats_fname
 
@@ -72,10 +90,9 @@ class GeckoFitKcats:
            flux per active reaction. The iso-reaction with the highest measured protein cost is selected.
            Measured protein costs for promiscuous enzymes are allocated as per predicted flux distribution.
 
-        :param fluxes: iso-reaction fluxes of GECKO solution for given condition
-        :type fluxes: dict or pandas Series, key: iso-reaction id (without 'R_' prefix), val: flux in mmol/gDWh, float
-        :param measured_mpmfs: gene loci and related protein mass fractions measured in mg protein / g total protein
-        :type measured_mpmfs: dict: gene locus ('fbcGeneProduct'-'label' attribute), value mpmf, flaot
+        :param fluxes: reaction fluxes of GECKO solution for given condition
+        :type fluxes: dict or pandas.Series, key: iso-reaction id (without `R_` prefix), val: flux in mmol/gDWh, float
+        :param dict measured_mpmfs: gene loci and related protein mass fractions measured in mg protein / g total protein
         :return: tot_fitted_mpmf: protein mass fraction used for kcat fitting
         :rtype: float
         """
@@ -134,7 +151,7 @@ class GeckoFitKcats:
         return tot_fitted_mpmf
 
     def update_kcats(self, fitted_kcats_fname, target_sat=0.5, max_scale_factor=None, min_kcat=0.01, max_kcat=5000.0):
-        """Fit kcats values to proteomics data and create a new kcats file.
+        """Fit turnover numbers to proteomics data and export updated turnover numbers to file.
 
         This requires process_data() to be executed first.
 
@@ -149,29 +166,24 @@ class GeckoFitKcats:
         scaling factor is predicted/measured protein concentrations.
 
         If there are iso-reactions, we need to scale the kcat values of the iso-reactions as well, to avoid that
-        any of the iso-reactions becomes 'cheaper' when only updating our target iso-reaction.
+        any of the iso-reactions becomes 'cheaper'.
 
-        Nore complex cases can appear with iso-reactions, when the model uses another iso-reaction than
+        More complex cases can appear with iso-reactions, when the model uses another iso-reaction than
         proteomics suggests. In this case we first have to increase the kcat value of the iso-reaction suggested
         by proteomics, and subsequently we adjust the scaling to the measured protein concentration.
 
         A further kcat scaling is applied to move the model to a given target enzyme saturation level.
         It is ensured that kcat volues fall into the min_kcat, max_kcat range
 
-        fitted kcat values are exported to fitted_kcats_fname
+        Fitted kcat values are exported to fitted_kcats_fname
 
-        :param fitted_kcats_fname: file name of exported kcats Excel Document with fitted values
-        :type fitted_kcats_fname: str
-        :param target_sat: average target saturation of fitted model (optional: default 0.5 - half saturation)
-        :type target_sat: float > 0.0
-        :param max_scale_factor: maximum scaling factor (and 1/factor) of kcat beyond kcat will not be scaled
-        :type max_scale_factor: float, e.g. 50 or None (unlimited scaling)
-        :param min_kcat: (optional) minimal allowed kcat value
-        :type min_kcat: float (default 0.01 s-1)
-        :param max_kcat: (optional) maximal allowed kcat value
-        :type max_kcat: float (default 5000.0 s-1)
-        :return: kcat records that were not scaled due to exceeding max scaling factor
-        :rtype: dict of dict
+        :param str fitted_kcats_fname: filename for fitted and exported turnover numbers (.xlsx)
+        :param float target_sat: average target saturation of fitted model (default: 0.5)
+        :param float max_scale_factor: maximum scaling [1/factor ... factor] (default None)
+        :param float min_kcat: minimal turnover number in s-1 (default: 0.01)
+        :param float max_kcat: maximal turnover number in s-1 (default: 5000.0)
+        :return: kcat records not scaled due to exceeding max scaling
+        :rtype: dict[dict]
         """
         # load model kcat records used for flux solution
         with pd.ExcelFile(self.orig_kcats_fname) as xlsx:

@@ -26,18 +26,15 @@ class FbcGeneProduct(SbmlSBase):
     def add_notes(self, notes):
         """Add gene id and name from Uniprot data.
 
-        :param notes: notes to add
-        :type notes: str
+        :param str notes: notes to add
         """
         self.notes = notes
 
     def modify_attribute(self, attribute, value):
-        """modify attribute value.
+        """Modify attribute value.
 
-        :param attribute: attribute name
-        :type attribute: str
-        :param value: value to be configured
-        :type value: str
+        :param str attribute: attribute name
+        :param str value: value to be configured
         """
         setattr(self, attribute, value)
 

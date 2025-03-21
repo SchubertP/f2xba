@@ -230,8 +230,8 @@ class RbaEnzymes:
     def validate(self, component_ids):
         valid = True
         missing = self.ref_molecules().difference(component_ids['species']) \
-            .difference(component_ids['rnas']) \
-            .difference(component_ids['proteins'])
+            .difference(component_ids['rna']) \
+            .difference(component_ids['protein'])
         if len(missing) > 0:
             print('species/macromolecules used in enzyme machinery not defined:', missing)
             valid = False
