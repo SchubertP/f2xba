@@ -11,7 +11,7 @@ jupyter notebooks
 -----------------
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
    notebooks/1_Create_iML1515_default_GECKO
    notebooks/2_Create_iML1515_modified_GECKO
