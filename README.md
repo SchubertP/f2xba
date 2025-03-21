@@ -1,100 +1,154 @@
-# f2xba
+[![image](./images/ccb_logo-2.1.1_p_2100x2970.png){.align-right
+width="105px"
+height="148px"}](https://www.cs.hhu.de/lehrstuehle-und-arbeitsgruppen/computational-cell-biology)
 
+# Welcome to f2xba\'s documentation
 
-Extract nucleotide information from NCBI using E-utils EFetch.
-NCBI's Disclaimer and Copyright notice 
-(https://www.ncbi.nlm.nih.gov/About/disclaimer.html).
+![image](./images/f2xba.png){.align-center}
 
-Biocyc 
+## f2xba modelling framework: from FBA to extended genome-scale modelling
 
-Uniprot
+In the domain of systems biology, the **f2xba** modeling framework has
+been developed for the purpose of generating a variety of extended
+genome-scale metabolic model types using simple and consistent
+workflows. This modeling framework was developed at the research group
+for [Computational Cell Biology
+(CCB)](https://www.cs.hhu.de/en/research-groups/computational-cell-biology)
+at Heinrich-Heine-University Düsseldorf, Germany.
 
+The CCB research group has developed a suite of [software
+tools](https://www.cs.hhu.de/en/research-groups/computational-cell-biology/software-contributions)
+to facilitate genome-scale metabolic modeling. Sybil is an R package
+that utilizes genome-scale metabolic network optimization through the
+use of flux balance analysis (FBA)-based methods. SybilccFBA is an
+extension designed to enhance the optimization of enzyme constraint
+models. [TurNuP](https://turnup.cs.hhu.de/Kcat) is a machine learning
+model that predicts turnover numbers, which are required to parametrize
+extended genome-scale models.
+[smblxdf](https://sbmlxdf.readthedocs.io/en/latest/) is a Python package
+that converts between SBML coded genome-scale metabolic models and
+tabular formats. It is used to create and modify SBML coded models, as
+well as to access model information.
 
-## Getting started
+## Extended model types
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+f2xba support generation of enzyme constraint models, such as GECKO
+([Sánchez et al.,
+2017](https://doi.org/https://doi.org/10.15252/msb.20167411)),
+ccFBA[^1], MOMENT ([Adadi et al.,
+2012](https://doi.org/10.1371/journal.pcbi.1002575)) and MOMENTmr[^2],
+resource balance constraint RBA models ([Bulović et al.,
+2019](https://doi.org/https://doi.org/10.1016/j.ymben.2019.06.001);
+[Goelzer et al.,
+2011](https://doi.org/https://doi.org/10.1016/j.automatica.2011.02.038)),
+and thermodynamics constraint models, such as TFA ([Henry et al.,
+2007](https://doi.org/10.1529/biophysj.106.093138); [Salvy et al.,
+2019](https://doi.org/10.1093/bioinformatics/bty499)) and TGECKO
+(thermodynamic GECKO) and TRBA (thermodynamic RBA). These advanced model
+types, which have been developed in recent years, are based on existing
+genome-scale metabolic models used for FBA (flux balance analysis), a
+methodology that has been utilized for decades ([Watson,
+1986](https://doi.org/10.1093/bioinformatics/2.1.23)). Genome-scale
+metabolic models can be obtained from databases such as the BiGG models
+database ([King, Lu, et al.,
+2015](https://doi.org/10.1093/nar/gkv1049)), or retrieved from
+publications.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Relevance of extended modelling
 
-## Add your files
+The advent of high-throughput data has led to a growing importance of
+these extended models. Fundamentally, FBA can be regarded as a predictor
+of the macroscopic behavior of metabolic networks, while extended models
+offer insights into the intricate functioning of these networks.
+Extended models contain considerably more parameters. While some of
+these additional parameters require definition, the majority are
+automatically retrieved from online databases and tools, including NCBI,
+UniProt, BioCyc, and TurNuP ([Kroll et al.,
+2023](https://doi.org/10.1038/s41467-023-39840-4)). The development of
+these extended models and the enhancement of their parameters can be
+facilitated through simple and consistent workflows. Furthermore, the
+sharing of configuration data among different model types is encouraged.
+All extended models are exported in stand-alone SBML (Systems Biology
+Markup Language) coded files ([Hucka et al.,
+2019](https://doi.org/10.1515/jib-2019-0021)) to facilitate model
+sharing and processing by downstream tools, such as cobrapy ([Ebrahim et
+al., 2013](https://doi.org/10.1186/1752-0509-7-74)). Additionally, the
+f2xba modeling framework provides optimization support via cobrapy or
+gurobipy interfaces. Optimization results are structured and enriched
+with additional data. This includes tables for each variable type,
+correlation plots, and exports to [Esher](https://escher.github.io)
+([King, Dräger, et al.,
+2015](https://doi.org/10.1371/journal.pcbi.1004321)). This facilitates
+interpretation of model predictions and supports workflows for model
+parameter adjustments.
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+## Integrated solution
 
-```
-cd existing_repo
-git remote add origin https://gitlab.cs.uni-duesseldorf.de/schubert/f2xba.git
-git branch -M main
-git push -uf origin main
-```
+Research groups have already developed tools to support extended
+genome-scale modeling. These tools have been implemented in various
+programming environments, each exhibiting a distinct approach to model
+parametrization, generation, and optimization. However, none of these
+tools generate stand-alone models coded in SBML. ccFBA and MOMENT
+modeling is supported by the R package
+[sybilccFBA](https://cran.r-project.org/src/contrib/Archive/sybilccFBA/),
+GECKO modeling by the MATLAB package
+[geckomat](https://github.com/SysBioChalmers/GECKO/tree/main/src), RBA
+modeling by the Python package
+[RBApy](https://sysbioinra.github.io/RBApy/installation.html), and
+thermodynamics modeling by the Python package
+[pyTFA](https://pytfa.readthedocs.io/en/latest/index.html). f2xba is the
+first integrated tool to support model generation of various extended
+model types within a single programming environment, compatible model
+parametrizations, shareable configuration files, and consistent
+workflows for both model generation and optimization. The resulting
+models are exported to files and are fully compliant with the SBML
+standard. Furthermore, all annotation data from the original
+genome-scale (FBA) model is carried over. Depending on the availability
+of organism-specific data and actual requirements, different extended
+model types and differently parametrized versions of a target organism
+can be generated with relative ease. It is our hope that the f2xba
+modeling framework will support the community in actively using these
+extended model types, which have been published in the previous few
+years.
 
-## Integrate with your tools
+## Tutorials
 
-- [ ] [Set up project integrations](https://gitlab.cs.uni-duesseldorf.de/schubert/f2xba/-/settings/integrations)
+The documentation includes a set of tutorials with detailed
+descriptions, where different types of extended models are created based
+on the most recent genome-scale metabolic network reconstruction of
+*Escherichia coli*, iML1515 ([Monk et al.,
+2017](https://doi.org/10.1038/nbt.3956)). Similar jupyter notebooks are
+available upon request for the generation of extended models based on
+yeast9 ([Zhang et al.,
+2024](https://doi.org/10.1038/s44320-024-00060-7)), *Saccharomyces
+cerevisiae*, iJN678 ([Nogales et al.,
+2012](https://doi.org/10.1073/pnas.1117907109)), *Synechocystis* sp. PCC
+6803, and MMSYN ([Breuer et al.,
+2019](https://doi.org/10.7554/eLife.36842)), the synthetic cell
+JCVI-Syn3A based on *Mycoplasma mycoides capri*.
 
-## Collaborate with your team
+## Outlook
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+Growth balance analysis (GBA) ([Dourado & Lercher,
+2020](https://doi.org/10.1038/s41467-020-14751-w)) modeling is an active
+research project in CCB. In GBA models, reaction fluxes are coupled with
+protein requirements using non-linear kinetic functions, where enzyme
+saturation depends on variable metabolite concentrations. We have
+previously demonstrated the generation of small, schematic GBA models in
+SBML, the loading of these models from SBML, and the optimization of
+them using non-linear solvers. However, the optimization of genome-scale
+GBA models remains challenging. Once this optimization problem is
+resolved, f2xba could be extended to support GBA model generation, e.g.,
+by extending GECKO or RBA configuration data, and GBA model
+optimization, either using nonlinear optimization features available in
+gurobi 12 or using a dedicated nonlinear solver like IPOP.
 
-## Test and Deploy
+References:
 
-Use the built-in continuous integration in GitLab.
+[^1]: Desouki, A. A. (2015). sybilccFBA: Cost Constrained FLux Balance
+    Analysis: MetabOlic Modeling with ENzyme kineTics (MOMENT). In CRAN.
+    <https://cran.r-project.org/web/packages/sybilccFBA/index.html>
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+[^2]: Desouki, A. A. (2015). sybilccFBA: Cost Constrained FLux Balance
+    Analysis: MetabOlic Modeling with ENzyme kineTics (MOMENT). In CRAN.
+    <https://cran.r-project.org/web/packages/sybilccFBA/index.html>
