@@ -1,9 +1,8 @@
-# f2xba/docs/source/conf.py configuration file for the Sphinx.
+# f2xba/docs/source/conf.py Sphinx configuration file
 
 import os
 import re
 import sys
-from pathlib import Path
 
 # -- Project information -----------------------------------------------------
 
@@ -12,25 +11,19 @@ copyright = '2025, Peter Schubert'
 author = 'Peter Schubert'
 
 # retrieve version number
-def get_version(project):
-    """Return package version from <project>/_version.py"""
-    version_path = os.path.join('../..', project, '_version.py')
-    if not os.path.exists(version_path):
-        print('Version file not found: ' + version_path)
-        sys.exit(-1)
-    with open(version_path) as f:
-        mo = re.search(r"^__version__\s*=\s*['\"]([^'\"]*)['\"]",
-                       f.read(), re.MULTILINE)
-        try:
-            return mo.group(1)
-        except AttributeError as e:
-            print('Attribute "__version__" not found')
-            sys.exit(-1)
+# retrieve version number
+def get_version(_project):
+    with open(os.path.join('../..', project, '_version.py'), "r") as fh:
+        for line in fh:
+            if re.match('__version__', line) and '=' in line:
+                return re.sub(r'"', '', (line.strip().split('='))[1].strip())
+    return '0.0.0'
+
 release = get_version(project)
 version = release
 
 # patch the Sphinx run to directly run from the sources
-sys.path.insert(0, str(Path('../..').resolve()))
+sys.path.insert(0, os.path.abspath('../..'))
 
 # cope with missing dependencies, i.e. modules to be mocked up
 autodoc_mock_imports = ['sbmlxdf', 'matplotlib', 'libsbml', 'scipy', 'pandas', 'json',
@@ -44,13 +37,10 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx_copybutton',
+    'sphinx.ext.viewcode',
     'nbsphinx',
 ]
 
-templates_path = ['_templates']
-exclude_patterns = []
-
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
-
 html_theme = 'alabaster'

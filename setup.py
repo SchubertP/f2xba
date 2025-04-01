@@ -20,8 +20,8 @@ setup(
     name='f2xba',
     description='f2xba modelling framework: from FBA to extended genome-scale modelling',
     author='Peter Schubert',
-    author_email='paschubert@hotmail.com',
-    url='https://github.com/SchubertP/f2xba',
+    author_email='peter.schubert@hhu.de',
+    url='https://www.cs.hhu.de/lehrstuehle-und-arbeitsgruppen/computational-cell-biology',
     project_urls={
         "Source Code": 'https://github.com/SchubertP/f2xba',
         "Documentation": 'https://f2xba.readthedocs.io',
