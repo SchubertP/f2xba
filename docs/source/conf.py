@@ -11,7 +11,6 @@ copyright = '2025, Peter Schubert'
 author = 'Peter Schubert'
 
 # retrieve version number
-# retrieve version number
 def get_version(_project):
     with open(os.path.join('../..', project, '_version.py'), "r") as fh:
         for line in fh:
@@ -26,21 +25,29 @@ version = release
 sys.path.insert(0, os.path.abspath('../..'))
 
 # cope with missing dependencies, i.e. modules to be mocked up
-autodoc_mock_imports = ['sbmlxdf', 'matplotlib', 'libsbml', 'scipy', 'pandas', 'json',
-   'gurobipy', 'zlib', 'gzip', 'pickle', 'urllib', 'numpy', 'xml']
+autodoc_mock_imports = ['sbmlxdf', 'libsbml', 'gurobipy', 'pandas', 'numpy', 'scipy', 'matplotlib']
 
 # -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
-    'sphinx.ext.duration',
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx_copybutton',
     'sphinx.ext.viewcode',
+    'sphinx.ext.mathjax',
     'nbsphinx',
 ]
 
 # -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
+
 html_theme = 'alabaster'
+
+
+# -- Options for LaTeX output --------------------------------------------------
+
+latex_elements = {}
+latex_elements['preamble'] = r"\usepackage{amsmath}\usepackage{amsfonts}\usepackage{bm}\usepackage{morefloats}"
+
+latex_show_urls = 'footnote'
+
+
