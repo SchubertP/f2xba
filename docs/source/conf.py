@@ -45,8 +45,7 @@ html_theme = 'alabaster'
 
 # -- Options for LaTeX output --------------------------------------------------
 
-latex_elements = {}
-latex_elements['preamble'] = r"\usepackage{amsmath}\usepackage{amsfonts}\usepackage{bm}\usepackage{morefloats}"
+latex_elements = {'preamble': r"\usepackage{amsmath}\usepackage{amsfonts}\usepackage{bm}\usepackage{morefloats}"}
 
 latex_show_urls = 'footnote'
 
