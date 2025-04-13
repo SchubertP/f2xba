@@ -521,9 +521,10 @@ class XbaModel:
         # update reactions in groups component
         orig2rids = defaultdict(set)
         if self.groups:
-            rid2orig = {rid: r.orig_rid for rid, r in self.reactions.items()}
-            for rid, orig in rid2orig.items():
-                orig2rids[orig].add(rid)
+            for rid in self.reactions:
+                rid_fwd = re.sub(r'_REV$', '', rid)
+                orig_rid = re.sub(r'_iso\d+$', '', rid_fwd)
+                orig2rids[orig_rid].add(rid)
             for group in self.groups.values():
                 new_refs = set()
                 for ref in group.id_refs:

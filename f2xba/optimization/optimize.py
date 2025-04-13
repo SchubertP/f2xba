@@ -151,6 +151,7 @@ class Optimize:
         self.locus2uid = self.get_locus2uid()
         self.mid2name = {re.sub(f'^{pf.M_}', '', sid): row['name']
                          for sid, row in self.m_dict['species'].iterrows()}
+        self.id2groups = self.get_id2groups()
         self.rdata_model = self.get_reaction_data()
         self.uptake_rids = [rid for rid, rdata in self.rdata_model.items() if rdata['is_exchange'] is True]
         self.ex_rid2sid = self.get_ex_rid2sid()
@@ -167,6 +168,24 @@ class Optimize:
         self.net_rdata = self.extract_net_reaction_data(self.rdata)
         self.rids_catalyzed = self.get_rids_catalyzed()
         # self.uid2locus = {uid: locus for locus, uid in self.locus2uid.items()}
+
+    def get_id2groups(self):
+        """Extract Groups component information from SBML model to map ids to group names.
+
+        Optional SBML Groups package may contain assignemnt of reaction ids to specific groups.
+
+        :return: mapping of model identifies to group names as per GROUPS component
+        :rtype: dict (key: model id / str, val: list if group names / str)
+        """
+        id2groups = defaultdict(list)
+        if 'groups' in self.m_dict:
+            for _, row in self.m_dict['groups'].iterrows():
+                members_list = row.get('members', '')
+                for item in members_list.split(';'):
+                    if '=' in item:
+                        reference_id = item.split('=')[1].strip()
+                        id2groups[reference_id].append(row['name'])
+        return dict(id2groups)
 
     def get_locus2uid(self):
         """Extract mapping for gene locus to protein id from SBML model.
@@ -472,8 +491,9 @@ class Optimize:
     def get_reaction_data(self):
         """Extract reaction related data from reactions (reaction string, gpr)
 
-        Also support ARM reactions (e.g. GECKO model) by expanding pseudo metabolites.
+        Supports ARM reactions (e.g. GECKO model) by expanding pseudo metabolites.
         Data can be used in augmenting flux related optimization results
+
         :return: reaction related data, indexed by reaction id
         :rtype: dict
         """
@@ -484,6 +504,7 @@ class Optimize:
                 drxn = 'rev' if re.search('_REV$', rid) else 'fwd'
                 fwd_rid = re.sub('_REV$', '', rid)
                 net_rid = re.sub(r'_iso\d+', '', fwd_rid)
+                groups = '; '.join(self.id2groups.get(rid, ''))
                 reaction_str = self.get_reaction_str(row)
                 if re.search(r'pmet_\w+', reaction_str) is not None:
                     reaction_str = self.expand_pseudo_metabolite(rid, reaction_str)
@@ -518,7 +539,8 @@ class Optimize:
 
                 rdatas[rid] = {'net_rid': net_rid, 'drxn': drxn, 'reaction_str': reaction_str,
                                'gpr': gpr, 'mpmf_coupling': mpmf_coupling,
-                               'is_exchange': exchange, 'r_type': r_type, 'compartment': rp_cids}
+                               'is_exchange': exchange, 'r_type': r_type, 'compartment': rp_cids,
+                               'groups': groups}
         return rdatas
 
     def get_tx_metab_genes(self):
@@ -564,7 +586,8 @@ class Optimize:
                     reaction_str = record['reaction_str']
                     if net_rid in rev_net_rids:
                         reaction_str = re.sub('=>', '->', reaction_str)
-                    net_rdata[net_rid] = {'reaction_str': reaction_str, 'gpr': record['gpr']}
+                    net_rdata[net_rid] = {'reaction_str': reaction_str, 'gpr': record['gpr'],
+                                          'groups': record['groups']}
                 else:
                     net_rdata[net_rid]['gpr'] += ' or ' + record['gpr']
         return net_rdata

@@ -34,7 +34,7 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx_copybutton',
     'sphinx.ext.viewcode',
-    'sphinx.ext.mathjax',
+#    'sphinx.ext.mathjax',
     'nbsphinx',
 ]
 
@@ -45,8 +45,8 @@ html_theme = 'alabaster'
 
 # -- Options for LaTeX output --------------------------------------------------
 
-latex_elements = {'preamble': r"\usepackage{amsmath}\usepackage{amsfonts}\usepackage{bm}\usepackage{morefloats}"}
+# latex_elements = {'preamble': r"\usepackage{amsmath}\usepackage{amsfonts}\usepackage{bm}\usepackage{morefloats}"}
 
-latex_show_urls = 'footnote'
+# latex_show_urls = 'footnote'
 
 

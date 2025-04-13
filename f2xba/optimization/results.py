@@ -78,9 +78,9 @@ class Results(ABC):
         :rtype: pandas.DataFrame
         """
         if net is True:
-            info_cols = ['reaction_str', 'gpr']
+            info_cols = ['reaction_str', 'gpr', 'groups']
         else:
-            info_cols = ['reaction_str', 'net_rid', 'gpr']
+            info_cols = ['reaction_str', 'net_rid', 'gpr', 'groups']
         n_info_cols = len(info_cols)
         df_fluxes = None
         for condition, solution in self.results.items():
@@ -90,6 +90,8 @@ class Results(ABC):
             else:
                 df_fluxes = pd.concat([df_fluxes, df['mmol_per_gDWh']], axis=1)
             df_fluxes.rename(columns={'mmol_per_gDWh': f'{condition}'}, inplace=True)
+        # defragment the dataframe
+        df_fluxes = df_fluxes.copy()
         mean = df_fluxes.iloc[:, n_info_cols:].mean(axis=1).values
         stdev = df_fluxes.iloc[:, n_info_cols:].std(axis=1).values
         df_fluxes.insert(n_info_cols, 'mean mmol_per_gDWh', mean)
@@ -143,7 +145,8 @@ class Results(ABC):
                     n_info_cols = len(cols)
             df_proteins = pd.concat([df_proteins, df[units]], axis=1)
             df_proteins.rename(columns={units: f'{condition}'}, inplace=True)
-
+        # defragment the dataframe
+        df_proteins = df_proteins.copy()
         mean = df_proteins.iloc[:, n_info_cols:].mean(axis=1).values
         stdev = df_proteins.iloc[:, n_info_cols:].std(axis=1).values
         df_proteins.insert(n_info_cols, f'mean {units}', mean)
@@ -192,6 +195,8 @@ class Results(ABC):
             else:
                 df_conc = pd.concat([df_conc, df['mmol_per_l']], axis=1)
             df_conc.rename(columns={'mmol_per_l': f'{condition}'}, inplace=True)
+        # defragment the dataframe
+        df_conc = df_conc.copy()
         mean = df_conc.iloc[:, n_info_cols:].mean(axis=1).values
         stdev = df_conc.iloc[:, n_info_cols:].std(axis=1).values
         df_conc.insert(n_info_cols, 'mean mmol_per_l', mean)
@@ -387,7 +392,6 @@ class Results(ABC):
         """
         marker2 = mpl.markers.MarkerStyle('o', fillstyle='full')
 
-        sigma = self.optim.avg_enz_saturation
         conds = list(set(self.results.keys()).intersection(set(exp_grs.keys())))
         cond_exp_grs = [exp_grs[cond] for cond in conds]
         cond_pred_grs = [self.results[cond].objective_value for cond in conds]
@@ -406,10 +410,12 @@ class Results(ABC):
         stats = r'$R^2$' + f'={rvalue ** 2:.4f}, p={pvalue:.2e}'
         ax.text(0.5, 0.1, stats, transform=ax.transAxes, va='top', ha='center')
         ax.text(0.01, 0.99, self.optim.model_name, transform=ax.transAxes, va='top')
-        ax.text(0.01, 0.91, f'(saturation={sigma * 100:.1f}%)', transform=ax.transAxes, va='top')
+        if self.optim.avg_enz_saturation:
+            ax.text(0.01, 0.91, f'(saturation={self.optim.avg_enz_saturation * 100:.1f}%)',
+                    transform=ax.transAxes, va='top')
 
         ax.set(xlim=(0.0, gr_max), ylim=(0.0, gr_max))
-        ax.plot((0.0, 1.0), (0.0, 1.0), 'k--', lw=0.5)
+        ax.plot((0.0, gr_max), (0.0, gr_max), 'k--', lw=0.5)
         ax.set_xlabel(r'experimental growth rate ($h^{-1}$)')
         ax.set_ylabel(r'predicted growth rate ($h^{-1}$)')
 

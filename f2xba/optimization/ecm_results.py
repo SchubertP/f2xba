@@ -107,8 +107,8 @@ class EcmResults(Results):
             if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
                 rdata = self.optim.rdata[rid]
                 fluxes[rid] = [rdata['reaction_str'], rdata['net_rid'], rdata['gpr'],
-                               mmol_per_gdwh, abs(mmol_per_gdwh)]
-        cols = ['reaction_str', 'net_rid', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+                               rdata['groups'], mmol_per_gdwh, abs(mmol_per_gdwh)]
+        cols = ['reaction_str', 'net_rid', 'gpr', 'groups', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=cols)
         df_fluxes.index.name = 'reaction'
         return df_fluxes
@@ -130,11 +130,12 @@ class EcmResults(Results):
         for rid, mmol_per_gdwh in net_fluxes.items():
             rdata = self.optim.net_rdata.get(rid)
             if rdata:
-                net_flux_data[rid] = [rdata['reaction_str'], rdata['gpr'], mmol_per_gdwh, abs(mmol_per_gdwh)]
+                net_flux_data[rid] = [rdata['reaction_str'], rdata['gpr'],
+                                      rdata['groups'], mmol_per_gdwh, abs(mmol_per_gdwh)]
             else:
-                net_flux_data[rid] = [None, None, mmol_per_gdwh, abs(mmol_per_gdwh)]
+                net_flux_data[rid] = [None, None, '', mmol_per_gdwh, abs(mmol_per_gdwh)]
 
-        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+        cols = ['reaction_str', 'gpr', 'groups', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_net_fluxes = pd.DataFrame(net_flux_data.values(), index=list(net_flux_data), columns=cols)
         df_net_fluxes.index.name = 'rid'
         return df_net_fluxes

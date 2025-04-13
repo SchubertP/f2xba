@@ -38,8 +38,9 @@ class FbaResults(Results):
             if re.match(pf.V_, rid) is None:
                 reaction_str = self.optim.rdata[rid]['reaction_str']
                 gpr = self.optim.rdata[rid]['gpr']
-                fluxes[rid] = [reaction_str, rid, gpr, mmol_per_gdwh, abs(mmol_per_gdwh)]
-        cols = ['reaction_str', 'net_rid', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+                groups = self.optim.rdata[rid]['groups']
+                fluxes[rid] = [reaction_str, rid, gpr, groups, mmol_per_gdwh, abs(mmol_per_gdwh)]
+        cols = ['reaction_str', 'net_rid', 'gpr', 'groups', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=cols)
         df_fluxes.index.name = 'reaction'
         return df_fluxes
@@ -60,11 +61,12 @@ class FbaResults(Results):
         for rid, mmol_per_gdwh in net_fluxes.items():
             rdata = self.optim.net_rdata.get(rid)
             if rdata:
-                net_flux_data[rid] = [rdata['reaction_str'], rdata['gpr'], mmol_per_gdwh, abs(mmol_per_gdwh)]
+                net_flux_data[rid] = [rdata['reaction_str'], rdata['gpr'],
+                                      rdata['groups'], mmol_per_gdwh, abs(mmol_per_gdwh)]
             else:
-                net_flux_data[rid] = [None, None, mmol_per_gdwh, abs(mmol_per_gdwh)]
+                net_flux_data[rid] = [None, None, '', mmol_per_gdwh, abs(mmol_per_gdwh)]
 
-        cols = ['reaction_str', 'gpr', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
+        cols = ['reaction_str', 'gpr', 'groups', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_net_fluxes = pd.DataFrame(net_flux_data.values(), index=list(net_flux_data), columns=cols)
         df_net_fluxes.index.name = 'rid'
         return df_net_fluxes

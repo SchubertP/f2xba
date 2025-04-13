@@ -247,8 +247,11 @@ class GeckoFitKcats:
             print(f'{len(balance_keys):4d} kcat values of inactive reactions reduced due to change in saturation')
 
         # limit kcats to the given range
-        df_kcats['kcat_per_s'].mask(df_kcats['kcat_per_s'] > max_kcat, max_kcat, inplace=True)
-        df_kcats['kcat_per_s'].mask(df_kcats['kcat_per_s'] < min_kcat, min_kcat, inplace=True)
+        for idx, row in df_kcats.iterrows():
+            if row['kcat_per_s'] > max_kcat:
+                df_kcats.at[idx, 'kcat_per_s'] = max_kcat
+            elif row['kcat_per_s'] < min_kcat:
+                df_kcats.at[idx, 'kcat_per_s'] = min_kcat
 
         # write fitted kcats to file
         with pd.ExcelWriter(fitted_kcats_fname) as writer:
