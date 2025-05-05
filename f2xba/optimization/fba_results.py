@@ -64,7 +64,7 @@ class FbaResults(Results):
                 net_flux_data[rid] = [rdata['reaction_str'], rdata['gpr'],
                                       rdata['groups'], mmol_per_gdwh, abs(mmol_per_gdwh)]
             else:
-                net_flux_data[rid] = [None, None, '', mmol_per_gdwh, abs(mmol_per_gdwh)]
+                net_flux_data[rid] = ['', '', '', mmol_per_gdwh, abs(mmol_per_gdwh)]
 
         cols = ['reaction_str', 'gpr', 'groups', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_net_fluxes = pd.DataFrame(net_flux_data.values(), index=list(net_flux_data), columns=cols)

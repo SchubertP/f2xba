@@ -515,15 +515,13 @@ class Optimize:
                     for item in re.findall(r'\b\w+\b', assoc):
                         if item in gpid2label:
                             parts.append(gpid2label[item])
-                        elif item == 'and':
-                            parts.append('+')
-                        elif item == 'or':
-                            parts.append(';')
+                        elif item in {'and', 'or'}:
+                            parts.append(item)
                 gpr = ' '.join(parts)
                 # mpmf coupling used in GECKO models for fitting kcats to proteomics (not required for RBA)
                 mpmf_coupling = {}
                 if gpr != '':
-                    loci = [item.strip() for item in gpr.split('+')]
+                    loci = [item.strip() for item in gpr.split(' and ')]
                     reactants = get_srefs(row['reactants'])
                     for locus in loci:
                         locus = valid_sbml_sid(locus)
@@ -555,11 +553,12 @@ class Optimize:
         metab_genes = set()
         for data in self.rdata.values():
             if len(data['gpr']) > 0:
+                genes = [item.strip() for item in re.split(r'[( or )|( and )]', data['gpr'])]
                 if data['r_type'] == 'transport':
-                    for gene in [item.strip() for item in data['gpr'].split('+')]:
+                    for gene in genes:
                         tx_genes.add(gene)
                 elif data['r_type'] == 'metabolic':
-                    for gene in [item.strip() for item in data['gpr'].split('+')]:
+                    for gene in genes:
                         metab_genes.add(gene)
         metab_genes = metab_genes.difference(tx_genes)
         return tx_genes, metab_genes
@@ -607,17 +606,18 @@ class Optimize:
         gpid2label = self.m_dict['fbcGeneProducts']['label'].to_dict()
         rids_catalyzed = {}
         for rid, rdata in self.m_dict['reactions'].iterrows():
-            enzymes = []
-            if type(rdata['fbcGeneProdAssoc']) is str:
-                assoc = re.sub('assoc=', '', rdata['fbcGeneProdAssoc'])
-                for enz_str in assoc.split('or'):
-                    labels = set()
-                    for gpid in re.findall(r'\b\w+\b', enz_str):
-                        if gpid in gpid2label:
-                            labels.add(gpid2label[gpid])
-                    enzymes.append(labels)
-            if len(enzymes) > 0:
-                rids_catalyzed[rid] = enzymes
+            if re.match(pf.V_, rid) is None:
+                enzymes = []
+                if type(rdata['fbcGeneProdAssoc']) is str:
+                    assoc = re.sub('assoc=', '', rdata['fbcGeneProdAssoc'])
+                    for enz_str in assoc.split('or'):
+                        labels = set()
+                        for gpid in re.findall(r'\b\w+\b', enz_str):
+                            if gpid in gpid2label:
+                                labels.add(gpid2label[gpid])
+                        enzymes.append(labels)
+                if len(enzymes) > 0:
+                    rids_catalyzed[rid] = enzymes
         return rids_catalyzed
 
     # SUPPORT FUNCTIONS FOR GENE DELETION STUDY
@@ -851,6 +851,34 @@ class Optimize:
                 drg0_relaxations[drg0_id] = {'fbc_upper_bound': new_ub}
         return drg0_relaxations
 
+    def modify_stoic(self, constr_id, var_id, new_val):
+        """Modify stoichiometric coefficient for guriobipy model.
+
+        Gurobipy model does not support model context. Stoichiometric coefficients
+        can be modified using this functions, while old value is returned. After
+        optimization, using the same method, the coefficient can be reset.
+
+        :param str constr_id: constraint identifier, e.g. 'M_hemeA_c'
+        :param str var_id: variable identifier, e.g. 'R_CofactorSynth'
+        :param float new_val: stoichiometric coefficient (negative for consumation)
+        :return: previous stoichiometric coefficient
+        :rtype: float
+        """
+        if self.is_gpm:
+            constr = self.gpm.getConstrByName(constr_id)
+            var = self.gpm.getVarByName(var_id)
+            if constr is None:
+                print(f'Constraint with identifier "{constr_id}" not found!')
+                return None
+            if var is None:
+                print(f'Variable with identifier "{var_id}" not found!')
+                return None
+            old_val = self.gpm.getCoeff(constr, var)
+            self.gpm.chgCoeff(constr, var, new_val)
+            return old_val
+        else:
+            print('Method only implemented for gurobipy interface, for cobrapy, use rxn.add_metabolites()')
+
     def set_medium(self, medium):
         """Configure medium in gurobipy model (compatible with cobrapy)
 
@@ -1057,23 +1085,27 @@ class Optimize:
 
         return pd.DataFrame(results.values(), list(results.keys()), columns=['minimum', 'maximum'])
 
-    def gene_deletions(self, labels):
-        """Simulate gene deletions for FBA model using gurobipy.
+    def solve(self, **rba_solve_params):
+        """RBA solver, overwritten by RbaOptimization"""
+        return pd.DataFrame()
+
+    def gene_deletions(self, genes, **rba_solve_params):
+        """Simulate gene deletions for FBA, ECM and RBA models using gurobipy.
 
         A single gene label or a list of gene labels can be provided.
 
-        :param labels: individual gene label or list of gene labels
-        :type labels: str or list[str]
+        :param genes: individual gene label or list of gene labels
+        :type genes: str or list[str]
+        :param rba_solve_params: Optional solver parameters for RBA models
         :return: optimization solution
         :return: class:`Solution`
         """
-
         if self.is_gpm is None:
             print('Method implemented for gurobipy interface only.')
             return
 
         self.gpm.update()
-        rids_blocked = self.get_rids_blocked_by(labels)
+        rids_blocked = self.get_rids_blocked_by(genes)
 
         # block affected reactions
         old_bounds = {}
@@ -1084,7 +1116,10 @@ class Optimize:
             var.ub = 0.0
 
         # optimize
-        solution = self.optimize()
+        if self.model_type == 'RBA':
+            solution = self.solve(**rba_solve_params)
+        else:
+            solution = self.optimize()
 
         # unblock reactions
         for rid, (lb, ub) in old_bounds.items():
@@ -1094,6 +1129,164 @@ class Optimize:
         self.gpm.update()
 
         return solution
+
+    def gp_moma(self, ko_genes, wt_fluxes, linear=False):
+        """Implement MOMA algorithm to determine flux distributions after genetic perturbations (gurobipy).
+
+        A single gene label or a list of gene labels can be provided.
+
+        Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
+        metabolic networks.
+
+        MOMA algorithm implementation:
+        1. MOMA using orignal/Euclidean distance (linear = False)
+        - min ∑ (v - wt)^2; st: S * v = 0; v_lb ≤ v ≤ v_ub
+            - v: reaction flux variable for distrubed system, wt: wild type flux (note: indices not shown)
+        - variable transformation vt = v - wt
+        - new variables: vt with c
+        - new constraints: v - vt = wt
+        - new objective: min ∑ vt^2
+        2. MOMA using Manhatten distance (linear = True)
+        - min ∑ |v - wt|
+        - two cases: reaction flux of disturbed system ≥ wild type flux, or <
+        - case A: v - wt ≥ 0, vtp = v - wt; vtp_lb = 0, vtp_ub = v_ub - wt
+          - if vtp_ub > 0:
+            - new variable: vtp with above bounds
+            - new constraint: v - vtp ≤ wt
+        - case B: v - wt < 0, vtn = wt - v; vtn_lb = 0, vtn_ub = wt - vt_lb
+          - if vtn_ub > 0:
+            - new variable: vtn with above bounds
+            - new constraint: v + vtn ≥ wt
+        - new objective: min ∑ (vtp + vtn)
+
+        :param ko_genes: individual gene label or list of gene labels to be knocked out
+        :type ko_genes: str or list[str]
+        :param wt_fluxes: wild type flux distribution, e.g. pFBA fluxes
+        :type wt_fluxes: dict or pandas Series (e.g. solution.fluxes)
+        :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
+        :return: MOMA determined solution object
+        :rtype: class:`Solution`
+        """
+        moma_gpm = self.gpm.copy()
+
+        # block reactions affected by given gene
+        for rid in self.get_rids_blocked_by(ko_genes):
+            var = moma_gpm.getVarByName(rid)
+            var.lb = 0.0
+            var.ub = 0.0
+        moma_gpm.update()
+
+        tflux_vars = []
+        for ridx, wt_flux in wt_fluxes.items():
+            rid = f'R_{ridx}'
+            flux_var = moma_gpm.getVarByName(rid)
+            if linear is False:
+                tflux_lb = flux_var.lb - wt_flux
+                tflux_ub = flux_var.ub - wt_flux
+                tflux_var = moma_gpm.addVar(lb=tflux_lb, ub=tflux_ub, vtype=gp.GRB.CONTINUOUS,
+                                            name=f'V_MOMA_transformed_flux_{ridx}')
+                tflux_vars.append(tflux_var)
+                moma_gpm.addLConstr(flux_var - tflux_var, sense=gp.GRB.EQUAL, rhs=wt_flux)
+            else:
+                tfluxp_ub = flux_var.ub - wt_flux
+                if tfluxp_ub > 0:
+                    tfluxp_var = moma_gpm.addVar(lb=0, ub=tfluxp_ub, vtype=gp.GRB.CONTINUOUS,
+                                                 name=f'V_MOMA_transformed_fluxp_{ridx}')
+                    tflux_vars.append(tfluxp_var)
+                    moma_gpm.addLConstr(flux_var - tfluxp_var, sense=gp.GRB.LESS_EQUAL, rhs=wt_flux)
+                tfluxn_ub = wt_flux - flux_var.lb
+                if tfluxn_ub > 0:
+                    tfluxn_var = moma_gpm.addVar(lb=0, ub=tfluxn_ub, vtype=gp.GRB.CONTINUOUS,
+                                                 name=f'V_MOMA_transformed_fluxn_{ridx}')
+                    tflux_vars.append(tfluxn_var)
+                    moma_gpm.addLConstr(flux_var + tfluxn_var, sense=gp.GRB.GREATER_EQUAL, rhs=wt_flux)
+
+        if linear is False:
+            moma_gpm.setObjective(gp.quicksum([v * v for v in tflux_vars]), gp.GRB.MINIMIZE)
+        else:
+            moma_gpm.setObjective(gp.quicksum(tflux_vars), gp.GRB.MINIMIZE)
+
+        moma_gpm.optimize()
+        moma_solution = self.get_solution(moma_gpm)
+        moma_gpm.close()
+
+        return moma_solution
+
+    def gp_room(self, ko_genes, wt_fluxes, linear=False, delta=0.03, epsilon=1e-3, time_limit=30.0):
+        """Implement ROOM algorithm to determine flux distributions after genetic perturbations (gurobipy).
+
+        A single gene label or a list of gene labels can be provided.
+
+        Ref: Shlomi et al., 2005, Regulatory on off minimization of metabolic flux
+        changes after genetic perturbations
+
+        :param ko_genes: individual gene label or list of gene labels to be knocked out
+        :type ko_genes: str or list[str]
+        :param wt_fluxes: wild type flux distribution, e.g. pFBA fluxes
+        :type wt_fluxes: dict or pandas Series (e.g. solution.fluxes)
+        :param bool linear: using MILP (False) or relaxed LP (True) formulation (default: False)
+        :param float delta: relative tolerance range (default: 0.03)
+        :param float epsilon: absolute tolerance range (default: 1e-3)
+        :param float time_limit: time limit in seconds for MILP optimization (default: 30.0)
+        :return: ROOM determined solution object
+        :rtype: class:`Solution`
+        """
+        if self.is_gpm is None:
+            print('Method implemented for gurobipy interface only.')
+            return
+
+        self.gpm.update()
+        room_gpm = self.gpm.copy()
+        if linear is False:
+            room_gpm.params.timelimit = time_limit
+
+        # block reactions affected by given gene or list of genes
+        for rid in self.get_rids_blocked_by(ko_genes):
+            var = room_gpm.getVarByName(rid)
+            var.lb = 0.0
+            var.ub = 0.0
+        room_gpm.update()
+
+        flux_ctrl_vars = []
+        for ridx, wt_flux in wt_fluxes.items():
+            rid = f'R_{ridx}'
+            flux_var = room_gpm.getVarByName(rid)
+            flux_lb = flux_var.lb
+            flux_ub = flux_var.ub
+
+            if linear is False:
+                wl_flux = wt_flux - abs(wt_flux) * delta - epsilon
+                wu_flux = wt_flux + abs(wt_flux) * delta + epsilon
+            else:
+                wl_flux = wt_flux
+                wu_flux = wt_flux
+            if wl_flux > flux_lb:
+                if linear is False:
+                    flux_lower_ctrl_var = room_gpm.addVar(lb=0, ub=1, vtype=gp.GRB.BINARY,
+                                                          name=f'V_ROOM_wl_control_{ridx}')
+                else:
+                    flux_lower_ctrl_var = room_gpm.addVar(lb=0.0, ub=1.0, vtype=gp.GRB.CONTINUOUS,
+                                                          name=f'V_ROOM_wl_control_{ridx}')
+                flux_ctrl_vars.append(flux_lower_ctrl_var)
+                room_gpm.addLConstr(flux_var - flux_lower_ctrl_var * (flux_lb - wl_flux),
+                                    sense=gp.GRB.GREATER_EQUAL, rhs=wl_flux)
+            if wu_flux < flux_ub:
+                if linear is False:
+                    flux_upper_ctrl_var = room_gpm.addVar(lb=0, ub=1, vtype=gp.GRB.BINARY,
+                                                          name=f'V_ROOM_wu_control_{ridx}')
+                else:
+                    flux_upper_ctrl_var = room_gpm.addVar(lb=0.0, ub=1.0, vtype=gp.GRB.CONTINUOUS,
+                                                          name=f'V_ROOM_wu_control_{ridx}')
+                flux_ctrl_vars.append(flux_upper_ctrl_var)
+                room_gpm.addLConstr(flux_var - flux_upper_ctrl_var * (flux_ub - wu_flux),
+                                    sense=gp.GRB.LESS_EQUAL, rhs=wu_flux)
+        room_gpm.setObjective(gp.quicksum(flux_ctrl_vars), gp.GRB.MINIMIZE)
+
+        room_gpm.optimize()
+        room_solution = self.get_solution(room_gpm)
+        room_gpm.close()
+
+        return room_solution
 
     def __del__(self):
         if self.is_gpm and self.gpm is not None:
