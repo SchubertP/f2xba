@@ -10,6 +10,7 @@ import numpy as np
 
 import sbmlxdf
 from .sbml_sbase import SbmlSBase
+from ..utils.mapping_utils import get_srefs, parse_reaction_string
 
 
 class SbmlReaction(SbmlSBase):
@@ -96,6 +97,13 @@ class SbmlReaction(SbmlSBase):
     @property
     def reaction_string(self):
         return self.get_reaction_string()
+
+    @reaction_string.setter
+    def reaction_string(self, value):
+        reaction_dict = parse_reaction_string(value)
+        self.reactants = get_srefs(reaction_dict['reactants'])
+        self.products = get_srefs(reaction_dict['products'])
+        self.reversible = reaction_dict['reversible']
 
     @property
     def gene_product_assoc(self):

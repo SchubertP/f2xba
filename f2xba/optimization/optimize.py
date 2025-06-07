@@ -553,7 +553,9 @@ class Optimize:
         metab_genes = set()
         for data in self.rdata.values():
             if len(data['gpr']) > 0:
-                genes = [item.strip() for item in re.split(r'[( or )|( and )]', data['gpr'])]
+                gpr_del_or = re.sub(' or ', ',', data['gpr'])
+                gpr_del_or_and = re.sub(' and ', ',', gpr_del_or)
+                genes = [item.strip() for item in gpr_del_or_and.split(',')]
                 if data['r_type'] == 'transport':
                     for gene in genes:
                         tx_genes.add(gene)
