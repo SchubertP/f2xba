@@ -487,8 +487,9 @@ class RbaModel:
         if 'machineries' in rba_params:
             for pid, row in rba_params['machineries'].iterrows():
                 if row.get('set', '') == 'protein':
-                    if row['label'] not in self.model.uniprot_data.locus2uid:
-                        print(f"{row['label']:35s} not found in uniprot data")
+                    if (row['label'] not in self.model.uniprot_data.locus2uid and
+                            row['label'] not in self.model.ncbi_data.locus2protein):
+                        print(f"{row['label']:35s} not found in uniprot nor ncbi data")
                         ok_flag = False
                 elif row.get('set', '') == 'rna':
                     if row['label'] not in self.model.ncbi_data.locus2record:

@@ -180,11 +180,13 @@ class Optimize:
         id2groups = defaultdict(list)
         if 'groups' in self.m_dict:
             for _, row in self.m_dict['groups'].iterrows():
-                members_list = row.get('members', '')
-                for item in members_list.split(';'):
-                    if '=' in item:
-                        reference_id = item.split('=')[1].strip()
-                        id2groups[reference_id].append(row['name'])
+                members_list = row.get('members')
+                if type(members_list) is str:
+                    members_list = row.get('members', '')
+                    for item in members_list.split(';'):
+                        if '=' in item:
+                            reference_id = item.split('=')[1].strip()
+                            id2groups[reference_id].append(row['name'])
         return dict(id2groups)
 
     def get_locus2uid(self):
