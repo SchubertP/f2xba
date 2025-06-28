@@ -38,6 +38,7 @@ setup(
     install_requires=['pandas>=1.4.0',
                       'numpy>=0.21.0',
                       'scipy>=1.11.0',
+                      'requests>=2.30.0',
                       'matplotlib>=3.6.3',
                       'sbmlxdf>=1.0.2'],
     python_requires=">=3.10",

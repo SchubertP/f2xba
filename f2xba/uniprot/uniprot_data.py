@@ -109,7 +109,7 @@ class UniprotData:
                   'ec', 'protein_name', 'cc_subunit', 'cc_subcellular_location', 'cc_cofactor',
                   'length', 'mass', 'sequence', 'ft_signal', 'cc_catalytic_activity', 'kinetics',
                   'go_p', 'go_c', 'go_f', 'protein_families',
-                  'xref_biocyc', 'xref_refseq', 'date_modified', 'reviewed']
+                  'xref_biocyc', 'xref_refseq', 'xref_kegg', 'date_modified', 'reviewed']
         payload = {'compressed': 'true',
                    'fields': ','.join(fields),
                    'format': 'tsv',

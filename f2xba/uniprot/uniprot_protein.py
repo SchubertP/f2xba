@@ -145,6 +145,7 @@ class UniprotProtein:
         self.protein_name = get_protein_name(s_data['Protein names'])
         self.ec_numbers = get_refs(s_data.get('EC number'))
         self.biocyc_ids = get_refs(s_data.get('BioCyc'))
+        self.kegg_ids = get_refs(s_data.get('KEGG'))
         self.location = get_location(s_data.get(['Subcellular location [CC]']))
         self.subunit = s_data['Subunit structure']
         self.go_components = get_go_terms(s_data.get('Gene Ontology (cellular component)'))
@@ -152,6 +153,7 @@ class UniprotProtein:
         self.go_functions = get_go_terms(s_data.get('Gene Ontology (molecular function)'))
         self.length = s_data['Length']
         self.mass = s_data['Mass']
+        self.refseqs = get_refs(s_data.get('RefSeq'))
         self.aa_sequence = s_data['Sequence']
         self.signal_peptide = s_data.get('Signal peptide')
         self.cofactors = get_cofactors(s_data.get('Cofactor'))
