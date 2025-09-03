@@ -344,7 +344,7 @@ class TfaModel:
 
                 # check that formula and charges are compatible
                 if selected_td_sid is not None:
-                    if self.check_compatible_thermo_data(sid, all_td_data[selected_td_sid]) is False:
+                    if not self.check_compatible_thermo_data(sid, all_td_data[selected_td_sid]):
                         selected_td_sid = None
                 s.modify_attribute('td_sid', selected_td_sid)
                 if selected_td_sid is not None:
@@ -382,13 +382,13 @@ class TfaModel:
         # set species concentrations, unless concentrations are configured already in XbaModel
         for sid, s in self.model.species.items():
             cid = s.compartment
-            if hasattr(s, 'c_min') is False:
+            if not hasattr(s, 'c_min'):
                 s.modify_attribute('c_min', self.td_compartments[cid].c_min)
-            if hasattr(s, 'c_max') is False:
+            if not hasattr(s, 'c_max'):
                 s.modify_attribute('c_max', self.td_compartments[cid].c_max)
 
         # load thermo dynamic data from file and correct some errors
-        if os.path.exists(thermo_db_fname) is False:
+        if not os.path.exists(thermo_db_fname):
             print(f'{thermo_db_fname} does not exist')
             raise FileNotFoundError
         with open(thermo_db_fname, 'rb') as file:
@@ -466,7 +466,7 @@ class TfaModel:
                 if td_sids == {CPD_WATER}:
                     valid_dfg0_tr = False
 
-                if valid_dfg0_tr is True:
+                if valid_dfg0_tr:
                     self.td_reactions[rid] = TdReactionData(rid, r.reversible, r.kind)
                 else:
                     not_supported += 1

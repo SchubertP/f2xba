@@ -35,13 +35,13 @@ setup(
     license='GPLv3',
     long_description_content_type='text/markdown',
     packages=find_packages(exclude='docs'),
-    install_requires=['pandas>=1.4.0',
-                      'numpy>=0.21.0',
+    install_requires=['pandas>=2.3.0',
+                      'numpy>=2.0.0',
                       'scipy>=1.11.0',
                       'requests>=2.30.0',
                       'matplotlib>=3.6.3',
                       'sbmlxdf>=1.0.2'],
-    python_requires=">=3.10",
+    python_requires=">=3.11",
     keywords=['systems biology', 'extended metabolic modeling', 'FBA', 'GECKO', 'RBA', 'TFA', 'SBML', 'Gurobi'],
     **setup_kwargs
 )

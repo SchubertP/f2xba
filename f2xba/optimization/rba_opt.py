@@ -185,6 +185,115 @@ class RbaOptimization(Optimize):
         """
         self.initial_assignments.set_growth_rate(growth_rate)
 
+    def scale_efficiencies(self, scale_effs):
+        """Scale enzyme efficiencies for model tuning.
+
+        Use unscale_efficiencies() to return to original values, e.g.
+
+        .. code-block:: python
+
+            ro = RbaOptimization('iML1515_GECKO.xml)
+            scale_effs = {'PDH': {'fwd': 10.0}, 'ACt2rpp': {'fwd': 2.0, 'rev': 5.0}}
+            ro.scale_kcats(scale_kcats)
+            solution = ro.solve(gr_min=0.02, gr_max=1.2, bisection_tol=1e-3)
+            ro.unscale_efficiencies()
+
+        :param scale_effs: reaction identifiers (without prefix `R_`) and scaling factor
+        :type scale_effs: dict (key: reaction id/str, val: dict with directions 'fwd' and/or 'rev' and factor/float)
+        """
+        if self.is_gpm:
+            self._gp_scale_efficiencies(scale_effs)
+        else:
+            self._cp_scale_efficiencies(scale_effs)
+
+    def unscale_efficiencies(self):
+        """Reset previously scaled efficiencies.
+        """
+        if self.is_gpm:
+            self._gp_unscale_efficiencies()
+        else:
+            self._cp_unscale_efficiencies()
+
+    def _cp_scale_efficiencies(self, scale_effs):
+        """Scale efficienies values for COBRApy interface, by updating coupling coefficients.
+
+        :param scale_effs: reaction identifiers (without prefix `R_`) and scaling factor
+        :type scale_effs: dict (key: reaction id/str, val: dict with directions 'fwd' and/or 'rev' and factor/float)
+        """
+        assert self.is_gpm is False, 'applicable to COBRApy interface only'
+        orig_coupling = defaultdict(dict)
+        for ridx, data, in scale_effs.items():
+            var_id = f'{pf.V_EC_}{ridx}'
+            if var_id in self.model.reactions:
+                var = self.model.reactions.get_by_id(var_id)
+                for direction, factor in data.items():
+                    constr_id = f'{pf.C_EF_}{ridx}' if direction == 'fwd' else f'{pf.C_ER_}{ridx}'
+                    try:
+                        old_val = var.get_coefficient(constr_id)
+                    except KeyError:
+                        print(f'Enzyme constraint not found for {ridx} in {direction} direction')
+                    else:
+                        orig_coupling[ridx][direction] = old_val
+                        var.add_metabolites({constr_id: old_val * factor}, combine=False)
+            else:
+                print(f'Enzyme constraint variable not found for reaction {ridx}')
+        self.orig_coupling = dict(orig_coupling)
+
+    def _cp_unscale_efficiencies(self):
+        """Unscale kcat values for COBRApy inteface, by resetting original coupling coefficients
+        """
+        assert self.is_gpm is False, 'applicable to COBRApy interface only'
+        for ridx, data, in self.orig_coupling.items():
+            var = self.model.reactions.get_by_id(f'{pf.V_EC_}{ridx}')
+            for direction, old_val in data.items():
+                constr_id = f'{pf.C_EF_}{ridx}' if direction == 'fwd' else f'{pf.C_ER_}{ridx}'
+                var.add_metabolites({constr_id: old_val}, combine=False)
+        self.orig_coupling = {}
+
+    def _gp_scale_efficiencies(self, scale_effs):
+        """Scale enzyme efficiency values for Gurobi interface, by updating coupling coefficients.
+
+        :param scale_effs: reaction identifiers (without prefix `R_`) and scaling factor
+        :type scale_effs: dict (key: reaction id/str, val: dict with directions 'fwd' and/or 'rev' and factor/float)
+        """
+        assert self.is_gpm is True, 'applicable to Gurobi interface only'
+        orig_coupling = defaultdict(dict)
+        self.gpm.update()
+        for ridx, data, in scale_effs.items():
+            var = self.gpm.getVarByName(f'{pf.V_EC_}{ridx}')
+            if var:
+                for direction, factor in data.items():
+                    constr_id = f'{pf.C_EF_}{ridx}' if direction == 'fwd' else f'{pf.C_ER_}{ridx}'
+                    constr = self.gpm.getConstrByName(constr_id)
+                    if constr:
+                        old_val = self.gpm.getCoeff(constr, var)
+                        orig_coupling[ridx][direction] = old_val
+                        self.gpm.chgCoeff(constr, var, old_val * factor)
+                    else:
+                        print(f'Enzyme constraint not found for {ridx} in {direction} direction')
+            else:
+                print(f'Enzyme constraint variable not found for reaction {ridx}')
+        self.gpm.update()
+        self.orig_coupling = dict(orig_coupling)
+
+    def _gp_unscale_efficiencies(self):
+        """reset enzyme efficienies to original values.
+
+        Used in manually tuning model efficiencie
+        - call scale_efficiencies(scale_effs) prior to optmization
+        - call unscale_efficiencies() after eoptimization to reset old efficiency values
+        """
+        assert self.is_gpm is True, 'applicable to Gurobi interface only'
+        for ridx, data, in self.orig_coupling.items():
+            var = self.gpm.getVarByName(f'{pf.V_EC_}{ridx}')
+            for direction, old_val in data.items():
+                constr_id = f'{pf.C_EF_}{ridx}' if direction == 'fwd' else f'{pf.C_ER_}{ridx}'
+                constr = self.gpm.getConstrByName(constr_id)
+                if var and constr:
+                    self.gpm.chgCoeff(constr, var, old_val)
+        self.gpm.update()
+        self.orig_coeffs = {}
+
     def solve(self, gr_min=0.0, gr_max=1.5, bisection_tol=1e-5, max_iter=40, make_non_neg=False):
         """Solve RBA feasibility problem using bisection algorithm.
 

@@ -144,8 +144,8 @@ class EcmOptimization(Optimize):
         """reset kcat values to original values.
 
         Used in manually tuning model kcats
-        - call gp_tune_scale_kcats() prior to optmization
-        - call gp_tune_reset_kcats() after optimizatin to reset old kcat values
+        - call scale_kcats(scale_kcats) prior to optmization
+        - call unscale_kcats() after optimization to reset old kcat values
         """
         assert self.is_gpm is True, 'applicable to Gurobi interface only'
         for ridx, couplings in self.orig_coupling.items():

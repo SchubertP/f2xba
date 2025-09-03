@@ -275,10 +275,10 @@ class RbaModel:
             print(f'missing required tables {missing_sheets}')
             raise ValueError
 
-        if self.check_rba_params_functions(rba_params) is False:
+        if not self.check_rba_params_functions(rba_params):
             print('ERRORs in RBA Parameter file')
             return False
-        if self.check_rba_params_labels(rba_params) is False:
+        if not self.check_rba_params_labels(rba_params):
             print('ERRORs in RBA Parameter file')
             return False
 
@@ -288,6 +288,19 @@ class RbaModel:
         self.prepare_xba_model(rba_params)
 
         self.cid_mappings = self.get_cid_mappings(rba_params)
+        # check compartment mapping
+        used_rcids = set()
+        for p in self.model.proteins.values():
+            used_rcids.add(p.compartment)
+        ok_flag = True
+        for rcid in used_rcids:
+            if rcid not in self.cid_mappings['rcid2cid']:
+                print(f'no mapping of "{rcid}" to RBA compartment. Assign mapping in RBA compartments table!')
+                ok_flag = False
+        if not ok_flag:
+            print('ERRORs in RBA Parameter file')
+            return False
+
         self.parameters.from_xba(rba_params)
         self.densities.from_xba(rba_params, self.parameters)
         self.targets.from_xba(rba_params, self.model, self.parameters)
@@ -1312,7 +1325,7 @@ class RbaModel:
                 return self.to_excel(fname)
             else:
                 # export RBA model in RBA proprietary format
-                if os.path.exists(fname) is False:
+                if not os.path.exists(fname):
                     os.makedirs(fname)
                     print(f'RBA directory {fname} created')
                 for component in components:

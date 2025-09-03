@@ -51,7 +51,7 @@ class XbaModel:
         :param str sbml_file: filename of SBML model (FBA model)
         """
         # Load SBML model and extract model data
-        if os.path.exists(sbml_file) is False:
+        if not os.path.exists(sbml_file):
             print(f'{sbml_file} does not exist')
             raise FileNotFoundError
         print(f'loading: {sbml_file} (last modified: {time.ctime(os.path.getmtime(sbml_file))})')
@@ -132,6 +132,8 @@ class XbaModel:
                     r.kind = 'drain'
 
     def update_gp_mappings(self):
+        """update mapp of gene products """
+
         self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items() if gp.uid}
         self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
         self.locus2uid = {gp.label: gp.uid for gp in self.gps.values() if gp.uid}
@@ -194,8 +196,8 @@ class XbaModel:
         if fname is None:
             xba_params = {}
         else:
-            sheet_names = ['general', 'modify_attributes', 'remove_gps', 'add_gps', 'add_parameters',
-                           'add_species', 'add_reactions', 'chebi2sid']
+            sheet_names = ['general', 'modify_attributes', 'remove_gps', 'remove_reactions',
+                           'add_gps', 'add_parameters', 'add_species', 'add_reactions', 'chebi2sid']
             xba_params = load_parameter_file(fname, sheet_names)
         general_params = xba_params['general']['value'].to_dict() if 'general' in xba_params.keys() else {}
         self.cofactor_flag = general_params.get('cofactor_flag', False)
@@ -220,6 +222,9 @@ class XbaModel:
         if 'remove_gps' in xba_params:
             remove_gps = list(xba_params['remove_gps'].index)
             self.gpa_remove_gps(remove_gps)
+        if 'remove_reactions' in xba_params:
+            remove_gps = list(xba_params['remove_reactions'].index)
+            self.remove_reactions(remove_gps)
         if 'add_gps' in xba_params:
             self.add_gps(xba_params['add_gps'])
             protect_ids.extend(xba_params['add_gps'].index)
@@ -277,7 +282,7 @@ class XbaModel:
         if 'chebi2sid' in xba_params:
             self.user_chebi2sid = {str(chebi): sid for chebi, sid in xba_params['chebi2sid']['sid'].items()
                                    if sid in self.species}
-        if self.cofactor_flag is True:
+        if self.cofactor_flag:
             count = self.map_protein_cofactors()
             print(f'{count:4d} cofactors mapped to species ids')
 
@@ -502,21 +507,26 @@ class XbaModel:
         unused_pids = set(self.parameters).difference(used_pids)
         unused_sids = set(self.species).difference(used_sids)
         unused_gpids = set(self.gps).difference(used_gpids)
+        del_components = {'pids': [], 'sids': [], 'gpids': [], 'cids': []}
         for pid in unused_pids:
             if pid not in protect_ids:
                 del self.parameters[pid]
+                del_components['pids'].append(pid)
         for sid in unused_sids:
             if sid not in protect_ids:
                 del self.species[sid]
+                del_components['sids'].append(sid)
         for gpid in unused_gpids:
             if gpid not in protect_ids:
                 del self.gps[gpid]
+                del_components['gpids'].append(gpid)
 
         used_cids = set(self.get_used_cids())
         unused_cids = set(self.compartments).difference(used_cids)
         for cid in unused_cids:
             if cid not in protect_ids:
                 del self.compartments[cid]
+                del_components['cids'].append(cid)
 
         # update reactions in groups component
         orig2rids = defaultdict(set)
@@ -531,6 +541,15 @@ class XbaModel:
                     if ref in orig2rids:
                         new_refs |= orig2rids[ref]
                 group.id_refs = new_refs
+
+        if len(del_components['pids']) > 0:
+            print(f"{len(del_components['pids']):4d} parameters removed following cleanup: {del_components['pids']}")
+        if len(del_components['sids']) > 0:
+            print(f"{len(del_components['sids']):4d} species removed following cleanup: {del_components['sids']}")
+        if len(del_components['gpids']) > 0:
+            print(f"{len(del_components['gpids']):4d} parameters removed following cleanup: {del_components['gpids']}")
+        if len(del_components['cids']) > 0:
+            print(f"{len(del_components['pids']):4d} compartments removed following cleanup: {del_components['cids']}")
 
     def create_sbml_model(self):
         """Generate in-momory SBML model."""
@@ -704,7 +723,6 @@ class XbaModel:
 
                 substrates = []
                 for sid in r.reactants:
-                    # remove compartment postfix (assume there is a compartment postfix)
                     mid = re.sub('_[^_]*$', '', sid)
                     if mid not in mids2ref:
                         s = self.species[sid]
@@ -785,6 +803,45 @@ class XbaModel:
     #############################
     # MODIFY GENOME SCALE MODEL #
     #############################
+
+    def gpa_remove_gps(self, del_gps):
+        """Remove gene products from Gene Product Rules.
+
+        Used to remove dummy protein gene product and
+        gene products related to coezymes that already
+        appear in reaction reactants/products
+
+        :param del_gps: gene product ids to be removed
+        :type del_gps: set or list of str, or str
+        """
+        n_count = 0
+        if type(del_gps) is str:
+            del_gps = [del_gps]
+        for rid, mr in self.reactions.items():
+            mr.gpa_remove_gps(del_gps)
+        for gp in del_gps:
+            if gp in self.gps:
+                n_count += 1
+                del self.gps[gp]
+        print(f'{n_count:4d} gene product(s) removed from reactions ({len(self.gps)} gene products remaining)')
+
+    def remove_reactions(self, del_rids):
+        """remove reactions form the model
+
+        removal of obsolete gene products, species, compartments and groups entries
+        will be done during cleanup().
+
+        :param del_rids: reaction ids to be removed
+        :type del_rids: set or list of str, or str
+        """
+        n_count = 0
+        if type(del_rids) is str:
+            del_rids = [del_rids]
+        for rid in del_rids:
+            if rid in self.reactions:
+                del self.reactions[rid]
+                n_count += 0
+        print(f'{n_count:4d} reaction(s) removed from reactions ({len(self.reactions)} reactions remaining)')
 
     def add_unit_def(self, u_dict):
         """Add a single unit definition to the model.
@@ -974,26 +1031,6 @@ class XbaModel:
                 return
             print(f'{value_counts[component_type]:4d} attributes on {component_type} instances updated')
 
-    def gpa_remove_gps(self, del_gps):
-        """Remove gene products from Gene Product Rules.
-
-        Used to remove dummy protein gene product and
-        gene products related to coezymes that already
-        appear in reaction reactants/products
-
-        :param del_gps: coenzyme gene products
-        :type del_gps: set or list of str, or str
-        """
-        n_count = 0
-        if type(del_gps) is str:
-            del_gps = [del_gps]
-        for rid, mr in self.reactions.items():
-            mr.gpa_remove_gps(del_gps)
-        for gp in del_gps:
-            if gp in self.gps:
-                n_count += 1
-                del self.gps[gp]
-        print(f'{n_count:4d} gene product(s) removed from reactions ({len(self.gps)} gene products remaining)')
 
     def del_components(self, component, ids):
         """Delete / remove components from the model.
@@ -1293,7 +1330,7 @@ class XbaModel:
                         if set(genes_stoic).intersection(gpa_genes) == set(genes_stoic):
                             e.composition.update(genes_stoic)
                             updates = True
-                if updates is True:
+                if updates:
                     count += 1
             # set active sites (based on heuristics) - for metabolic enzymes (not transporters)
             e.active_sites = 1.0
@@ -1530,7 +1567,7 @@ class XbaModel:
             self.add_unit_def(u_dict)
             self.fbc_shared_pids[unit_id] = {}
 
-        if reuse is False:
+        if not reuse:
             p_dict = {'id': proposed_pid, 'name': proposed_pid, 'value': val, 'constant': True,
                       'sboterm': 'SBO:0000626', 'units': unit_id}
             self.parameters[proposed_pid] = SbmlParameter(pd.Series(p_dict, name=proposed_pid))
