@@ -101,12 +101,14 @@ class EcmOptimization(Optimize):
         assert self.is_gpm is False, 'applicable to COBRApy interface only'
         orig_coupling = defaultdict(dict)
         for ridx, scale in scale_kcats.items():
-            assert ridx in self.model.reactions
-            r = self.model.reactions.get_by_id(ridx)
-            for m, coeff in r.metabolites.items():
-                if re.match(f'{pf.C_prot_}', m.id):
-                    r.add_metabolites({m: coeff / scale}, combine=False)
-                    orig_coupling[ridx][m.id] = coeff
+            if ridx in self.model.reactions:
+                r = self.model.reactions.get_by_id(ridx)
+                for m, coeff in r.metabolites.items():
+                    if re.match(f'{pf.C_prot_}', m.id):
+                        r.add_metabolites({m: coeff / scale}, combine=False)
+                        orig_coupling[ridx][m.id] = coeff
+            else:
+                print(f'Enzyme constraint variable not found for reaction {ridx}')
         self.orig_coupling = dict(orig_coupling)
 
     def _cp_unscale_kcats(self):
@@ -130,13 +132,17 @@ class EcmOptimization(Optimize):
         self.gpm.update()
         for ridx, scale in scale_kcats.items():
             var = self.gpm.getVarByName(f'{pf.R_}{ridx}')
-            col = self.gpm.getCol(var)
-            for idx in range(col.size()):
-                constr = col.getConstr(idx)
-                if re.match(f'{pf.C_prot_}', constr.getAttr('ConstrName')):
-                    coeff = col.getCoeff(idx)
-                    self.gpm.chgCoeff(constr, var, coeff / scale)
-                    orig_coupling[ridx][constr.getAttr('ConstrName')] = coeff
+            if var:
+                col = self.gpm.getCol(var)
+                for idx in range(col.size()):
+                    constr = col.getConstr(idx)
+                    if re.match(f'{pf.C_prot_}', constr.getAttr('ConstrName')):
+                        coeff = col.getCoeff(idx)
+                        self.gpm.chgCoeff(constr, var, coeff / scale)
+                        orig_coupling[ridx][constr.getAttr('ConstrName')] = coeff
+            else:
+                print(f'Enzyme constraint variable not found for reaction {ridx}')
+
         self.gpm.update()
         self.orig_coupling = dict(orig_coupling)
 
@@ -282,13 +288,9 @@ class EcmOptimization(Optimize):
                 record2fittedkcats[record_id].append(orig_kcat * scale)
 
         # get a unique fitted kcat value (applicable to enzyme complexes): min, max, mean or geometric mean
-        # print(f'{" ":42}  min    max   mean  geo_mean')
         record2fittedkcat = {}
         for record_id, kcats in record2fittedkcats.items():
             if re.match(r'R_\w{3}t2r_', record_id) is None:
-                # kcat = min(kcats)
-                # kcat = max(kcats)
-                # kcat = np.mean(kcats)
                 kcat = np.exp(sum([np.log(kcat) for kcat in kcats])/len(kcats))
                 kcat_rounded = min(1000.0, max(0.0001, round(kcat, 4)))
                 record2fittedkcat[record_id] = kcat_rounded
