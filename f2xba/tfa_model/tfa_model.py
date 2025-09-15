@@ -30,7 +30,7 @@ import f2xba.prefixes as pf
 # TD parameters
 GAS_CONSTANT = 8.314462/1000.0            # kJ mol-1 K-1
 FARADAY_CONSTANT = 9.648533e4 / 1000.0    # kC mol-1  or kJ mol-1 V-1
-CAL_PER_J = 4.184                         # cal/J
+KJ_PER_KCAL = 4.184                       # 4.184 KJ equals 1 Kcal
 
 MAX_DRG = 1000.0                          # kJ/mol, maximum ∆rG' as variable bound
 IRR_NO_TD_DRG0 = -200.0                   # kJ/mol, ∆rG'˚ below which an irr reactions requires no TD constraints
@@ -415,7 +415,7 @@ class TfaModel:
         # create td_metabolites with valid thermo data, filtered by required metabolites
         all_td_data = all_thermo_data['metabolites']
         td_sids = self._select_td_species(all_td_data, modify_td_ids)
-        conv_factor = CAL_PER_J if all_thermo_data['units'] == 'kcal/mol' else 1.0
+        conv_factor = KJ_PER_KCAL if all_thermo_data['units'] == 'kcal/mol' else 1.0
         self.td_species = {td_sid: TdSpeciesData(td_sid, all_td_data[td_sid], conv_factor) for td_sid in td_sids}
         n_td_sids = sum([1 for s in self.model.species.values() if s.td_sid is not None])
         not_supported = len(self.model.species) - n_td_sids

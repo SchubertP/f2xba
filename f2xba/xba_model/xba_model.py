@@ -231,6 +231,9 @@ class XbaModel:
         if 'add_species' in xba_params:
             self.add_species(xba_params['add_species'])
             protect_ids.extend(xba_params['add_species'].index)
+        if 'add_parameters' in xba_params:
+            self.add_parameters(xba_params['add_parameters'])
+            protect_ids.extend(xba_params['add_parameters'].index)
         if 'add_reactions' in xba_params:
             self.add_reactions(xba_params['add_reactions'])
             protect_ids.extend(xba_params['add_reactions'].index)
@@ -908,6 +911,28 @@ class XbaModel:
                     s_data['metaid'] = f'meta_{sid}'
             self.species[sid] = SbmlSpecies(s_data)
         print(f'{n_count:4d} constraint ids added to the model ({len(self.species)} total constraints)')
+
+    def add_parameters(self, df_parameters):
+        """Add parameters based on supplied definition.
+
+        df_parameters structure:
+        - based on sbmlxdf parameters structure
+
+        :param df_parameters: parameters configurations
+        :type df_parameters: pandas.DataFrame
+        """
+        n_count = 0
+        for pid, row in df_parameters.iterrows():
+            n_count += 1
+            p_data = row
+            if 'miriamAnnotation' in p_data:
+                if type(p_data['miriamAnnotation']) is not str:
+                    p_data['miriamAnnotation'] = ''
+                # miriam annotation requires a 'metaid'
+                if 'metaid' not in p_data:
+                    p_data['metaid'] = f'meta_{pid}'
+            self.parameters[pid] = SbmlParameter(p_data)
+        print(f'{n_count:4d} parameter ids added to the model ({len(self.parameters)} total parameters)')
 
     def add_reactions(self, df_reactions):
         """Add reactions based on supplied definition
