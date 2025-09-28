@@ -13,6 +13,7 @@ import time
 import re
 import numpy as np
 import pandas as pd
+import json
 from collections import defaultdict
 import sbmlxdf
 
@@ -593,25 +594,120 @@ class XbaModel:
             print(f'Model not fully compliant to SBML standards, see ./tmp/tmp.txt): ', errors)
             return False
 
-    def export(self, fname):
-        """Export the model to SBML coded file or in tabular format.
+    @staticmethod
+    def json_annotation(data):
+        """Extract Miriam Annotation data for JSON export
 
-        :param str fname: filename (with extension '.xml' or '.xlsx')
+        :param data: model component data
+        :return: annotation data extracted from XBA model
+        :rtype: dict
+        """
+        annotation = {}
+        if hasattr(data, 'sboterm'):
+            annotation['sbo'] = data.sboterm
+        miriam_annot = data.miriam_annotation
+        if 'bqbiol:is' in miriam_annot.references:
+            for ref, values in miriam_annot.references['bqbiol:is'].items():
+                annotation[ref] = list(values) if len(values) > 1 else list(values)[0]
+        return annotation
+
+    def export_to_json(self, fname, gpid2label=None):
+        """Export the XBA model to JSON format.
+
+        Can be used for Escher map creation. Optional gpid2label dictionary allows
+        mapping of gene product ids used in reaction gene product reaction rules to
+        other values than the gene label.
+
+        :param str fname: filename (with extension '.xml', '.xlsx', '.json')
+        :param dict gpid2label: (optional) remapping of gene product ids to label data
+        """
+        if gpid2label is None:
+            gpid2label = {gpid: label for label, gpid in self.locus2gp.items()}
+
+        # create json metabolites data
+        metabolites = []
+        for mid, data in self.species.items():
+             if type(data.formula) is str and bool(np.isfinite(data.charge)):
+                metabolites.append({'id': re.sub('^M_', '', mid), 'name': data.name,
+                                    'compartment': data.compartment,
+                                    'charge': data.charge, 'formula': data.formula,
+                                    'annotation': self.json_annotation(data) })
+             else:
+                metabolites.append({'id': re.sub('^M_', '', mid), 'name': data.name,
+                                    'compartment': data.compartment,
+                                    'annotation': self.json_annotation(data)})
+
+        # create json reactions data
+        rid2groups = defaultdict(list)
+        for _, data in self.groups.items():
+            for rid in data.id_refs:
+                rid2groups[rid].append(data.name)
+        reactions = []
+        for rid, data in self.reactions.items():
+            substrates = {re.sub('^M_', '', mid): -stoic for mid, stoic in data.reactants.items()}
+            substrates.update({re.sub('^M_', '', mid): stoic for mid, stoic in data.products.items()})
+            map_gpid2label = {}
+            gpr = data.gene_product_assoc if data.gene_product_assoc else ''
+            for item in re.findall(r'\b\w+\b', gpr):
+                if item in gpid2label:
+                    map_gpid2label[item] = gpid2label[item]
+            for gpid, label in map_gpid2label.items():
+                gpr = re.sub(gpid, label, gpr)
+            if rid in rid2groups:
+                subsystems = rid2groups[rid] if len(rid2groups[rid]) > 1 else rid2groups[rid][0]
+            else:
+                subsystems = ''
+            reactions.append({'id': re.sub('^R_', '', rid), 'name': data.name, 'metabolites': substrates,
+                              'lower_bound': self.parameters[data.fbc_lower_bound].value,
+                              'upper_bound': self.parameters[data.fbc_upper_bound].value,
+                              'gene_reaction_rule': gpr, 'subsystem': subsystems,
+                              'annotation': self.json_annotation(data)})
+
+        # create json genes data
+        genes = []
+        for gpid, data in self.gps.items():
+            genes.append({'id': gpid2label[gpid], 'name': data.name, 'annotation': self.json_annotation(data)})
+
+        # construct model
+        annotation = {}
+        for ref_val in [ref_val.strip() for ref_val in self.model_attrs.get('miriamAnnotation', '').split(',')]:
+            if '/' in ref_val:
+                ref, val = ref_val.split('/')
+                annotation[ref] = val
+        json_model = {'metabolites': metabolites, 'reactions': reactions, 'genes': genes,
+                      'id': self.model_attrs.get('id', ''),
+                      'name': self.model_attrs.get('name', ''),
+                      'compartments': {data.id: getattr(data, 'name') for data in self.compartments.values()},
+                      'annotation': annotation, 'version': '1'}
+
+        with open(fname, 'w') as f:
+            json.dump(json_model, f, ensure_ascii=False, indent=0)
+
+    def export(self, fname, gpid2label=None):
+        """Export the model to SBML coded file JSON or Excel format.
+
+        For JSON map creation an optional remapping table can be provided for gene labels.
+
+        :param str fname: filename (with extension '.xml', '.xlsx', '.json')
+        :param dict gpid2label: (optional) remapping of gene product ids to label data (JSON)
         :return: success
         :rtype: bool
         """
         extension = fname.split('.')[-1]
-        if extension not in ['xml', 'xlsx']:
-            print(f'model not exported, unknown file extension, expected ".xml" or ".xlsx": {fname}')
+        if extension not in ['xml', 'xlsx', 'json']:
+            print(f'model not exported, unknown file extension, expected ".xml", ".xlsx" or ".json": {fname}')
             return False
 
         model = self.create_sbml_model()
         if extension == 'xml':
             model.export_sbml(fname)
-            print(f'model exported to SBML: {fname}')
+            print(f'model exported to SBML format: {fname}')
         elif extension == 'xlsx':
             model.to_excel(fname)
             print(f'model exported to Excel Spreadsheet: {fname}')
+        elif extension == 'json':
+            self.export_to_json(fname, gpid2label)
+            print(f'model exported to JSON format: {fname}')
         return True
 
     def export_kcats(self, fname):
