@@ -27,7 +27,7 @@ from .optimization.ecm_results import EcmResults
 from .optimization.rba_results import RbaResults
 
 from .optimization.gecko_fit_kcats import GeckoFitKcats
-
+from .optimization.rba_fit_kcats import RbaFitKcats
 
 __all__ = []
 __all__ += xba_model.__all__

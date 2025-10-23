@@ -44,7 +44,7 @@ def load_parameter_file(fname, sheet_names=None):
     :param str fname: filename of XBA configuration file (.xlsx)
     :param list sheet_names: list of table to import (default: None)
     :return: imported tables
-    :rtype: dict[pandas.DataFrame]
+    :rtype: dict of pandas.DataFrames
     """
     if os.path.exists(fname) is False:
         print(f'{fname} not found')

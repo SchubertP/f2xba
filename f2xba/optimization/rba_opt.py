@@ -365,8 +365,8 @@ class RbaOptimization(Optimize):
                                                 for idx in range(col.size())}
             else:
                 print('no optimal growth rate')
-        else:
-            print(f'Problem infeasible at minimum growth of {gr_min}')
+        # else:
+        #    print(f'Problem infeasible at minimum growth of {gr_min}')
         if make_non_neg:
             self.gp_model_original()
         return solution

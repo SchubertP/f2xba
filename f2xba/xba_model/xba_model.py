@@ -627,7 +627,7 @@ class XbaModel:
         # create json metabolites data
         metabolites = []
         for mid, data in self.species.items():
-             if type(data.formula) is str and bool(np.isfinite(data.charge)):
+             if hasattr(data, 'formula') and type(data.formula) is str and bool(np.isfinite(data.charge)):
                 metabolites.append({'id': re.sub('^M_', '', mid), 'name': data.name,
                                     'compartment': data.compartment,
                                     'charge': data.charge, 'formula': data.formula,
@@ -666,7 +666,8 @@ class XbaModel:
         # create json genes data
         genes = []
         for gpid, data in self.gps.items():
-            genes.append({'id': gpid2label[gpid], 'name': data.name, 'annotation': self.json_annotation(data)})
+            genes.append({'id': gpid2label[gpid], 'name': getattr(data, 'name', data.label),
+                          'annotation': self.json_annotation(data)})
 
         # construct model
         annotation = {}

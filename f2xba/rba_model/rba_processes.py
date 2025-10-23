@@ -50,7 +50,7 @@ class RbaProcesses:
         'input_filter' for set 'rna'
         - comma-separated list of regular expression patterns that will be checked against the macromolecule id
             - e.g. 'mrna' to select only mrna
-            - e.g. 'trna, b' to select only tRNAs and E. coli gene loci (used for rRNA)
+            - e.g. 'trna, b' to select only tRNAs and gene loci starting with 'b' (used for rRNA)
 
         'input_filter' for set 'protein':
         - 'signal_peptide': select proteins having a signal peptide as per UniProt data
@@ -122,7 +122,8 @@ class RbaProcesses:
                             p = rba_model.model.proteins[rba_model.model.locus2uid[locus]]
                             if p.has_signal_peptide is True:
                                 inputs.append(locus)
-                        # dummy proteins have no UniProt entries. We add them to input if they are located in cytoplasm
+                        # dummy proteins have no UniProt entries.
+                        # We add them to input if they are not located in the cytoplasm
                         else:
                             if rba_model.proteins.macromolecules[locus].compartment != cytoplasm_cid:
                                 inputs.append(locus)

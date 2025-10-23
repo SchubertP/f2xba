@@ -157,7 +157,7 @@ class RbaResults(Results):
             # include protein concentrations from concentration targets (proteins not included in enzymes)
             elif re.match(pf.V_TMMC_, var_id):
                 gp_id = re.sub(pf.V_TMMC_, '', var_id)
-                if self.optim.df_mm_data.at[gp_id, 'type'] == 'proteins':
+                if self.optim.df_mm_data.at[gp_id, 'type'] == 'protein':
                     scale = self.optim.df_mm_data.at[gp_id, 'scale']
                     protein_mmol_per_gdw[gp_id] += conc / scale
 

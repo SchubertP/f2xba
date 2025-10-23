@@ -10,8 +10,9 @@ from .rba_opt import RbaOptimization
 from .rba_results import RbaResults
 from .fba_opt import FbaOptimization
 from .gecko_fit_kcats import GeckoFitKcats
+from .rba_fit_kcats import RbaFitKcats
 
 __all__ = ['FbaOptimization', 'FbaResults',
            'EcmOptimization', 'EcmResults',
-           'RbaOptimization', 'RbaResults'
-           ,GeckoFitKcats]
+           'RbaOptimization', 'RbaResults',
+           'GeckoFitKcats', 'RbaFitKcats']

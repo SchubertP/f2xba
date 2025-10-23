@@ -150,7 +150,7 @@ class GeckoFitKcats:
 
         return tot_fitted_mpmf
 
-    def update_kcats(self, fitted_kcats_fname, target_sat=0.5, max_scale_factor=None, min_kcat=0.01, max_kcat=5000.0):
+    def update_kcats(self, fitted_kcats_fname, target_sat=None, max_scale_factor=None, min_kcat=0.01, max_kcat=5000.0):
         """Fit turnover numbers to proteomics data and export updated turnover numbers to file.
 
         This requires process_data() to be executed first.
@@ -178,7 +178,7 @@ class GeckoFitKcats:
         Fitted kcat values are exported to fitted_kcats_fname
 
         :param str fitted_kcats_fname: filename for fitted and exported turnover numbers (.xlsx)
-        :param float target_sat: average target saturation of fitted model (default: 0.5)
+        :param float target_sat: average target saturation of fitted model (default: None)
         :param float max_scale_factor: maximum scaling [1/factor ... factor] (default None)
         :param float min_kcat: minimal turnover number in s-1 (default: 0.01)
         :param float max_kcat: maximal turnover number in s-1 (default: 5000.0)
@@ -190,7 +190,7 @@ class GeckoFitKcats:
             df_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
             print(f'{len(df_kcats):4d} original kcat records loaded from {self.orig_kcats_fname}')
 
-        target_saturation_scale = self.optim.avg_enz_saturation / target_sat
+        target_saturation_scale = self.optim.avg_enz_saturation / target_sat if target_sat else 1.0
 
         exceed_max_scale = {}
         for net_rid, meas_data in self.meas_net_rid_data.items():
