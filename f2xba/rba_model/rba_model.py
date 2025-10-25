@@ -175,7 +175,8 @@ class RbaModel:
         cid_mappings = {}
         cid2rcids = {}
         for cid, row in df_c_data.iterrows():
-            cid2rcids[cid] = {rcid.strip() for rcid in row['reaction_cids'].split(',')}
+            if type(row['reaction_cids']) is str:
+                cid2rcids[cid] = {rcid.strip() for rcid in row['reaction_cids'].split(',')}
 
         cid_mappings['rcid2cid'] = {}
         for cid, rcids in cid2rcids.items():
@@ -190,6 +191,8 @@ class RbaModel:
                 cid_mappings['medium_cid'] = cid
             elif row['keyword'] == 'cytoplasm':
                 cid_mappings['cytoplasm_cid'] = cid
+            elif row['keyword'] == 'total_density':
+                cid_mappings['total_density_cid'] = cid
 
         # identify compartments with translation targets for dummy proteins
         cid_mappings['dummy_proteins'] = {}
@@ -788,7 +791,10 @@ class RbaModel:
         for comp_id, stoic in srefs.items():
             if comp_id in self.mmid2mm:
                 mm = self.mmid2mm[comp_id]
-                weights[mm.compartment] += stoic * mm.weight/mm.scale
+                weight = stoic * mm.weight/mm.scale
+                weights[mm.compartment] += weight
+                if 'total_density_cid' in self.cid_mappings:
+                    weights[self.cid_mappings['total_density_cid']] += weight
 
         weight_coupling = defaultdict(float)
         for cid, weight in weights.items():
@@ -997,9 +1003,14 @@ class RbaModel:
                     self.initial_assignments.add_sref_ia(var_id, mm.sid, math_var='growth_rate * 1 hour')
 
                     # add compartment density constraint
-                    cid = mm.compartment
-                    products = ({self.densities.densities[cid].constr_id: mm.weight / mm.scale}
-                                if cid in self.densities.densities else {})
+                    weight_coupling = {}
+                    cids = [mm.compartment]
+                    if 'total_density_cid' in self.cid_mappings:
+                        cids.append(self.cid_mappings['total_density_cid'])
+                    for cid in cids:
+                        if cid in self.densities.densities:
+                            weight_coupling[self.densities.densities[cid].constr_id] = mm.weight / mm.scale
+                    products = weight_coupling
 
                     # get gene product association
                     gpid = self.model.locus2gp.get(tid)

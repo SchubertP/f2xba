@@ -19,7 +19,7 @@ class RbaDensities:
 
     def import_xml(self, model_dir):
         file_name = os.path.join(model_dir, 'density.xml')
-        if os.path.exists(model_dir) is True:
+        if os.path.exists(model_dir):
             root = parse(file_name).getroot()
             assert root.tag == 'RBADensity'
             self.densities = RbaDensity.import_xml(root.find('listOfTargetDensities'))
