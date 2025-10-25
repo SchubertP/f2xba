@@ -1262,7 +1262,9 @@ class RbaModel:
         ref_parameters |= self.densities.ref_parameters()
         ref_parameters |= self.targets.ref_parameters()
         ref_parameters |= self.enzymes.ref_parameters()
-        ref_parameters |= self.parameters.ref_functions(ref_parameters)
+        functions_used_in_aggs = self.parameters.ref_functions(ref_parameters)
+        ref_parameters |= functions_used_in_aggs
+        #ref_parameters |= self.parameters.ref_functions(ref_parameters)
 
         ref_molecules = set()
         ref_molecules |= self.metabolism.ref_molecules()
@@ -1331,4 +1333,4 @@ class RbaModel:
                 for component in components:
                     getattr(self, component).export_xml(fname)
                 print(f'RBA model exported to: {fname}')
-                return True
+        return True

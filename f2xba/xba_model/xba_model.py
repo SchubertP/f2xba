@@ -41,6 +41,8 @@ FBC_BOUND_TOL = '.10e'
 DEFAULT_METABOLIC_KCAT = 12.5
 DEFAULT_TRANSPORTER_KCAT = 50.0
 
+SBO_GENE = 'SBO:0000243'
+
 class XbaModel:
     """In-memory representation of the genome-scale metabolic model.
     """
@@ -1000,11 +1002,11 @@ class XbaModel:
         for sid, row in df_species.iterrows():
             n_count += 1
             s_data = row
-            if 'miriamAnnotation' in s_data:
+            if hasattr(s_data, 'miriamAnnotation'):
                 if type(s_data['miriamAnnotation']) is not str:
                     s_data['miriamAnnotation'] = ''
                 # miriam annotation requires a 'metaid'
-                if 'metaid' not in s_data:
+                if not hasattr(s_data, 'metaid'):
                     s_data['metaid'] = f'meta_{sid}'
             self.species[sid] = SbmlSpecies(s_data)
         print(f'{n_count:4d} constraint ids added to the model ({len(self.species)} total constraints)')
@@ -1022,11 +1024,11 @@ class XbaModel:
         for pid, row in df_parameters.iterrows():
             n_count += 1
             p_data = row
-            if 'miriamAnnotation' in p_data:
+            if hasattr(p_data, 'miriamAnnotation'):
                 if type(p_data['miriamAnnotation']) is not str:
                     p_data['miriamAnnotation'] = ''
                 # miriam annotation requires a 'metaid'
-                if 'metaid' not in p_data:
+                if not hasattr(p_data, 'metaid'):
                     p_data['metaid'] = f'meta_{pid}'
             self.parameters[pid] = SbmlParameter(p_data)
         print(f'{n_count:4d} parameter ids added to the model ({len(self.parameters)} total parameters)')
@@ -1051,17 +1053,18 @@ class XbaModel:
         for rid, row in df_reactions.iterrows():
             n_count += 1
             r_data = row
-            if 'miriamAnnotation' in r_data:
+            if hasattr(r_data, 'miriamAnnotation'):
                 if type(r_data['miriamAnnotation']) is not str:
                     r_data['miriamAnnotation'] = ''
                 # miriam annotation requires a 'metaid'
-                if 'metaid' not in r_data:
+                if not hasattr(r_data, 'metaid'):
                     r_data['metaid'] = f'meta_{rid}'
-            if 'reactants' not in r_data:
+            if not hasattr(r_data, 'reactants'):
                 assert('reactionString' in r_data)
-                for key, val in parse_reaction_string(r_data['reactionString']).items():
+                reaction_components = parse_reaction_string(str(r_data['reactionString']))
+                for key, val in reaction_components.items():
                     r_data[key] = val
-            if 'fbcLowerFluxBound' not in r_data:
+            if not hasattr(r_data, 'fbcLowerFluxBound'):
                 assert(('fbcLb' in r_data) and ('fbcUb' in r_data))
                 unit_id = r_data.get('fbcBndUid', self.flux_uid)
                 r_data['fbcLowerFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcLb'], unit_id, f'fbc_{rid}_lb')
@@ -1256,7 +1259,8 @@ class XbaModel:
         optionally we add compartment info to support RBA machinery related gene products
                 'compartment': location of gene product, e.g. 'c'
 
-        Add miriamAnnotation with Uniprot id, if no mirimaAnnotation has been provided
+        Add 'name' and 'sboterm' if not provided
+        Add miriamAnnotation with Uniprot id, if miriamAnnotation has not been provided.
         Uniprot ID is retrieved with Uniprot data
 
         :param df_add_gps: configuration data for gene product, see sbmlxdf
@@ -1267,12 +1271,20 @@ class XbaModel:
         count = 0
         for gpid, gp_data in df_add_gps.iterrows():
             if gpid not in self.gps:
-                if type(gp_data.get('miriamAnnotation')) is not str:
-                    gene_id = gp_data['label']
-                    if self.uniprot_data and gene_id in self.uniprot_data.locus2uid:
-                        uid = self.uniprot_data.locus2uid[gene_id]
-                        gp_data['metaid'] = f'meta_{gpid}'
-                        gp_data['miriamAnnotation'] = f'bqbiol:is, uniprot/{uid}'
+                gene_id = gp_data['label']
+                uid = None
+                if self.uniprot_data:
+                    uid = self.uniprot_data.locus2uid.get(gene_id)
+
+                if uid and gp_data.get('name') is None:
+                    pdata = self.uniprot_data.proteins[uid]
+                    gp_data['name'] = pdata.gene_name.split(',')[0] if type(pdata.gene_name) is str else gene_id
+                if uid and type(gp_data.get('miriamAnnotation')) is not str:
+                    gp_data['metaid'] = f'meta_{gpid}'
+                    gp_data['miriamAnnotation'] = f'bqbiol:is, uniprot/{uid}'
+                if not hasattr(gp_data, 'sboterm'):
+                    gp_data['sboterm'] = SBO_GENE
+
                 self.gps[gpid] = FbcGeneProduct(gp_data)
                 count += 1
         print(f'{count:4d} gene products added to the model ({len(self.gps)} total gene products)')
