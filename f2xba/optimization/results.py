@@ -77,7 +77,7 @@ class Results(ABC):
         :return: table with predicted reaction fluxes
         :rtype: pandas.DataFrame
         """
-        if net is True:
+        if net:
             info_cols = ['reaction_str', 'gpr', 'groups']
         else:
             info_cols = ['reaction_str', 'net_rid', 'gpr', 'groups']
@@ -261,13 +261,13 @@ class Results(ABC):
 
         :param str scale: numerial value scale: 'lin' or 'log' (default: 'lin')
         """
-        if hasattr(self, 'df_mpmf') is False:
+        if not hasattr(self, 'df_mpmf'):
             print('no proteomics data supplied for comparisson')
             return
 
         df_proteins = self.collect_protein_results()
         for condition in self.results:
-            if condition in self.df_mpmf:
+            if condition in self.df_mpmf.columns:
                 exp_mpmfs = self.df_mpmf[condition].to_dict()
                 pred_mpmfs = df_proteins[condition].to_dict()
 
@@ -284,7 +284,7 @@ class Results(ABC):
         :param str condition: (media) condition in optimization results
         """
         # For measured proteins collect predicted mass fraction per type
-        if hasattr(self, 'df_mpmf') is False:
+        if not hasattr(self, 'df_mpmf'):
             print('no proteomics data supplied for comparisson')
             return
 
@@ -344,7 +344,7 @@ class Results(ABC):
         assert isinstance(results_table, pd.DataFrame)
 
         data_sets = {'rid': 'reaction data', 'gene': 'gene data', 'sid': 'metabolite data'}
-        data_set = data_sets.get(results_table.index.name)
+        data_set = data_sets.get(getattr(results_table.index, 'name'))
 
         count = 0
         if data_set:
@@ -354,7 +354,6 @@ class Results(ABC):
                     json.dump(values_dict, file)
                     count += 1
             print(f'{count} file(s) exported for "Load {data_set}" into Escher maps')
-
         else:
             print(f'{results_table.index.name} not supported, use dataframe indexed with any of {data_sets.keys()}')
 
@@ -430,7 +429,7 @@ class Results(ABC):
         :param lin_max: max value in linear scale plot (default: None)
         :param str plot_fname: filename to export plot (.pdf) (default: None)
         """
-        if hasattr(self, 'df_mpmf') is False:
+        if not hasattr(self, 'df_mpmf'):
             print('no proteomics data supplied for comparisson')
             return
 
@@ -442,7 +441,6 @@ class Results(ABC):
         tx_gene2mpmfs = self.get_rtype_condition_mpmf('transport', condition)
         pm_gene2mpmfs = self.get_rtype_condition_mpmf('process', condition)
         all_gene2mpmfs = metab_gene2mpmfs | tx_gene2mpmfs | pm_gene2mpmfs
-
         metab_mpmfs = np.array(list(metab_gene2mpmfs.values()))
         tx_mpmfs = np.array(list(tx_gene2mpmfs.values()))
         pm_mpmfs = np.array(list(pm_gene2mpmfs.values()))

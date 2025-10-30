@@ -150,7 +150,7 @@ def get_function_params(kv_str):
     :return: function definition
     :rtype: dict
     """
-    f_params = {'params': {}}
+    f_params = {'params': {}, 'tmp': ''}
     for kv_pair in [item.strip() for item in kv_str.split(',')]:
         k, v = kv_pair.split('=')
         if k.strip() == 'variable':
@@ -176,4 +176,5 @@ def get_function_params(kv_str):
         f_params['type'] = 'michaelisMenten'
     elif ('X_MIN' in f_params['params']) and ('X_MAX' in f_params['params']) and len(f_params['params']) == 2:
         f_params['type'] = 'indicator'
+    del f_params['tmp']
     return f_params

@@ -32,6 +32,7 @@ def get_next_link(headers):
         match = re.match(r'<(.+)>; rel="next"', headers["Link"])
         if match:
             return match.group(1)
+    return None
 
 
 def get_batch(session, batch_url):

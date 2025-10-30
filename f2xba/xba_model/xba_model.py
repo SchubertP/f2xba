@@ -217,11 +217,6 @@ class XbaModel:
         #############################
 
         protect_ids = []
-        if 'modify_attributes' in xba_params:
-            self.modify_attributes(xba_params['modify_attributes'], 'modelAttrs')
-            self.modify_attributes(xba_params['modify_attributes'], 'gp')
-            self.modify_attributes(xba_params['modify_attributes'], 'species')
-            self.modify_attributes(xba_params['modify_attributes'], 'reaction')
         if 'remove_gps' in xba_params:
             remove_gps = list(xba_params['remove_gps'].index)
             self.gpa_remove_gps(remove_gps)
@@ -240,6 +235,11 @@ class XbaModel:
         if 'add_reactions' in xba_params:
             self.add_reactions(xba_params['add_reactions'])
             protect_ids.extend(xba_params['add_reactions'].index)
+        if 'modify_attributes' in xba_params:
+            self.modify_attributes(xba_params['modify_attributes'], 'modelAttrs')
+            self.modify_attributes(xba_params['modify_attributes'], 'gp')
+            self.modify_attributes(xba_params['modify_attributes'], 'species')
+            self.modify_attributes(xba_params['modify_attributes'], 'reaction')
         self.clean(protect_ids)
         # for r in self.reactions.values():
         #     r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
@@ -1050,9 +1050,8 @@ class XbaModel:
         :return:
         """
         n_count = 0
-        for rid, row in df_reactions.iterrows():
+        for rid, r_data in df_reactions.iterrows():
             n_count += 1
-            r_data = row
             if hasattr(r_data, 'miriamAnnotation'):
                 if type(r_data['miriamAnnotation']) is not str:
                     r_data['miriamAnnotation'] = ''
@@ -1067,8 +1066,8 @@ class XbaModel:
             if not hasattr(r_data, 'fbcLowerFluxBound'):
                 assert(('fbcLb' in r_data) and ('fbcUb' in r_data))
                 unit_id = r_data.get('fbcBndUid', self.flux_uid)
-                r_data['fbcLowerFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcLb'], unit_id, f'fbc_{rid}_lb')
-                r_data['fbcUpperFluxBound'] = self.get_fbc_bnd_pid(r_data['fbcUb'], unit_id, f'fbc_{rid}_ub')
+                r_data['fbcLowerFluxBound'] = self.get_fbc_bnd_pid(r_data.loc['fbcLb'], unit_id, f'fbc_{rid}_lb')
+                r_data['fbcUpperFluxBound'] = self.get_fbc_bnd_pid(r_data.loc['fbcUb'], unit_id, f'fbc_{rid}_ub')
             self.reactions[rid] = SbmlReaction(r_data, self.species)
         print(f'{n_count:4d} variable ids added to the model ({len(self.reactions)} total variables)')
 
@@ -1150,7 +1149,7 @@ class XbaModel:
             elif component_type in component_mapping:
                 comp_obj = component_mapping[component_type]
                 for _id, row in df_modify_attrs.iterrows():
-                    comp_obj[_id].modify_attribute(row['attribute'], row['value'])
+                    comp_obj[_id].modify_attribute(row.loc['attribute'], row.loc['value'])
             else:
                 print('unknown component_type {component_type} in "modify_attributes" sheet')
                 return
@@ -1607,6 +1606,7 @@ class XbaModel:
         """
         n_updates = 0
         for loci, row in df_enz_kcats.iterrows():
+            loci = str(loci)
             eid = 'enz_' + '_'.join(sorted([locus.strip() for locus in loci.split(',')]))
             if eid in self.enzymes:
                 if type(row['rid']) is str and len(row['rid']) > 1:

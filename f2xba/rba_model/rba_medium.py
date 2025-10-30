@@ -17,7 +17,7 @@ class RbaMedium:
     def import_xml(self, model_dir):
         # actually an import from tsv file
         file_name = os.path.join(model_dir, 'medium.tsv')
-        if os.path.exists(model_dir) is True:
+        if os.path.exists(model_dir):
             df = pd.read_table(file_name, usecols=['Metabolite', 'Concentration'], index_col='Metabolite')
             self.concentrations = df.to_dict()['Concentration']
         else:

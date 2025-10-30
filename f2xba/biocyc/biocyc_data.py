@@ -38,7 +38,7 @@ class BiocycData:
                             'Protein': ['proteins', 'low'],
                             'RNA': ['RNAs', 'low']}
 
-        if self.is_complete_biocyc_data() is False:
+        if not self.is_complete_biocyc_data():
             self.retrieve_biocyc_data()
 
         self.genes = BiocycGene.get_genes(self.biocyc_data_fname('Gene'))
@@ -176,7 +176,7 @@ class BiocycData:
         exports_available = True
         for component in self.biocyc_data:
             file_name = self.biocyc_data_fname(component)
-            if os.path.exists(file_name) is False:
+            if not os.path.exists(file_name):
                 exports_available = False
                 print(f'{file_name} does not exist.')
         return exports_available
@@ -189,7 +189,7 @@ class BiocycData:
         """
         for component in self.biocyc_data:
             file_name = self.biocyc_data_fname(component)
-            if os.path.exists(file_name) is False:
+            if not os.path.exists(file_name):
                 class_name, detail = self.biocyc_data[component]
                 print('retrieve ' + class_name + ' from Biocyc at level ' + detail)
                 base_url = urllib.parse.urlparse(self.url)

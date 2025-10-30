@@ -208,7 +208,8 @@ class TfaModel:
         modify_attrs = {}
         for var_id, row in df_modify_drg0_bounds.iterrows():
             drg0_var = self.model.reactions[var_id]
-            pid = getattr(drg0_var, row['attribute'])
+            specific_bound = getattr(row, 'attribute')
+            pid = getattr(drg0_var, specific_bound)
             modify_attrs[pid] = ['parameter', 'value', row['value'], 'relaxation']
         cols = ['component', 'attribute', 'value', 'notes']
         df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)

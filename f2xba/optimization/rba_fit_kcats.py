@@ -8,6 +8,7 @@ Peter Schubert, HHU Duesseldorf, CCB, October 2025
 
 import re
 from collections import defaultdict
+import numpy as np
 
 import f2xba.prefixes as pf
 from f2xba.utils.mapping_utils import load_parameter_file, write_parameter_file
@@ -105,22 +106,25 @@ class RbaFitKcats:
               f'total protein of {tot_fitted_mpmf:.1f} mg/gP (based on proteomics)')
         return tot_fitted_mpmf
 
-    def update_kcats(self, fitted_kcats_fname, target_sat=None, max_scale_factor=None, min_kcat=0.01):
+    def update_kcats(self, fitted_kcats_fname, target_sat=None, max_scale_factor=None, min_kcat=0.01, log_scale=False):
         """Fit turnover numbers to proteomics data and export updated turnover numbers to file.
 
         This requires process_data() to be executed first.
 
         The idea is to scale the original turnover numbers of active enzyme catalyzed reactions
         to get the predicted protein levels closer to the measured protein levels. This however, is only
-        a first approximation, assuming that the flux distribution would not change significantly.
+        a first approximation, assuming that the flux distribution would not change significantly. Using adjusted
+        turnover numbers will however impact flux levels and might impact flux distribution, making the
+        automatic fitting suboptimal.
 
         Per active reaction an optimal scaling factor is determined. In case of an enzyme with a single
         protein component, this scaling factor is just the ratio of predicted to measured protein mass fraction.
         Only scaling factors in the range of 1/max_scale_factor ond max_scale factor are considered.
         For enzyme complexes a weighted scaling factor, wrt measured protein mass fractions, is determined.
+        Weighing for enzyme complexes can be based lin or log scale of pmf.
 
         Turnover numbers of all iso-reactions of a given net_reaction are rescaled, to avoid that another
-        iso-reaction becomes more favorable, which would change the type of proteins used.
+        iso-reaction become more favorable, which would change the type of proteins used.
 
         Fitted kcat values are exported to fitted_kcats_fname
 
@@ -128,7 +132,8 @@ class RbaFitKcats:
         :param float target_sat: average target saturation of fitted model (default: None)
         :param float max_scale_factor: maximum scaling [1/factor ... factor] (default None)
         :param float min_kcat: minimal turnover number in s-1 (default: 0.01)
-        :return: kcat records not scaled due to exceeding max scaling
+        :param bool log_scale: select weighing based on lin/log scale protein mass fractions (default: False)
+        :return: records not scaled due to exceeding max scaling
         :rtype: dict[dict]
         """
         # get a mapping from net reaction id to iso reaction ids
@@ -156,9 +161,14 @@ class RbaFitKcats:
                     opt_scale_factor = pred_mpmf / meas_mpmf
                     if max_scale_factor is None or 1. / max_scale_factor < opt_scale_factor < max_scale_factor:
                         factors.append(opt_scale_factor)
-                        mpmfs.append(meas_mpmf)
-                        tot_mpmf += meas_mpmf
-            # determine a weighted factor (based on measured mpmf)
+                        if log_scale:
+                            mpmfs.append(np.log(meas_mpmf))
+                            tot_mpmf += np.log(meas_mpmf)
+                        else:
+                            mpmfs.append(meas_mpmf)
+                            tot_mpmf += meas_mpmf
+
+            # for enzyme complexes determine a weighted factor (based on measured mpmf)
             weighted_factor = 0.0
             for i in range(len(factors)):
                 weighted_factor += factors[i] * mpmfs[i] / tot_mpmf

@@ -57,13 +57,14 @@ class InitialAssignments:
         :type math_const: str (formated as per SBML math specification)
         """
         sref_id = f'{var_id}__{constr_id}'
-        ad_dict = {'symbol': sref_id, 'var_id': var_id, 'constr_id': constr_id}
+        ad_dict = {'symbol': sref_id, 'var_id': var_id, 'constr_id': constr_id, 'rba_funcs': []}
 
         constant_type = False
         if rba_pid:
             if rba_pid in self.functions:
-                ad_dict['rba_funcs'] = [self.functions[rba_pid]]
-                if ad_dict['rba_funcs'][0].type == 'constant':
+                fdata = self.functions[rba_pid]
+                ad_dict['rba_funcs'] = [fdata]
+                if fdata.type == 'constant':
                     constant_type = True
             elif rba_pid in self.aggregates:
                 agg = self.aggregates[rba_pid]
@@ -76,7 +77,7 @@ class InitialAssignments:
         elif math_const:
             ad_dict['math_str'] = math_const
 
-        if constant_type is False:
+        if not constant_type:
             self.sref_data[sref_id] = AssignmentData(ad_dict)
 
     def add_var_bnd_ia(self, xba_bnd_pid, rba_pid=None, math_var=None, math_const=None):
@@ -91,13 +92,14 @@ class InitialAssignments:
         :param math_const: mathematical string with constants only
         :type math_const: str (formated as per SBML math specification)
         """
-        ad_dict = {'symbol': xba_bnd_pid}
+        ad_dict = {'symbol': xba_bnd_pid, 'rba_funcs': []}
 
         constant_type = False
         if rba_pid:
             if rba_pid in self.functions:
-                ad_dict['rba_funcs'] = [self.functions[rba_pid]]
-                if ad_dict['rba_funcs'][0].type == 'constant':
+                fdata = self.functions[rba_pid]
+                ad_dict['rba_funcs'] = [fdata]
+                if fdata.type == 'constant':
                     constant_type = True
             elif rba_pid in self.aggregates:
                 agg = self.aggregates[rba_pid]
@@ -110,7 +112,7 @@ class InitialAssignments:
         elif math_const:
             ad_dict['math_str'] = math_const
 
-        if constant_type is False:
+        if not constant_type:
             self.var_bnd_data[xba_bnd_pid] = AssignmentData(ad_dict)
 
     def xba_implementation(self, xba_model):

@@ -46,7 +46,7 @@ def load_parameter_file(fname, sheet_names=None):
     :return: imported tables
     :rtype: dict of pandas.DataFrames
     """
-    if os.path.exists(fname) is False:
+    if not os.path.exists(fname):
         print(f'{fname} not found')
         raise FileNotFoundError
 
@@ -204,7 +204,7 @@ def update_master_kcats(df_master_kcats, fname):
     :rtype: pandas.DataFrame
     """
     # load data with kcats records to be updated from file.
-    if os.path.exists(fname) is False:
+    if not os.path.exists(fname):
         print(f'{fname} does not exist')
         raise FileNotFoundError
     with pd.ExcelFile(fname) as xlsx:
@@ -219,11 +219,11 @@ def update_master_kcats(df_master_kcats, fname):
     not_found = {}
     updated = []
     for rkey, row in df_upd_kcats.iterrows():
-        kcat = row['kcat_per_s']
+        kcat = row.get('kcat_per_s', 0.0)
         if np.isfinite(kcat) and kcat > 0.0:
-            rid = row['rid']
-            dirxn = row['dirxn']
-            enz_id = row['enzyme']
+            rid = row.get('rid')
+            dirxn = row.get('dirxn')
+            enz_id = row.get('enzyme')
             if rid in rid2isorids:
                 idx = None
                 for iso_rid, data in rid2isorids[rid].items():

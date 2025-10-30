@@ -29,7 +29,7 @@ def print_var_info(var):
         iis_info = ''
         if hasattr(var, 'IISLB'):
             iis_info = f', IIS: [{var.IISLB}, {var.IISUB}] (force [{var.IISLBForce}, {var.IISUBForce}])'
-        print(f'{var.VType} {name:20s} [{var.lb} - {var.ub}] -> {x}, {vbasis}, rc: {rc:.6f}{iis_info}')
+        print(f'{var.VType} {name:20s} [{var.LB} - {var.UB}] -> {x}, {vbasis}, rc: {rc:.6f}{iis_info}')
     else:
         print(f'not in gurobipy model variable')
 

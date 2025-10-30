@@ -130,6 +130,7 @@ def get_items(items_str, delim=';'):
         items = items_str.split(delim)
         for item in items:
             yield item.strip()
+    return []
 
 
 def extract_params(record):

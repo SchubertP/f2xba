@@ -23,7 +23,7 @@ class RbaEnzymes:
     def import_xml(self, model_dir):
 
         file_name = os.path.join(model_dir, 'enzymes.xml')
-        if os.path.exists(file_name) is True:
+        if os.path.exists(file_name):
             root = parse(file_name).getroot()
             assert root.tag == 'RBAEnzymes'
             self.enzymes = RbaEnzyme.import_xml(root.find('listOfEnzymes'))

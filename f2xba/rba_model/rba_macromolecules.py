@@ -22,7 +22,7 @@ class RbaMacromolecules:
     def import_xml(self, model_dir):
 
         file_name = os.path.join(model_dir, self.type + '.xml')
-        if os.path.exists(file_name) is True:
+        if os.path.exists(file_name):
             root = parse(file_name).getroot()
             assert root.tag == type2tag[self.type]
             self.components = RbaComponent.import_xml(root.find('listOfComponents'))

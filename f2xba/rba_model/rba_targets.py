@@ -22,7 +22,7 @@ class RbaTargets:
 
     def import_xml(self, model_dir):
         file_name = os.path.join(model_dir, 'targets.xml')
-        if os.path.exists(file_name) is True:
+        if os.path.exists(file_name):
             root = parse(file_name).getroot()
             assert root.tag == 'RBATargets', 'RBATargets tag expected during import'
             self.target_groups = RbaTargetGroup.import_xml(root.find('listOfTargetGroups'))
@@ -54,7 +54,7 @@ class RbaTargets:
         """
         reactant_srefs = defaultdict(int)
         for _, row in df_pmaps[df_pmaps['set'] == macromolecule_set].iterrows():
-            reactants, _ = translate_reaction_string(row['reaction_string'])
+            reactants, _ = translate_reaction_string(getattr(row, 'reaction_string'))
             for sid in reactants:
                 reactant_srefs[sid] += 1
 
