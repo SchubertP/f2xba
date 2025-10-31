@@ -294,6 +294,80 @@ class RbaOptimization(Optimize):
         self.gpm.update()
         self.orig_coeffs = {}
 
+    def get_init_assign_math(self, ia_refs):
+        """Get expanded math string used in initial assignments
+
+        RBA model uses initial assignments for model update during optimization.
+        Model parameter values can be set depending on external media concentrations and growth rate.
+        This method retrieves the expanded math for a list of initial assignement references
+        each reference contains a dictionary with the attributes:
+        - var_id: variable identifier
+        - constr_id: constraint identifier
+        - constr_type: 'reactants', 'products', or 'flux_bounds'
+
+        :param ia_refs: reference to specific initial assignemnt
+        :type ia_refs: list of dict
+        :return: extended math strings
+        :rtype: list of dict, like input with additional attribute 'math'
+        """
+        ia_data = []
+        for data in ia_refs:
+            var_id = data.get('var_id', '')
+            constr_id = data.get('constr_id', '')
+            constr_type = data.get('constr_type', '')
+
+            if (var_id not in self.initial_assignments.target_rids or
+                    constr_type not in ('reactants', 'products', 'flux_bounds') or
+                    constr_id not in getattr(self.initial_assignments.target_rids[var_id], constr_type)):
+                print(f'Invalid reference. var_id: {var_id}, constr_type: {constr_type}, constr_id: {constr_id}')
+            else:
+                trid = self.initial_assignments.target_rids[var_id]
+                symbol_id = getattr(trid, constr_type)[constr_id]
+                ia_func = self.initial_assignments.ia_functions[symbol_id]
+                ia_data.append({'var_id': var_id, 'constr_type': constr_type, 'constr_id': constr_id,
+                                 'math': ia_func.expanded_math})
+        return ia_data
+
+    def set_init_assign_math(self, ia_data):
+        """Set expanded math string used in initial assignments
+
+         RBA model uses initial assignments for model update during optimization.
+         Model parameter values can be set depending on external media concentrations and growth rate.
+         This method sets the expanded math for a list of initial assignement references
+         each reference contains a dictionary with the attributes:
+         - var_id: variable identifier
+         - constr_id: constraint identifier
+         - constr_type: 'reactants', 'products', or 'flux_bounds'
+         - math: math string, e.g. 'growth_rate * 0.002' or a fixed value as 0.0
+
+         :param ia_data: reference to specific initial assignemnt
+         :type ia_data: list of dict
+         :return: the original math string, prior to modification
+         :rtype: list of dict, like input, but with original math string
+         """
+        orig_ia_data = []
+        for data in ia_data:
+            var_id = data.get('var_id', '')
+            constr_id = data.get('constr_id', '')
+            constr_type = data.get('constr_type', '')
+            new_math = str(data.get('math', ''))
+
+            if (var_id not in self.initial_assignments.target_rids or
+                    constr_type not in ('reactants', 'products', 'flux_bounds') or
+                    constr_id not in getattr(self.initial_assignments.target_rids[var_id], constr_type) or
+                    len(new_math) == 0):
+                print(
+                    f'Invalid record. var_id: {var_id}, constr_type: {constr_type}, constr_id: {constr_id}, math: {new_math}')
+            else:
+                trid = self.initial_assignments.target_rids[var_id]
+                symbol_id = getattr(trid, constr_type)[constr_id]
+                ia_func = self.initial_assignments.ia_functions[symbol_id]
+                org_math = ia_func.expanded_math
+                ia_func.expanded_math = new_math
+                orig_ia_data.append(
+                    {'var_id': var_id, 'constr_type': constr_type, 'constr_id': constr_id, 'math': org_math})
+        return orig_ia_data
+
     def solve(self, gr_min=0.0, gr_max=1.5, bisection_tol=1e-5, max_iter=40, make_non_neg=False):
         """Solve RBA feasibility problem using bisection algorithm.
 
