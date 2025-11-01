@@ -308,7 +308,7 @@ class RbaOptimization(Optimize):
         :param ia_refs: reference to specific initial assignemnt
         :type ia_refs: list of dict
         :return: extended math strings
-        :rtype: list of dict, like input with additional attribute 'math'
+        :rtype: list of dict, like input with additional attribute 'math_str'
         """
         ia_data = []
         for data in ia_refs:
@@ -325,7 +325,7 @@ class RbaOptimization(Optimize):
                 symbol_id = getattr(trid, constr_type)[constr_id]
                 ia_func = self.initial_assignments.ia_functions[symbol_id]
                 ia_data.append({'var_id': var_id, 'constr_type': constr_type, 'constr_id': constr_id,
-                                 'math': ia_func.expanded_math})
+                                 'math_str': ia_func.expanded_math})
         return ia_data
 
     def set_init_assign_math(self, ia_data):
@@ -350,14 +350,14 @@ class RbaOptimization(Optimize):
             var_id = data.get('var_id', '')
             constr_id = data.get('constr_id', '')
             constr_type = data.get('constr_type', '')
-            new_math = str(data.get('math', ''))
+            new_math = str(data.get('math_str', ''))
 
             if (var_id not in self.initial_assignments.target_rids or
                     constr_type not in ('reactants', 'products', 'flux_bounds') or
                     constr_id not in getattr(self.initial_assignments.target_rids[var_id], constr_type) or
                     len(new_math) == 0):
                 print(
-                    f'Invalid record. var_id: {var_id}, constr_type: {constr_type}, constr_id: {constr_id}, math: {new_math}')
+                    f'Invalid record. var_id: {var_id}, constr_type: {constr_type}, constr_id: {constr_id}, math_str: {new_math}')
             else:
                 trid = self.initial_assignments.target_rids[var_id]
                 symbol_id = getattr(trid, constr_type)[constr_id]
@@ -365,7 +365,7 @@ class RbaOptimization(Optimize):
                 org_math = ia_func.expanded_math
                 ia_func.expanded_math = new_math
                 orig_ia_data.append(
-                    {'var_id': var_id, 'constr_type': constr_type, 'constr_id': constr_id, 'math': org_math})
+                    {'var_id': var_id, 'constr_type': constr_type, 'constr_id': constr_id, 'math_str': org_math})
         return orig_ia_data
 
     def solve(self, gr_min=0.0, gr_max=1.5, bisection_tol=1e-5, max_iter=40, make_non_neg=False):

@@ -1094,6 +1094,38 @@ class Optimize:
         """RBA solver, overwritten by RbaOptimization"""
         return pd.DataFrame()
 
+    def gene_knock_outs(self, genes):
+        """Block reactions that are catalyzed by specified genes.
+
+        Variable bounds can be configured for a single variable or for a list of variables.
+        When cobrapy interface is usare ed, bounds are retrieved using cobrapy methods.
+
+        :param genes: gene identifiers (gene lables used in the model)
+        :type genes: str or list[str]
+        :return: original reaction bounds (lb, ub)
+        :rtype: dict with 2-tuple with float
+        """
+        if type(genes) is str:
+            genes = [genes]
+
+        orig_rid_bounds = {}
+        if self.is_gpm:
+            self.gpm.update()
+            for rid in self.get_rids_blocked_by(genes):
+                var = self.gpm.getVarByName(rid)
+                orig_rid_bounds[rid] = (var.lb, var.ub)
+                var.lb = 0.0
+                var.ub = 0.0
+        else:
+            for gene in genes:
+                assert gene in self.model.genes, f'{gene} not found'
+                for react in self.model.genes.get_by_id(gene).reactions:
+                    orig_rid_bounds[react.id] = (react.lower_bound, react.upper_bound)
+            for gene in genes:
+                self.model.genes.get_by_id(gene).knock_out()
+
+        return orig_rid_bounds
+
     def gene_deletions(self, genes, **rba_solve_params):
         """Simulate gene deletions for FBA, ECM and RBA models using gurobipy.
 
@@ -1109,16 +1141,7 @@ class Optimize:
             print('Method implemented for gurobipy interface only.')
             return None
 
-        self.gpm.update()
-        rids_blocked = self.get_rids_blocked_by(genes)
-
-        # block affected reactions
-        old_bounds = {}
-        for rid in rids_blocked:
-            var = self.gpm.getVarByName(rid)
-            old_bounds[rid] = (var.lb, var.ub)
-            var.lb = 0.0
-            var.ub = 0.0
+        orig_rid_bounds = self.gene_knock_outs(genes)
 
         # optimize
         if self.model_type == 'RBA':
@@ -1127,18 +1150,13 @@ class Optimize:
             solution = self.optimize()
 
         # unblock reactions
-        for rid, (lb, ub) in old_bounds.items():
-            var = self.gpm.getVarByName(rid)
-            var.lb = lb
-            var.ub = ub
+        self.set_variable_bounds(orig_rid_bounds)
         self.gpm.update()
 
         return solution
 
-    def gp_moma(self, ko_genes, wt_fluxes, linear=False):
+    def gp_moma(self, wt_fluxes, linear=False):
         """Implement MOMA algorithm to determine flux distributions after genetic perturbations (gurobipy).
-
-        A single gene label or a list of gene labels can be provided.
 
         Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
         metabolic networks.
@@ -1164,21 +1182,14 @@ class Optimize:
             - new constraint: v + vtn ≥ wt
         - new objective: min ∑ (vtp + vtn)
 
-        :param ko_genes: individual gene label or list of gene labels to be knocked out
-        :type ko_genes: str or list[str]
         :param wt_fluxes: wild type flux distribution, e.g. pFBA fluxes
         :type wt_fluxes: dict or pandas Series (e.g. solution.fluxes)
         :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
         :return: MOMA determined solution object
         :rtype: class:`Solution`
         """
-        moma_gpm = self.gpm.copy()
 
-        # block reactions affected by given gene
-        for rid in self.get_rids_blocked_by(ko_genes):
-            var = moma_gpm.getVarByName(rid)
-            var.lb = 0.0
-            var.ub = 0.0
+        moma_gpm = self.gpm.copy()
         moma_gpm.update()
 
         tflux_vars = []
@@ -1217,16 +1228,12 @@ class Optimize:
 
         return moma_solution
 
-    def gp_room(self, ko_genes, wt_fluxes, linear=False, delta=0.03, epsilon=1e-3, time_limit=30.0):
+    def gp_room(self, wt_fluxes, linear=False, delta=0.03, epsilon=1e-3, time_limit=30.0):
         """Implement ROOM algorithm to determine flux distributions after genetic perturbations (gurobipy).
-
-        A single gene label or a list of gene labels can be provided.
 
         Ref: Shlomi et al., 2005, Regulatory on off minimization of metabolic flux
         changes after genetic perturbations
 
-        :param ko_genes: individual gene label or list of gene labels to be knocked out
-        :type ko_genes: str or list[str]
         :param wt_fluxes: wild type flux distribution, e.g. pFBA fluxes
         :type wt_fluxes: dict or pandas Series (e.g. solution.fluxes)
         :param bool linear: using MILP (False) or relaxed LP (True) formulation (default: False)
@@ -1244,13 +1251,6 @@ class Optimize:
         room_gpm = self.gpm.copy()
         if not linear:
             room_gpm.params.timelimit = time_limit
-
-        # block reactions affected by given gene or list of genes
-        for rid in self.get_rids_blocked_by(ko_genes):
-            var = room_gpm.getVarByName(rid)
-            var.lb = 0.0
-            var.ub = 0.0
-        room_gpm.update()
 
         flux_ctrl_vars = []
         for ridx, wt_flux in wt_fluxes.items():
