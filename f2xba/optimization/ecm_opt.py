@@ -46,6 +46,30 @@ class EcmOptimization(Optimize):
         if self.ecm_type.endswith('MOMENT'):
             self.configure_moment_model_constraints()
 
+    @property
+    def medium(self):
+        """mimic medium property of CobraPy
+
+        :return: exchange reaction ids with (positive valued) uptake rates
+        :rtype: dict
+        """
+        ex_medium = {}
+        for ex_rid, (lb, ub) in self.get_variable_bounds(self.uptake_rids).items():
+            if lb < 0.0:
+                ex_medium[re.sub('^R_', '', ex_rid)] = -lb
+        return ex_medium
+
+    @medium.setter
+    def medium(self, ex_medium):
+        """mimic medium property of CobraPy for medium assignments
+
+        Allow assignment of medium using:
+          FbaOptimization.medium = ex_medium
+
+        :param dict ex_medium: exchange reaction ids (with/without R_) and (positive valued) uptake rate
+        """
+        self.set_medium(ex_medium)
+
     def configure_moment_model_constraints(self):
         """Configure constraints related to MOMENT model optimization.
 

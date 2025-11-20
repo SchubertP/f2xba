@@ -126,6 +126,7 @@ class Optimize:
         self.m_dict = sbml_model.to_df()
         self.gpm = None
         self.orig_gpm = None
+        self.gp_neg_var = {}
 
         sbml_parameters = self.m_dict['parameters']['value'].to_dict()
         self.avg_enz_saturation = sbml_parameters.get('avg_enz_sat')
@@ -306,6 +307,90 @@ class Optimize:
             print(f'Thermodynamic constraints (C_F[FR]C_xxx, C_G[FR]C_xxx, C_SU_xxx) ≤ 0')
 
     # GUROBIPY MODEL CONSTRUCTION RELATED
+    def gp_create_model_neg_vars(self):
+        """Create and configure a GurobiPy model with data from metabolic model.
+
+        selected variables get converted to non-negative variables (Not used for now)
+        - however impact on RBA, ECM, pfba, fba, gp_moma and gp_room yet to be checked
+
+        - create empty gp.model:
+        - add variables (using reaction data from metabolic model)
+        - construct and implement linear constraints based on reaction string
+        - construct and implement linear objective
+        - configure TD binary variables and TD related inequality constraints
+        """
+        # create empty gurobipy model
+        gpm = gp.Model(self.m_dict['modelAttrs'].id)
+
+        # set model parameters
+        gpm.setParam('OutputFlag', 0)
+        # CobraPy default Feasibility
+        gpm.params.FeasibilityTol = 1e-7  # 1e-6 default
+        gpm.params.OptimalityTol = 1e-7  # 1e-6 default
+        gpm.params.IntFeasTol = 1e-7  # 1e-5 default
+
+        # add variables to the gurobi model, with suppport of binary variables
+        td_binary_var_prefixes = f'({pf.V_FU_}|{pf.V_RU_})'
+        td_continuous_var_prefixes = f'({pf.V_DRG_}|{pf.V_DRG0_}|{pf.R_})'
+        #td_continuous_var_prefixes = f'xxxxx'
+        self.var_id2gpm = {}
+        for var_id, row in self.m_dict['reactions'].iterrows():
+            # configure TD forward/reverse use variables as binary
+            if re.match(td_binary_var_prefixes, var_id):
+                self.var_id2gpm[var_id] = gpm.addVar(lb=0.0, ub=1.0, vtype='B', name=var_id)
+            # make selected continuous variables non-negative by splitting
+            elif re.match(td_continuous_var_prefixes, var_id):
+                neg_var_id = f'{var_id}_reverse'
+                self.gp_neg_var[var_id] = neg_var_id
+                self.var_id2gpm[var_id] = gpm.addVar(lb=max(0.0, row['fbcLb']),
+                                                     ub=max(0.0, row['fbcUb']), vtype='C', name=var_id)
+                self.var_id2gpm[neg_var_id] = gpm.addVar(lb=max(0.0, -row['fbcUb']),
+                                                         ub=max(0.0, -row['fbcLb']), vtype='C', name=neg_var_id)
+            # balance continuous variables of the model may assume negative values
+            else:
+                self.var_id2gpm[var_id] = gpm.addVar(lb=row['fbcLb'], ub=row['fbcUb'], vtype='C', name=var_id)
+
+        # collect constraints with mapping to gp variables
+        constrs = {}
+        for var_id, row in self.m_dict['reactions'].iterrows():
+            reactants = get_srefs(row['reactants'])
+            products = get_srefs(row['products'])
+            srefs = {constr_id: -coeff for constr_id, coeff in reactants.items()} | products
+            for constr_id, coeff in srefs.items():
+                if constr_id not in constrs:
+                    constrs[constr_id] = self.var_id2gpm[var_id] * coeff
+                else:
+                    constrs[constr_id] += self.var_id2gpm[var_id] * coeff
+                # implement splitting of transformed Gibbs energy of reaction variables
+                if re.match(td_continuous_var_prefixes, var_id):
+                    constrs[constr_id] += self.var_id2gpm[f'{var_id}_reverse'] * -coeff
+
+        # adding linear constraints to the model, with support of Thermodynamic constraints
+        # Some TD modeling constraints are defined as LHS <= 0.0
+        td_constr_prefixes = f'({pf.C_FFC_}|{pf.C_FRC_}|{pf.C_GFC_}|{pf.C_GRC_}|{pf.C_SU_})'
+        self.constr_id2gpm = {}
+        for constr_id, constr in constrs.items():
+            if re.match(td_constr_prefixes, constr_id):
+                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '<', 0.0, constr_id)
+            else:
+                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '=', 0.0, constr_id)
+
+        # configure optimization objective
+        df_fbc_objs = self.m_dict['fbcObjectives']
+        active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
+        sense = gp.GRB.MAXIMIZE if 'max' in active_odata['type'].lower() else gp.GRB.MINIMIZE
+        vars_gpm = []
+        coeffs = []
+        for sref_str in sbmlxdf.record_generator(active_odata['fluxObjectives']):
+            params = sbmlxdf.extract_params(sref_str)
+            vars_gpm.append(self.var_id2gpm[params['reac']])
+            coeffs.append(float(params['coef']))
+        gpm.setObjective(gp.LinExpr(coeffs, vars_gpm), sense)
+
+        # update gpm with configuration data
+        gpm.update()
+        return gpm
+
     def gp_create_model(self):
         """Create and configure a GurobiPy model with data from metabolic model.
 
@@ -313,6 +398,8 @@ class Optimize:
         - add variables (using reaction data from metabolic model)
         - construct and implement linear constraints based on reaction string
         - construct and implement linear objective
+        - construct and implement linear objective
+        - configure TD binary variables and TD related inequality constraints
         """
         # create empty gurobipy model
         gpm = gp.Model(self.m_dict['modelAttrs'].id)
@@ -369,31 +456,6 @@ class Optimize:
         # update gpm with configuration data
         gpm.update()
         return gpm
-
-    def gp_model_non_negative_vars(self):
-        """Decomposition of variables unrestricted in sign.
-
-        in Gurobipy make all varialbes non-negative, by adding non-neg '_REV' variables.
-        X = X - X_REV
-        retain copy of original model in self.orig_gpm
-        """
-        self.gpm.update()
-        self.orig_gpm = self.gpm.copy()
-        self.orig_gpm.update()
-        # gro.gpm.params.numericfocus = 3
-        # gro.gpm.params.presolve = 0
-
-        for var in self.gpm.getVars():
-            if var.lb < 0:
-                fwd_col = self.gpm.getCol(var)
-                rev_coeffs = [-fwd_col.getCoeff(idx) for idx in range(fwd_col.size())]
-                constrs = [fwd_col.getConstr(idx) for idx in range(fwd_col.size())]
-                rev_col = gp.Column(coeffs=rev_coeffs, constrs=constrs)
-                self.gpm.addVar(lb=max(0.0, -var.ub), ub=-var.lb, vtype=var.VType,
-                                name=f'{var.VarName}_REV', column=rev_col)
-                var.lb = 0.0
-            if var.ub < 0:
-                var.ub = 0.0
 
     def gp_model_original(self):
         """Switch back to original Gurobipy Model
@@ -661,16 +723,20 @@ class Optimize:
         return rids_catalalyzed_by
 
     # OPTIMIZATION RELATED
+
+    # OK to get variable bounds if variable is split
     def get_variable_bounds(self, var_ids):
         """Retrieve variable bounds when using gurobiy interface.
 
         Variable bounds can be configured for a single variable or for a list of variables.
         When cobrapy interface is used, bounds are retrieved using cobrapy methods.
 
+        For gurobipy implementation, support splitting of variables in two non-negative variables.
+
         :param var_ids: variable identifier or a list of variable identifiers
         :type var_ids: str or list[str]
-        :return: tuple with lower and upper bound, or dict of variable ids with tuples (lb, ub)
-        :rtype: 2-tuple with float or None, or dict with tuples
+        :return: dict of variable ids with tuples (lb, ub)
+        :rtype: dict with tuples
         """
         if type(var_ids) is str:
             var_ids = [var_ids]
@@ -678,19 +744,27 @@ class Optimize:
         variable_bounds = {}
         if self.is_gpm:
             self.gpm.update()
-            for var_id in var_ids:
-                assert var_id in self.var_id2gpm or pf.R_ + var_id in self.var_id2gpm, f'{var_id} not found'
-                var = self.var_id2gpm[var_id] if var_id in self.var_id2gpm else self.var_id2gpm[pf.R_ + var_id]
-                variable_bounds[var_id] = (var.lb, var.ub)
+            for var_idx in var_ids:
+                var_id = f'{pf.R_}{var_idx}' if f'{pf.R_}{var_idx}' in self.var_id2gpm else var_idx
+                assert var_id in self.var_id2gpm, f'{var_id} not found'
+                var = self.var_id2gpm[var_id]
+                if var_id in self.gp_neg_var:
+                    neg_var = self.var_id2gpm[self.gp_neg_var[var_id]]
+                    ub = var.ub if neg_var.lb == 0.0 else -neg_var.lb
+                    lb = -neg_var.ub if var.lb == 0.0 else var.lb
+                else:
+                    ub = var.ub
+                    lb = var.lb
+                variable_bounds[var_idx] = (lb, ub)
         else:
             for var_id in var_ids:
                 assert var_id in self.model.reactions, f'{var_id} not found'
                 variable_bounds[var_id] = self.model.reactions.get_by_id(var_id).bounds
 
-        if len(variable_bounds) == 1:
-            return variable_bounds.popitem()[1]
-        else:
-            return variable_bounds
+        #if len(variable_bounds) == 1:
+        #    return variable_bounds.popitem()[1]
+        #else:
+        return variable_bounds
 
     def set_variable_bounds(self, variable_bounds):
         """Set variable bounds when using gurobipy interface.
@@ -698,27 +772,50 @@ class Optimize:
         Lower and upper variable bounds are set, unless for None values.
         When cobrapy interface is used, bounds are configured using cobrapy methods.
 
+        For gurobipy implementation, support splitting of variables in two non-negative variables.
+
         :param variable_bounds: min and max values for metabolites
         :type variable_bounds: dict (key: variable identifier, val: tuple of float with min/max values)
         :return: originally configured bounds
         :rtype: dict (key: variable identifier, val: tuple of float with min/max values)
         """
-        orig_bounds = {}
+        orig_bounds = self.get_variable_bounds(list(variable_bounds))
         if self.is_gpm:
             self.gpm.update()
-            for var_id, (lb, ub) in variable_bounds.items():
-                assert var_id in self.var_id2gpm or pf.R_ + var_id in self.var_id2gpm, f'{var_id} not found'
-                var = self.var_id2gpm[var_id] if var_id in self.var_id2gpm else self.var_id2gpm[pf.R_ + var_id]
-                orig_bounds[var_id] = (var.lb, var.ub)
-                if lb is not None:
-                    var.lb = lb
-                if ub is not None:
-                    var.ub = ub
+            for var_idx, (lb, ub) in variable_bounds.items():
+                var_id = f'{pf.R_}{var_idx}' if f'{pf.R_}{var_idx}' in self.var_id2gpm else var_idx
+                assert var_id in self.var_id2gpm, f'{var_id} not found'
+                var = self.var_id2gpm[var_id]
+                if var_id in self.gp_neg_var:
+                    neg_var = self.var_id2gpm[self.gp_neg_var[var_id]]
+                    if ub is not None:
+                        if ub >= 0.0:
+                            var.ub = ub
+                            if neg_var.lb > 0.0:
+                                neg_var.lb = 0.0
+                        else:
+                            neg_var.lb = -ub
+                            if var.ub > 0.0:
+                                var.ub = 0.0
+                    if lb is not None:
+                        if lb >= 0.0:
+                            var.lb = lb
+                            if neg_var.ub > 0.0:
+                                neg_var.ub = 0.0
+                        else:
+                            neg_var.ub = -lb
+                            if var.lb > 0.0:
+                                var.lb = 0.0
+                else:
+                    if lb is not None:
+                        var.lb = lb
+                    if ub is not None:
+                        var.ub = ub
         else:
             for var_id, (lb, ub) in variable_bounds.items():
                 assert var_id in self.model.reactions, f'{var_id} not found'
                 rxn = self.model.reactions.get_by_id(var_id)
-                orig_bounds[var_id] = rxn.bounds
+                # orig_bounds[var_id] = rxn.bounds
                 if (lb is not None) and (ub is not None):
                     rxn.bounds = (lb, ub)
                 elif lb is not None:
@@ -820,35 +917,29 @@ class Optimize:
         :return: drg0 variables that require bound relaxation.
         :rtype: dict (key: drg0 variable id, val: dict with subkey: bound type, subval: new value)
         """
-        ns_slack_vars = {re.sub(f'^{pf.V_NS_}', pf.V_DRG0_, var_id): slack
-                         for var_id, slack in fluxes.items()
-                         if re.match(pf.V_NS_, var_id) and slack > 1e-7}
-        ps_slack_vars = {re.sub(f'^{pf.V_PS_}', pf.V_DRG0_, var_id): slack
-                         for var_id, slack in fluxes.items()
-                         if re.match(pf.V_PS_, var_id) and slack > 1e-7}
+        # collect DRG0 variables that need relaxation
+        slack_vars = {}
+        for var_id, val in fluxes.items():
+            if re.match(pf.V_NS_, var_id) and val > 1e-7:
+                slack_vars[re.sub(f'^{pf.V_NS_}', pf.V_DRG0_, var_id)] = -val
+            elif re.match(pf.V_PS_, var_id) and val > 1e-7:
+                slack_vars[re.sub(f'^{pf.V_PS_}', pf.V_DRG0_, var_id)] = val
+
+        # relax DRG0 variables by adjusting respective bound
         drg0_relaxations = {}
-        if self.is_gpm:
-            for drg0_id, slack in ns_slack_vars.items():
-                var = self.var_id2gpm[drg0_id]
-                new_lb = var.lb - slack - eps
-                var.lb = new_lb
+        update_bounds = {}
+        for drg0_id, (lb, ub) in self.get_variable_bounds(list(slack_vars)).items():
+            slack = slack_vars[drg0_id]
+            if slack < 0.0:
+                new_lb = lb + slack - eps
+                update_bounds[drg0_id] = (new_lb, None)
                 drg0_relaxations[drg0_id] = {'fbc_lower_bound': new_lb}
-            for drg0_id, slack in ps_slack_vars.items():
-                var = self.var_id2gpm[drg0_id]
-                new_ub = var.ub + slack + eps
-                var.ub = new_ub
+            else:
+                new_ub = ub + slack + eps
+                update_bounds[drg0_id] = (None, new_ub)
                 drg0_relaxations[drg0_id] = {'fbc_upper_bound': new_ub}
-        else:
-            for drg0_id, slack in ns_slack_vars.items():
-                rxn = self.model.reactions.get_by_id(drg0_id)
-                new_lb = rxn.lower_bound - slack - eps
-                rxn.lower_bound = new_lb
-                drg0_relaxations[drg0_id] = {'fbc_lower_bound': new_lb}
-            for drg0_id, slack in ps_slack_vars.items():
-                rxn = self.model.reactions.get_by_id(drg0_id)
-                new_ub = rxn.upper_bound + slack + eps
-                rxn.upper_bound = new_ub
-                drg0_relaxations[drg0_id] = {'fbc_upper_bound': new_ub}
+
+        self.set_variable_bounds(update_bounds)
         return drg0_relaxations
 
     def modify_stoic(self, constr_id, var_id, new_val):
@@ -857,6 +948,8 @@ class Optimize:
         Gurobipy model does not support model context. Stoichiometric coefficients
         can be modified using this functions, while old value is returned. After
         optimization, using the same method, the coefficient can be reset.
+
+        For gurobipy implementation, support splitting of variables in two non-negative variables.
 
         :param str constr_id: constraint identifier, e.g. 'M_hemeA_c'
         :param str var_id: variable identifier, e.g. 'R_CofactorSynth'
@@ -875,6 +968,10 @@ class Optimize:
                 return None
             old_val = self.gpm.getCoeff(constr, var)
             self.gpm.chgCoeff(constr, var, new_val)
+            if var_id in self.gp_neg_var:
+                neg_var = self.gpm.getVarByName(self.gp_neg_var[var_id])
+                self.gpm.chgCoeff(constr, neg_var, -new_val)
+
             return old_val
         else:
             print('Method only implemented for gurobipy interface, for cobrapy, use rxn.add_metabolites()')
@@ -885,16 +982,20 @@ class Optimize:
 
         e.g. medium = {'EX_glc__D_e': 10.0, 'EX_o2_e': 20.0, 'EX_ca2_e': 1000.0, ...}
 
+        For gurobipy implementation, support splitting of variables in two non-negative variables.
+
         :param medium: nutrients in medium, i.e. exchange reactions with max allowed uptake
         :type medium: dict (key : exchange reaction id, val: max uptake (positive value))
         """
         if self.is_gpm:
-            for rid in self.uptake_rids:
-                ridx = re.sub(f'^{pf.R_}', '', rid)
-                new_lb = -medium.get(ridx, 0.0)
-                cur_lb = self.gpm.getVarByName(rid).LB
-                if new_lb != cur_lb:
-                    self.gpm.getVarByName(rid).lb = new_lb
+            update_bounds = {}
+            for ex_rid in self.uptake_rids:
+                ex_ridx = re.sub('^R_', '', ex_rid)
+                if ex_ridx in medium:
+                    update_bounds[ex_rid] = (-medium[ex_ridx], None)
+                else:
+                    update_bounds[ex_rid] = (0.0, None)
+            self.set_variable_bounds(update_bounds)
         else:
             self.model.medium = medium
 
@@ -909,57 +1010,27 @@ class Optimize:
         model = self.gpm if alt_model is None else alt_model
 
         model.optimize()
-        solution = self.get_solution(model)
-
-        # if model.ismip:
-        #    solution = self.optimize_non_negative_vars(model)
-        # else:
-        #    model.optimize()
-        #    solution = self.get_solution(model)
+        solution = self.gp_get_solution(model)
 
         return solution
 
-    def optimize_non_negative_vars(self, alt_model=None):
-        """Convert problem to non-negative variables only and solve
-
-        Copy original model, make all variables non-negative by
-        adding additional negative variables in reverse
-
-        Make variable bounds non-negative
-        - for variables with negative lower bound, create new variables
-          with updated bounds and sign changed coefficients.
-
-        tuned solver parameters (switch off presolve and set numeric focus)
-
-        :param alt_model: (optional) alternative model
-        :type alt_model: gurobipy.Model, if provided
-        :return: optimization solution
-        :rtype: class:`Solution`
+    def _gp_combine_neg_vars(self, data_raw):
+        """Combine negative variable values from Guribipy optimization
+        :param data_raw:
+        :return:
         """
-        model = self.gpm if alt_model is None else alt_model
+        data = {}
+        neg_var_ids = set(self.gp_neg_var.values())
+        for var_id, val in data_raw.items():
+            var_idx = re.sub(f'^{pf.R_}', '', var_id)
+            if var_id not in neg_var_ids:
+                if var_id in self.gp_neg_var:
+                    data[var_idx] = data_raw[var_id] - data_raw[self.gp_neg_var[var_id]]
+                else:
+                    data[var_idx] = data_raw[var_id]
+        return data
 
-        model.update()
-        irr_gpm = model.copy()
-        irr_gpm.params.numericfocus = 3
-        irr_gpm.params.presolve = 0
-
-        for var in irr_gpm.getVars():
-            if var.lb < 0:
-                fwd_col = irr_gpm.getCol(var)
-                rev_coeffs = [-fwd_col.getCoeff(idx) for idx in range(fwd_col.size())]
-                constrs = [fwd_col.getConstr(idx) for idx in range(fwd_col.size())]
-                rev_col = gp.Column(coeffs=rev_coeffs, constrs=constrs)
-                irr_gpm.addVar(lb=max(0.0, -var.ub), ub=-var.lb, vtype=var.VType,
-                               name=f'{var.VarName}_REV', column=rev_col)
-                var.lb = 0.0
-            if var.ub < 0:
-                var.ub = 0.0
-        irr_gpm.optimize()
-        irr_solution = self.get_solution(irr_gpm)
-        irr_solution.fluxes = extract_net_fluxes(irr_solution.fluxes)
-        return irr_solution
-
-    def get_solution(self, alt_model=None):
+    def gp_get_solution(self, alt_model=None):
         """Retrieve optimization solution for gp model.
 
         Solution as per CobraPy solution
@@ -981,13 +1052,11 @@ class Optimize:
         if hasattr(model, 'objval'):
             results_dict['objective_value'] = model.objval
         if hasattr(model.getVars()[0], 'x'):
-            data = {re.sub(f'^{pf.R_}', '', var.VarName): var.X
-                    for var in model.getVars()}
-            results_dict['fluxes'] = pd.Series(data, name='fluxes')
+            data_raw = {var.VarName: var.X for var in model.getVars()}
+            results_dict['fluxes'] = pd.Series(self._gp_combine_neg_vars(data_raw), name='fluxes')
         if hasattr(model.getVars()[0], 'rc'):
-            data = {re.sub(f'^{pf.R_}', '', var.VarName): var.RC
-                    for var in model.getVars()}
-            results_dict['reduced_costs'] = pd.Series(data, name='reduced_costs')
+            data_raw = {var.VarName: var.RC for var in model.getVars()}
+            results_dict['reduced_costs'] = pd.Series(self._gp_combine_neg_vars(data_raw), name='reduced_costs')
         if hasattr(model.getConstrs()[0], 'pi'):
             data = {re.sub(f'^{pf.M_}', '', constr.ConstrName): constr.Pi
                     for constr in model.getConstrs()}
@@ -1037,7 +1106,7 @@ class Optimize:
 
             # optimize and collect results (without error handling)
             pfba_gpm.optimize()
-            pfba_solution = self.get_solution(pfba_gpm)
+            pfba_solution = self.gp_get_solution(pfba_gpm)
             pfba_solution.fluxes = extract_net_fluxes(pfba_solution.fluxes)
             pfba_gpm.close()
 
@@ -1108,15 +1177,11 @@ class Optimize:
         if type(genes) is str:
             genes = [genes]
 
-        orig_rid_bounds = {}
         if self.is_gpm:
-            self.gpm.update()
-            for rid in self.get_rids_blocked_by(genes):
-                var = self.gpm.getVarByName(rid)
-                orig_rid_bounds[rid] = (var.lb, var.ub)
-                var.lb = 0.0
-                var.ub = 0.0
+            update_bounds = {var_id: (0.0, 0.0) for var_id in self.get_rids_blocked_by(genes)}
+            orig_rid_bounds = self.set_variable_bounds(update_bounds)
         else:
+            orig_rid_bounds = {}
             for gene in genes:
                 assert gene in self.model.genes, f'{gene} not found'
                 for react in self.model.genes.get_by_id(gene).reactions:
@@ -1223,7 +1288,7 @@ class Optimize:
             moma_gpm.setObjective(gp.quicksum(tflux_vars), gp.GRB.MINIMIZE)
 
         moma_gpm.optimize()
-        moma_solution = self.get_solution(moma_gpm)
+        moma_solution = self.gp_get_solution(moma_gpm)
         moma_gpm.close()
 
         return moma_solution
@@ -1288,7 +1353,7 @@ class Optimize:
         room_gpm.setObjective(gp.quicksum(flux_ctrl_vars), gp.GRB.MINIMIZE)
 
         room_gpm.optimize()
-        room_solution = self.get_solution(room_gpm)
+        room_solution = self.gp_get_solution(room_gpm)
         room_gpm.close()
 
         return room_solution
