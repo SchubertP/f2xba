@@ -64,7 +64,7 @@ class EcmOptimization(Optimize):
         """mimic medium property of CobraPy for medium assignments
 
         Allow assignment of medium using:
-          FbaOptimization.medium = ex_medium
+          EdmOptimization.medium = ex_medium
 
         :param dict ex_medium: exchange reaction ids (with/without R_) and (positive valued) uptake rate
         """

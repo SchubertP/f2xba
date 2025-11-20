@@ -194,7 +194,7 @@ class InitialAssignments:
                     target_rids[trid].is_growth_rate_dependent = True
         return target_rids
 
-    def set_medium(self, medium_concs):
+    def set_medium_conc(self, medium_concs):
         """Set medium dependent parameters in RBA model.
 
         Medium dependent model parameters have sids as variable names in

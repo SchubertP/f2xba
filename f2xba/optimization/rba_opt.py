@@ -67,6 +67,33 @@ class RbaOptimization(Optimize):
         if cobra_model and 'cplex' in self.model.solver.interface.__name__:
             self.model.solver.problem.parameters.read.scale.set(-1)
 
+    @property
+    def medium(self):
+        """mimic medium property of CobraPy, however related to medium conentrations
+
+        medium concentrations returned in units of mmol/l
+
+        :return: metabolite concentrations in external medium in mmol/l
+        :rtype: dict
+        """
+        ex_midx_mmol_per_l = {}
+        for sid in self.ex_rid2sid.values():
+            mmol_per_l = self.initial_assignments.local_env.get(sid, 0.0)
+            if mmol_per_l > 0.0:
+                ex_midx_mmol_per_l[re.sub(f'^{pf.M_}', '', sid)] = mmol_per_l
+        return ex_midx_mmol_per_l
+
+    @medium.setter
+    def medium(self, ex_sids_mmol_per_l):
+        """mimic medium property of CobraPy for medium assignmentsm, however related to medium conentrations
+
+        Allow assignment of medium using:
+          RbaOptimization.medium = ex_sids_mmol_per_l
+
+        :param dict ex_sids_mmol_per_l: external metabolite concentrations (mmol/l)
+        """
+        self.set_medium_conc(ex_sids_mmol_per_l)
+
     def configure_rba_model_constraints(self):
         """Configure constraints related to RBA modelling
 
@@ -153,7 +180,7 @@ class RbaOptimization(Optimize):
                         enz_mm_composition[rid][mm_id] = float(params['stoic']) / model_gr
         return dict(enz_mm_composition)
 
-    def set_medium_conc(self, ex_metabolites_mmol_per_l):
+    def set_medium_conc(self, ex_sids_mmol_per_l):
         """Configure external metabolite concentrations (mmol/l).
 
         In the RBA, the growth medium is defined by external metabolite concentrations (mmol/L).
@@ -164,18 +191,20 @@ class RbaOptimization(Optimize):
         This implementation of RBA still uses uptake reactions, which will be opened for
         the specified medium.
 
-        :param ex_metabolites_mmol_per_l: external metabolite concentrations (mmol/l)
-        :type ex_metabolites_mmol_per_l: dict (key: metabolite id/str, val: concentration/float)
+        :param ex_sids_mmol_per_l: external metabolite concentrations (mmol/l)
+        :type ex_sids_mmol_per_l: dict (key: metabolite id/str, val: concentration/float)
         """
-        # open up related exchange reactions
-        # self.model.medium = {self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_metabolites_mmol_per_l}
-        self.set_medium({self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_metabolites_mmol_per_l})
+        # remove any trailing 'M_'
+        ex_sidx_mmol_per_l = {re.sub(f'^{pf.M_}', '', sid): mmol_per_l for sid, mmol_per_l in
+                              ex_sids_mmol_per_l.items()}
 
-        # configure RBA related medium concentrations
-        medium_conc = {sid: ex_metabolites_mmol_per_l.get(re.sub(f'^{pf.M_}', '', sid), 0.0)
-                       for ex_rid, sid in self.ex_rid2sid.items()}
+        # unlimited uptake for metabolites in external medium
+        self.set_medium({self.sidx2ex_ridx.get(sidx, 0.0): 1000.0 for sidx in ex_sidx_mmol_per_l})
 
-        self.initial_assignments.set_medium(medium_conc)
+        # configure RBA related medium concentrations (and set concentrations of not available medium to zero)
+        medium_conc = {sid: ex_sidx_mmol_per_l.get(re.sub(f'^{pf.M_}', '', sid), 0.0)
+                       for sid in self.ex_rid2sid.values()}
+        self.initial_assignments.set_medium_conc(medium_conc)
 
     def set_growth_rate(self, growth_rate):
         """RBA optimization: set growth rate dependent model parameters
@@ -368,7 +397,7 @@ class RbaOptimization(Optimize):
                     {'var_id': var_id, 'constr_type': constr_type, 'constr_id': constr_id, 'math_str': org_math})
         return orig_ia_data
 
-    def solve(self, gr_min=0.0, gr_max=1.5, bisection_tol=1e-5, max_iter=40, make_non_neg=False):
+    def solve(self, gr_min=0.0, gr_max=1.5, bisection_tol=1e-5, max_iter=40):
         """Solve RBA feasibility problem using bisection algorithm.
 
         Support both cobrapy and gurobipy interfaces.
@@ -377,16 +406,15 @@ class RbaOptimization(Optimize):
         :param float gr_max: maximum growth rate in h-1
         :param float bisection_tol: stop criteria based on growth rate tolerances (default: 1e-3)
         :param int max_iter:  stop criteria based on iteration number (default: 40)
-        :param bool make_non_neg: converted model to non-negative variables only (default: False)
         :return: optimization solution
         :rtype: class:`Solution`
         """
         if self.is_gpm:
-            return self._gp_solve(gr_min, gr_max, bisection_tol, max_iter, make_non_neg)
+            return self._gp_solve(gr_min, gr_max, bisection_tol, max_iter)
         else:
             return self._cp_solve(gr_min, gr_max, bisection_tol, max_iter)
 
-    def _gp_solve(self, gr_min, gr_max, bisection_tol, max_iter, make_non_neg):
+    def _gp_solve(self, gr_min, gr_max, bisection_tol, max_iter):
         """Solve RBA feasibility problem using bisection algorithem of RbaPy 1.0.
 
         Optionally we can modify the model to non-negative variables only.
@@ -395,14 +423,9 @@ class RbaOptimization(Optimize):
         :param float gr_max: maximum growth rate to test in h-1
         :param float bisection_tol: (optional, default 1e-3) stop criteria based on growth rate tolerances
         :param int max_iter: (optional, default 40) stop criteria basde on number of iterations
-        :param bool make_non_neg: (optional, default False) converted model to non-negative variables only
         :return: optimization solution
         :rtype: class:`Solution`
         """
-        # convert the model to non-negative variables only
-        if make_non_neg:
-            self.gp_model_non_negative_vars()
-
         # bisection algorithm to narrow in on maximum growth rate
         solution = None
         self.set_growth_rate(gr_min)
@@ -439,10 +462,7 @@ class RbaOptimization(Optimize):
                                                 for idx in range(col.size())}
             else:
                 print('no optimal growth rate')
-        # else:
-        #    print(f'Problem infeasible at minimum growth of {gr_min}')
-        if make_non_neg:
-            self.gp_model_original()
+
         return solution
 
     def _cp_solve(self, gr_min, gr_max, bisection_tol, max_iter):
