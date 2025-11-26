@@ -6,6 +6,8 @@ Peter Schubert, HHU Duesseldorf, CCB, November 2024
 """
 
 import re
+import pandas as pd
+import tqdm
 
 # gurobipy should not be a hard requirement, unless used in this context
 try:
@@ -15,6 +17,7 @@ except ImportError:
     pass
 
 from .optimize import Optimize
+from .fba_results import FbaResults
 
 
 class FbaOptimization(Optimize):
@@ -24,7 +27,6 @@ class FbaOptimization(Optimize):
     FBA and TFA models. When utilizing cobrapy, it is
     necessary to first load the model using SBML.
     """
-
 
     def __init__(self, fname, cobra_model=None):
         """Instantiate the FbaOptimization instance.
@@ -59,22 +61,83 @@ class FbaOptimization(Optimize):
         """
         self.set_medium(ex_medium)
 
-    # def single_gene_deletion(self, gene_list=None, method='FBA', solution=None):
-    # create single_gene_deletion(model, genes=None, rba_params=None)
-    # fo = FbaOptimization(os.path.join(meta_data['dir'], f'{model_name}.xml'))
-    # fo.gene_knock_outs(strain_background)
-    # fo.medium = lb_medium
-    # df_sgko = fo.single_gene_deletion()
+    def single_gene_deletion(self, gene_list=None, method='fba', solution=None, **kwargs):
+        """Single gene deletion for FBA based models using gurobipy interface
 
-    # ro = RbaOptimization(os.path.join(meta_data['dir'], f'{model_name}.xml'))
-    # ro.set_tfa_metab_concentrations(metabolite_molar_concs) # for TD models
-    # ro.gene_knock_outs(strain_background)
-    # ro.set_medium_conc(ex_sidx2mmol_per_l)
+        Interface aligned to COBRApy single_gene_deletion method.
+        Perform single gene deletion simulations for provided list of genes, if gene_list provided.
+        Alternatively perform gene deletion for all genes that may be active in the wild type solution.
+        It is expected that biomass functions gets maximized during optimization.
+        Simulation method, if provided can be 'fba' (default), 'moma', 'linear moma', 'room', linear room'
+        If the wild type solution is not provided, a pFBA solution will be determined.
+        For ROOM methods, the following keyword arguments can be added to the list of parameters
+        - delta: relative tolerance range (default: 0.03)
+        - epsilon=1e-3: absolute tolerance range (default: 1e-3)
+        - time_limit: time limit in seconds for single gene deletion simulation used for 'room' (default: 30.0)
 
-    # rba_params = {'gr_min': 0.01, 'gr_max': 0.7, 'bisection_tol': .5e-3}
-    # df_sgko = ro.single_gene_deletion(model, rba_params)
+        :param gene_list: (optional) set of genes identified by their locus,
+        :type gene_list: list or set
+        :param str method: (optional) 'fba', 'moma', 'linear moma', 'room', 'linear room'
+        :param solution: (optional) wild type FBA solution
+        :type solution: :class:`Solution`
+        :param kwargs: keyword arguments passed on to 'ROOM' method
+        :return: single gene deletion results per gene with growth rate in h-1, optimization status and fitness value
+        :rtype: pandas DataFrame
+        """
 
+        if self.is_gpm is None:
+            print('Method implemented for gurobipy interface only.')
+            return pd.DataFrame()
 
+        linear = True if 'linear' in method else False
+        biomass_rid = self.get_biomass_rid()
 
+        # determine wild type growth rate and fluxes, if solution not provided
+        # extract wt_gr from fluxes of biomass_rid (assume growth maximization of Biomass objective function)
+        if solution is None:
+            solution = self.optimize()
+        wt_gr = solution.fluxes[biomass_rid]
+        wt_fluxes = dict(FbaResults(self, {'wt': solution}).collect_fluxes()['wt'])
 
+        # determine gene list, if not provided
+        if gene_list is None:
+            gene_list = self.get_active_genes(wt_fluxes)
+            all_genes = self.m_dict['fbcGeneProducts'].label.values
+        else:
+            all_genes = gene_list
 
+        # optimization loop for single gene deletions
+        cols = ['growth_rate', 'status', 'fitness']
+        sgko_results = {'wt': [wt_gr, solution.status, 1.0]}
+        for gene in tqdm.tqdm(sorted(all_genes)):
+            if gene in gene_list:
+
+                # simulate a single gene deletion
+                orig_rid_bounds = self.gene_knock_outs(gene)
+                if 'moma' in method:
+                    solution = self.gp_moma(wt_fluxes, linear=linear)
+                elif 'room' in method:
+                    solution = self.gp_room(wt_fluxes, linear=linear, **kwargs)
+                else:
+                    solution = self.optimize()
+                self.set_variable_bounds(orig_rid_bounds)
+
+                # process simulation result
+                if solution is None:
+                    sgko_results[gene] = [0.0, 'infeasible', 0.0]
+                elif solution.status in {'optimal', 'time_limit', 'suboptimal'}:
+                    if 'moma' in method or 'room' in method:
+                        mutant_gr = solution.fluxes[biomass_rid]
+                    else:
+                        mutant_gr = solution.objective_value
+                    sgko_results[gene] = [mutant_gr, solution.status, mutant_gr / wt_gr]
+                else:
+                    sgko_results[gene] = [0.0, solution.status, 0.0]
+            else:
+                # genes not in gene_list are assumed to not impact the wild type solution
+                sgko_results[gene] = [wt_gr, 'wt_solution', 1.0]
+
+        df_sgko = pd.DataFrame(sgko_results.values(), index=list(sgko_results), columns=cols)
+        df_sgko.index.name = 'gene'
+
+        return df_sgko

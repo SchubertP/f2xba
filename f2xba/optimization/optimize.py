@@ -1163,6 +1163,28 @@ class Optimize:
         """RBA solver, overwritten by RbaOptimization"""
         return pd.DataFrame()
 
+    def get_active_genes(self, fluxes):
+        """From reaction flux distribution, determine (potentially) required genes.
+
+        All genes required for isoenzymes of a reactions carrying flux are collected.
+
+        :param dict fluxes: reaction fluxes (key: reaction id, value: flux in mmol/gDWh)
+        :return: set of genes potentially required for given reaction flux destribution
+        :rtype: set
+        """
+        # map reaction ids without 'R_' prefix, as per COBRApy to reaction ids used in the model
+        ridx2rid = {re.sub(f'^{pf.R_}', '', rid): rid for rid in self.rids_catalyzed}
+
+        gene_list = set()
+        for ridx, flux in fluxes.items():
+            if abs(flux) > 0.0:
+                if ridx in ridx2rid:
+                    for enz_comp in self.rids_catalyzed[ridx2rid[ridx]]:
+                        for gene in enz_comp:
+                            gene_list.add(gene)
+        print(f'{len(gene_list)} genes potentially active given flux distribution.')
+        return gene_list
+
     def gene_knock_outs(self, genes):
         """Block reactions that are catalyzed by specified genes.
 
@@ -1254,8 +1276,8 @@ class Optimize:
         :rtype: class:`Solution`
         """
 
+        self.gpm.update()
         moma_gpm = self.gpm.copy()
-        moma_gpm.update()
 
         tflux_vars = []
         for ridx, wt_flux in wt_fluxes.items():
@@ -1304,7 +1326,7 @@ class Optimize:
         :param bool linear: using MILP (False) or relaxed LP (True) formulation (default: False)
         :param float delta: relative tolerance range (default: 0.03)
         :param float epsilon: absolute tolerance range (default: 1e-3)
-        :param float time_limit: time limit in seconds for MILP optimization (default: 30.0)
+        :param float time_limit: time limit in seconds (default: 30.0)
         :return: ROOM determined solution object
         :rtype: class:`Solution`
         """

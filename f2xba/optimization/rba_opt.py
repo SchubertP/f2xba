@@ -23,11 +23,14 @@ import re
 import math
 import pandas as pd
 from collections import defaultdict
+import tqdm
+
 
 import sbmlxdf
 import f2xba.prefixes as pf
 from .rba_initial_assignments import InitialAssignments
 from .optimize import Optimize, extract_net_fluxes
+from .rba_results import RbaResults
 
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
@@ -518,3 +521,85 @@ class RbaOptimization(Optimize):
         else:
             print(f'Problem infeasible at minimum growth of {gr_min}')
             return None
+
+    def single_gene_deletion(self, gene_list=None, solution=None, **kwargs):
+        """Single gene deletion for RBA models using gurobipy interface.
+
+        Interface aligned to COBRApy single_gene_deletion method.
+        Perform single gene deletion simulations for provided list of genes, if gene_list provided.
+        Alternatively perform gene deletion for all genes that may be active in the wild type solution.
+        It is expected that biomass functions gets maximized during optimization.
+        If the wild type solution is not provided, a wild type RBA solution will be determined.
+        Following keyword arguments can be added to the list of parameters
+        - gr_min: (default 0.0) minimum growth rate to test in h-1
+        - gr_min_alt: (optional) alternative minimum growth rate in h-1 (used, if infeasible solution with gr_min)
+        - gr_max: (default 1.5) maximum growth rate to test in h-1
+        - bisection_tol: (default 1e-5) stop criteria based on growth rate tolerances
+        - max_iter: (default 40) stop criteria basde on number of iterations
+
+        :param gene_list: (optional) set of genes identified by their locus,
+        :type gene_list: list or set
+        :param solution: (optional) wild type RBA solution
+        :type solution: :class:`Solution`
+        :param kwargs: keyword arguments used for RBA bisectional optimization
+        :return: single gene deletion results per gene with growth rate in h-1, optimization status and fitness value
+        :rtype: pandas DataFrame
+        """
+        if self.is_gpm is None:
+            print('Method implemented for gurobipy interface only.')
+            return pd.DataFrame()
+
+        alt_kwargs = kwargs.copy()
+        if 'gr_min_alt' in kwargs:
+            alt_kwargs['gr_min'] = kwargs.pop('gr_min_alt')
+            del alt_kwargs['gr_min_alt']
+
+        # determine wild type growth rate and fluxes, if solution not provided
+        if solution is None:
+            solution = self.solve(**kwargs)
+        wt_gr = solution.objective_value
+        wt_fluxes = dict(RbaResults(self, {'wt': solution}).collect_fluxes()['wt'])
+
+        all_genes = set(self.m_dict['fbcGeneProducts'].label.values)
+        tx_genes, metab_genes = self.get_tx_metab_genes()
+        pm_genes = all_genes.difference(tx_genes.union(metab_genes))
+
+        # determine gene list, if not provided
+        if gene_list is None:
+            gene_list = self.get_active_genes(wt_fluxes)
+        else:
+            all_genes = gene_list
+
+        # optimization loop for single gene deletions
+        cols = ['growth_rate', 'status', 'fitness']
+        sgko_results = {'wt': [wt_gr, solution.status, 1.0]}
+        for gene in tqdm.tqdm(sorted(all_genes)):
+            if gene in gene_list:
+                # simulate a single gene deletion
+                orig_rid_bounds = self.gene_knock_outs(gene)
+                solution = self.solve(**kwargs)
+                if (solution is not None) and solution.status == 'infeasible':
+                    print(f'first solution infeasible - reset model {gene}')
+                    self.gpm.reset()
+                    solution = self.solve(**alt_kwargs)
+                    print(f'solution status second attempt for {gene}: {solution.status}')
+                self.set_variable_bounds(orig_rid_bounds)
+
+                # process simulation result
+                if solution is None:
+                    sgko_results[gene] = [0.0, 'infeasible', 0.0]
+                elif solution.status in {'optimal'}:
+                    mutant_gr = solution.objective_value
+                    sgko_results[gene] = [mutant_gr, solution.status, mutant_gr / wt_gr]
+                else:
+                    sgko_results[gene] = [0.0, solution.status, 0.0]
+            elif gene in pm_genes:
+                sgko_results[gene] = [0.0, 'process_machine']
+            else:
+                # genes not in gene_list are assumed to not impact the wild type solution
+                sgko_results[gene] = [wt_gr, 'wt_solution', 1.0]
+
+        df_sgko = pd.DataFrame(sgko_results.values(), index=list(sgko_results), columns=cols)
+        df_sgko.index.name = 'gene'
+
+        return df_sgko
