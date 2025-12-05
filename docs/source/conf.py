@@ -25,7 +25,7 @@ version = release
 sys.path.insert(0, os.path.abspath('../..'))
 
 # cope with missing dependencies, i.e. modules to be mocked up
-autodoc_mock_imports = ['sbmlxdf', 'libsbml', 'gurobipy', 'pandas', 'numpy', 'scipy', 'matplotlib']
+autodoc_mock_imports = ['sbmlxdf', 'libsbml', 'gurobipy', 'pandas', 'numpy', 'scipy', 'matplotlib', 'tqdm']
 
 # -- General configuration ---------------------------------------------------
 
