@@ -796,7 +796,7 @@ class XbaModel:
         json_model = {'metabolites': metabolites, 'reactions': reactions, 'genes': genes,
                       'id': self.model_attrs.get('id', ''),
                       'name': self.model_attrs.get('name', ''),
-                      'compartments': {data.id: getattr(data, 'name') for data in self.compartments.values()},
+                      'compartments': {data.id: getattr(data, 'name', data.id) for data in self.compartments.values()},
                       'annotation': annotation, 'version': '1'}
 
         with open(fname, 'w') as f:
