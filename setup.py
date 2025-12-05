@@ -40,8 +40,7 @@ setup(
                       'scipy>=1.11.0',
                       'requests>=2.30.0',
                       'matplotlib>=3.6.3',
-                      'sbmlxdf>=1.0.2'
-                      'tqdm>=4.67.1'],
+                      'sbmlxdf>=1.0.2'],
     python_requires=">=3.11",
     keywords=['systems biology', 'extended metabolic modeling', 'FBA', 'GECKO', 'RBA', 'TFA', 'SBML', 'Gurobi'],
     **setup_kwargs
