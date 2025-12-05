@@ -44,7 +44,22 @@ DEFAULT_TRANSPORTER_KCAT = 50.0
 SBO_GENE = 'SBO:0000243'
 
 class XbaModel:
-    """In-memory representation of the genome-scale metabolic model.
+    """Create an in-memory representation of a SBML encoded genome-scale metabolic model loaded from file.
+
+    All extended model creations start with XbaModel. The XbaModel needs to be configured.
+    Configuration data, if provided, is loaded from a XBA configuration file (.xlsx).
+    The configuration data may include references to other files or online database resources.
+
+    Example: Generate an updated version of a SBML encoded metabolic model. The spreadsheet `xba_parameters.xlsx`
+    contains relevant configuration data.
+
+    .. code-block:: python
+
+        xba_model = XbaModel('iML1515.xml')
+        xba_model.configure('xba_parameters.xlsx')
+        if xba_model.validate():
+            xba_model.export('iML1515_updated.xml')
+
     """
 
 
@@ -65,29 +80,51 @@ class XbaModel:
 
         model_dict = sbml_model.to_df()
         self.sbml_container = model_dict['sbml']
+        """SBML container data."""
+
         self.model_attrs = model_dict['modelAttrs']
+        """SBML model attributes."""
+
         self.unit_defs = {udid: SbmlUnitDef(row)
                           for udid, row in model_dict['unitDefs'].iterrows()}
+        """SBML units definition data."""
+
         self.compartments = {cid: SbmlCompartment(row)
                              for cid, row in model_dict['compartments'].iterrows()}
+        """SBML compartments configuration data."""
+
         self.parameters = {pid: SbmlParameter(row)
                            for pid, row in model_dict['parameters'].iterrows()}
+        """SBML parameters configuration data."""
+
         self.species = {sid: SbmlSpecies(row)
                         for sid, row in model_dict['species'].iterrows()}
+        """SBML species configuration data."""
+
         self.reactions = {rid: SbmlReaction(row, self.species)
                           for rid, row in model_dict['reactions'].iterrows()}
+        """SBML reactions configuration data."""
+
         self.objectives = {oid: FbcObjective(row)
                            for oid, row in model_dict['fbcObjectives'].iterrows()}
+        """SBML FBC optimization objective data."""
+
         self.gps = {gp_id: FbcGeneProduct(row)
                     for gp_id, row in model_dict['fbcGeneProducts'].iterrows()}
+        """SBML FBC gene products configuration data."""
+
         self.groups = {gid: SbmlGroup(row)
                        for gid, row in model_dict['groups'].iterrows()} if 'groups' in model_dict else None
+        """SBML GROUPS groups configuration data."""
+
         self.func_defs = {fd_id: SbmlFunctionDef(row)
                           for fd_id, row in model_dict['funcDefs'].iterrows()} if 'funcDefs' in model_dict else None
+        """SBML functions definition data."""
+
         self.init_assigns = ({symbol_id: SbmlInitialAssignment(row)
                              for symbol_id, row in model_dict['initAssign'].iterrows()}
                              if 'initAssign' in model_dict else None)
-        self.main_cid = model_dict['species']['compartment'].value_counts().index[0]
+        """SBML initial assignments configuration data."""
 
         # add unit definitions to ensure we can validate SBML wrt units without issuing warnings
         if 'substanceUnits' not in self.model_attrs:
@@ -99,9 +136,17 @@ class XbaModel:
 
         self.cofactor_flag = True
         self.uid2gp = {}
+        """Map UniProt identifier to gene product id."""
+
         self.locus2gp = {}
+        """Map gene identifier to gene product id."""
+
         self.locus2uid = {}
+        """Map gene identifier to UniProt identifier."""
+
         self.locus2rids = {}
+        """Map gene identifier to catalyzed reactions."""
+
         self.update_gp_mappings()
 
         self.gem_size = {'n_sids': len(self.species), 'n_rids': len(self.reactions),
@@ -110,6 +155,7 @@ class XbaModel:
         # determine flux bound unit id used in genome scale model for reuse
         any_fbc_pid = self.reactions[list(self.reactions)[0]].fbc_lower_bound
         self.flux_uid = self.parameters[any_fbc_pid].units
+
         # collect all flux bound parameters used in the genome scale model for reuse
         val2pid = {data.value: pid for pid, data in self.parameters.items()
                    if data.units == self.flux_uid and data.reuse is True}
@@ -122,10 +168,21 @@ class XbaModel:
             self.fbc_flux_range[1] = max(self.fbc_flux_range[1], self.parameters[r.fbc_upper_bound].value)
 
         self.enzymes = {}
+        """Enzyme configuration data."""
+
         self.proteins = {}
+        """Protein configuration data."""
+
         self.user_chebi2sid = {}
+
         self.ncbi_data = None
+        """Reference to NCBI genome data."""
+
         self.uniprot_data = None
+        """Reference to UniProt protein data."""
+
+        # required for RBA models
+        self.main_cid = model_dict['species']['compartment'].value_counts().index[0]
 
         # determine external compartment and identify drain reactions
         self.external_compartment = self._get_external_compartment()
@@ -135,7 +192,10 @@ class XbaModel:
                     r.kind = 'drain'
 
     def update_gp_mappings(self):
-        """update mapp of gene products """
+        """Update mappings related to genes and gene products
+
+        :meta private:
+        """
 
         self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items() if gp.uid}
         self.locus2gp = {gp.label: gpid for gpid, gp in self.gps.items()}
@@ -151,9 +211,9 @@ class XbaModel:
     def _get_external_compartment(self):
         """Determine the external compartment id.
 
-        based on heuristics. External compartment is reaction
-        compartment where most 'exchange' reactions are located.
-        Note: balance of 'exchange' reactions would be 'drain' reactions
+        The external compartment is determined from pseudo `exchange` reactions,
+        which include drain and sink reactions. It is the compartment where most of
+        the exchanged metabolites are located.
 
         :return: external compartment id
         :rtype: str
@@ -188,13 +248,23 @@ class XbaModel:
         return locus2rids
 
     def configure(self, fname=None):
-        """Configuration with XBA configuration data.
+        """Configure the XbaModel instance.
 
-        Accepted tables: 'general', 'modify_attributes', 'remove_gps', 'add_gps',
-        'add_species', 'add_reactions', 'add_parameters', 'chebi2sid'
+        Configuration will use default values unless a XBA configuration file (.xlsx) is
+        provided with parameter `fname`.
 
-        :param fname: filename of XBA configuration file (.xlsx)
-        :param fname: str or None
+        The spreadsheet may contain the sheets: `general`, `modify_attributes`, `remove_gps`,
+        `remove_reactions`, `add_gps`, `add_parameters`, `add_species`, `add_reactions`,
+        and `chebi2sid`. See tutorials.
+
+        Example: XbaModel configuration using the configuration data in spreadsheet `xba_parameters.xlsx`.
+
+        .. code-block:: python
+
+            xba_model = XbaModel('iML1515.xml')
+            xba_model.configure('xba_parameters.xlsx')
+
+        :param str fname: (optional) filename of XBA configuration file (.xlsx)
         """
         if fname is None:
             xba_params = {}
@@ -210,7 +280,7 @@ class XbaModel:
         #####################
 
         if 'bulk_mappings_fname' in general_params:
-            self.update_references(general_params['bulk_mappings_fname'])
+            self._update_references(general_params['bulk_mappings_fname'])
 
         #############################
         # modify/correct components #
@@ -266,7 +336,7 @@ class XbaModel:
                 self.modify_attributes(xba_params['modify_attributes'], 'ncbi')
 
         ####################################
-        # create proteins based on Uniprot #
+        # create proteins based on UniProt #
         ####################################
         if 'organism_id' in general_params and 'organism_dir' in general_params:
             organism_dir = general_params['organism_dir']
@@ -277,7 +347,7 @@ class XbaModel:
             if 'modify_attributes' in xba_params:
                 self.modify_attributes(xba_params['modify_attributes'], 'uniprot')
 
-        # create proteins for model gene products based on uniprot data (preferred) or ncbi sequence data)
+        # create proteins for model gene products based on UniProt data (preferred) or NCBI sequence data
         if self.uniprot_data or self.ncbi_data:
             count = self.create_proteins()
             print(f'{count:4d} proteins created')
@@ -298,7 +368,7 @@ class XbaModel:
         if len(self.proteins) > 0:
             self.update_gp_mappings()
 
-            # ensure we have all equired protein data
+            # ensure we have all required protein data
             missing_proteins = 0
             for locus, uid in self.locus2uid.items():
                 if uid not in self.proteins:
@@ -321,8 +391,8 @@ class XbaModel:
                 if not os.path.exists(biocyc_dir):
                     os.makedirs(biocyc_dir)
                     print(f'{biocyc_dir} created')
-                count = self.set_enzyme_composition_from_biocyc(biocyc_dir, biocyc_org_prefix)
-                print(f'{count:4d} enzyme compositions updated from Biocyc Enzyme data')
+                count = self.set_enzyme_composition_from_biocyc(biocyc_org_prefix, biocyc_dir)
+                print(f'{count:4d} enzyme compositions updated from BioCyc enzyme data')
             else:
                 print(f'default enzyme composition with 1 copy of each individual protein')
 
@@ -368,7 +438,7 @@ class XbaModel:
         self.print_size()
         print('>>> BASELINE XBA model configured!\n')
 
-    def update_references(self, bulk_mappings_fname):
+    def _update_references(self, bulk_mappings_fname):
         """Bulk update of references in the model, mainly MiriamAnnotation data.
 
         Excel spreadsheet document with bulk mapping tables. Supported tables:
@@ -377,7 +447,7 @@ class XbaModel:
         Attributes of existing components will be updated if value in supplied table is
         different from None. For updating references in Miriam Annotations, supply new reference
         in data column starting with 'MA:' followed by the database reference, e.g., use 'MA:kegg.compound'
-        to update kegg compound ids on 'species'.
+        to update KEGG compound ids on 'species'.
 
         'fbcGeneProducts': gene products ids newly introduced will be created, allowing replacement
         of gene product ids. Note: 'gene_product_assoc' in 'reactions' need to be updated as well.
@@ -429,15 +499,15 @@ class XbaModel:
                 self.sbml_container.packages += '; name=groups, version=1, required=False'
             print(f'{len(df_groups):4d} groups with reaction data added to the model')
 
-    def get_compartments(self, component_type):
+    def _get_compartments(self, component_type):
         """Get lists of component ids per compartment.
 
-        Supported component types: 'species', 'reactions',
-        'proteins', 'enzymes'
+        Supported component types: 'species', 'reactions', 'proteins', 'enzymes'
 
+        :meta private
         :param str component_type: component type to query
         :return: mapping compartment id to component ids
-        :rtype: dict (key: str, val: list of str)
+        :rtype: dict(str, list(str))
         """
         component_mapping = {'species': self.species, 'reactions': self.reactions,
                              'proteins': self.proteins, 'enzymes': self.enzymes}
@@ -450,7 +520,11 @@ class XbaModel:
         return comp2xid
 
     def print_size(self):
-        """Print current model size (and difference to orignal model"""
+        """Print XbaModel size.
+
+        The difference wrt to the original model is indicated.
+
+        """
         size = {'n_sids': len(self.species), 'n_rids': len(self.reactions),
                 'n_gps': len(self.gps), 'n_pids': len(self.parameters)}
         print(f'{size["n_sids"]} constraints ({size["n_sids"] - self.gem_size["n_sids"]:+}); '
@@ -458,7 +532,7 @@ class XbaModel:
               f'{size["n_gps"]} genes ({size["n_gps"] - self.gem_size["n_gps"]:+}); '
               f'{size["n_pids"]} parameters ({size["n_pids"] - self.gem_size["n_pids"]:+})')
 
-    def get_used_cids(self):
+    def _get_used_cids(self):
         """Identify compartments used by the model.
 
         :return: used_cids
@@ -472,9 +546,10 @@ class XbaModel:
             used_cids[cid] += 1
         return used_cids
 
-    def get_used_sids_pids_gpids(self):
+    def _get_used_sids_pids_gpids(self):
         """Collect ids used in reactions (species, parameters, gene products)
 
+        :meta private:
         :return: set used ids (species, parameters, gene products)
         :rtype: 3-tuple of sets
         """
@@ -499,17 +574,20 @@ class XbaModel:
         return used_sids, used_pids, used_gpids
 
     def clean(self, protect_ids=None):
-        """Remove unused components from the model and update groups.
+        """Remove unused components from the model.
 
-        I.e. species, parameters, gene products not used by reactions.
-        compartments not used by species
+        Remove species, parameters, gene products not used by reactions.
+        Remove compartments not used by species.
+        Update reactions in groups component.
+
+        :meta private:
         """
         if protect_ids is None:
             protect_ids = set()
         else:
             protect_ids = set(protect_ids)
 
-        used_sids, used_pids, used_gpids = self.get_used_sids_pids_gpids()
+        used_sids, used_pids, used_gpids = self._get_used_sids_pids_gpids()
         unused_pids = set(self.parameters).difference(used_pids)
         unused_sids = set(self.species).difference(used_sids)
         unused_gpids = set(self.gps).difference(used_gpids)
@@ -527,7 +605,7 @@ class XbaModel:
                 del self.gps[gpid]
                 del_components['gpids'].append(gpid)
 
-        used_cids = set(self.get_used_cids())
+        used_cids = set(self._get_used_cids())
         unused_cids = set(self.compartments).difference(used_cids)
         for cid in unused_cids:
             if cid not in protect_ids:
@@ -557,8 +635,8 @@ class XbaModel:
         if len(del_components['cids']) > 0:
             print(f"{len(del_components['pids']):4d} compartments removed following cleanup: {del_components['cids']}")
 
-    def create_sbml_model(self):
-        """Generate in-momory SBML model."""
+    def _create_sbml_model(self):
+        """Generate in-memory SBML model."""
 
         m_dict = {
             'sbml': self.sbml_container,
@@ -583,13 +661,27 @@ class XbaModel:
         return sbml_model
 
     def validate(self):
-        """Validate compliance to SBML standards.
+        """Validate compliance with SBML standards, including units configuration.
 
-        :return: success
+        Validation is an optional task taking time. Validation could be skipped once model
+        configuration is stable.
+
+        Information on non-compliance is printed. Details are written to `tmp/tmp.txt`.
+        In case of an unsuccessful validation, it is recommended to review `tmp/tmp.txt` and
+        improve on the model configuration.
+
+        Example: Ensure compliance with SBML standards for a XbaModel instance prior to its export to file.
+
+        .. code-block:: python
+
+            if xba_model.validate():
+                xba_model.export('iML1515_updated.xml')
+
+        :return: success status
         :rtype: bool
         """
-        model = self.create_sbml_model()
-        errors = model.validate_sbml()
+        sbml_model = self._create_sbml_model()
+        errors = sbml_model.validate_sbml()
         if len(errors) == 0:
             return True
         else:
@@ -597,7 +689,7 @@ class XbaModel:
             return False
 
     @staticmethod
-    def json_annotation(data):
+    def _json_annotation(data):
         """Extract Miriam Annotation data for JSON export
 
         :param data: model component data
@@ -613,15 +705,39 @@ class XbaModel:
                 annotation[ref] = list(values) if len(values) > 1 else list(values)[0]
         return annotation
 
-    def export_to_json(self, fname, gpid2label=None):
-        """Export the XBA model to JSON format.
+    def _export_to_json(self, fname, gpid2label=None):
+        """Export the XBA model to JSON format (which can be used for Escher map creation).
 
-        Can be used for Escher map creation. Optional gpid2label dictionary allows
-        mapping of gene product ids used in reaction gene product reaction rules to
-        other values than the gene label.
+        Escher maps (https://escher.github.io) provide a visual representation of optimization results.
+        Either use already existing Escher maps or generate maps compliant to your SBML model using a
+        JSON export of the metabolic model.
 
-        :param str fname: filename (with extension '.xml', '.xlsx', '.json')
-        :param dict gpid2label: (optional) remapping of gene product ids to label data
+        Ref: King, Z. A., Dräger, A., Ebrahim, A., Sonnenschein, N., Lewis, N. E., & Palsson, B. O. (2015).
+        Escher: A Web Application for Building, Sharing, and Embedding Data-Rich Visualizations of
+        Biological Pathways. PLOS Computational Biology, 11(8), e1004321.
+        https://doi.org/10.1371/journal.pcbi.1004321
+
+        Optionally, gene product identifiers can be remapped using `gpid2label`.
+
+        Example: Gene essentiality status added to gene ids, which would be displayed accordingly in Escher maps.
+        Here `keio_ess` and `keio_red` contain sets of genes that are experimentally considered essential and
+        redundant.
+
+        .. code-block:: python
+
+            gpid2label = {}
+            for gpid, data in xba_model.gps.items():
+                if data.label in keio_ess:
+                    sgko_type = 'ess'
+                elif data.label in keio_red:
+                    sgko_type = 'red'
+                else:
+                    sgko_type = 'not_in_Keio'
+                gpid2label[gpid] = f'{data.label}/{data.name}/{sgko_type}'
+            xba_model.export('iML1515.json', gpid2label)
+
+        :param str fname: filename (with extension '.json')
+        :param dict(str, str) gpid2label: (optional) remapping of gene ids
         """
         if gpid2label is None:
             gpid2label = {gpid: label for label, gpid in self.locus2gp.items()}
@@ -633,11 +749,11 @@ class XbaModel:
                 metabolites.append({'id': re.sub('^M_', '', mid), 'name': data.name,
                                     'compartment': data.compartment,
                                     'charge': data.charge, 'formula': data.formula,
-                                    'annotation': self.json_annotation(data) })
+                                    'annotation': self._json_annotation(data) })
              else:
                 metabolites.append({'id': re.sub('^M_', '', mid), 'name': data.name,
                                     'compartment': data.compartment,
-                                    'annotation': self.json_annotation(data)})
+                                    'annotation': self._json_annotation(data)})
 
         # create json reactions data
         rid2groups = defaultdict(list)
@@ -663,13 +779,13 @@ class XbaModel:
                               'lower_bound': self.parameters[data.fbc_lower_bound].value,
                               'upper_bound': self.parameters[data.fbc_upper_bound].value,
                               'gene_reaction_rule': gpr, 'subsystem': subsystems,
-                              'annotation': self.json_annotation(data)})
+                              'annotation': self._json_annotation(data)})
 
         # create json genes data
         genes = []
         for gpid, data in self.gps.items():
             genes.append({'id': gpid2label[gpid], 'name': getattr(data, 'name', data.label),
-                          'annotation': self.json_annotation(data)})
+                          'annotation': self._json_annotation(data)})
 
         # construct model
         annotation = {}
@@ -687,13 +803,50 @@ class XbaModel:
             json.dump(json_model, f, ensure_ascii=False, indent=0)
 
     def export(self, fname, gpid2label=None):
-        """Export the model to SBML coded file JSON or Excel format.
+        """Export XbaModel to SBML encoded file (.xml), spreadsheet (.xlsx) or JSON format (.json).
 
-        For JSON map creation an optional remapping table can be provided for gene labels.
+        The spreadsheet (.xlsx) is helpful to inspect model configuration.
 
-        :param str fname: filename (with extension '.xml', '.xlsx', '.json')
-        :param dict gpid2label: (optional) remapping of gene product ids to label data (JSON)
-        :return: success
+        The optional parameter `gpid2label` is used for export to JSON format.
+
+        Example: Export XbaModel instance to SBML encoded file and to spreadsheet.
+
+        .. code-block:: python
+
+            if xba_model.validate():
+                xba_model.export('iML1515_updated.xml')
+                xba_model.export('iML1515_updated.xlsx')
+
+        Escher maps (https://escher.github.io) can provide a visual representation of optimization results.
+        Escher maps of the modelled organism can be constructed fairly easy using the .json format. This
+        file can be imported to the Escher map builder tool using 'Model -> Load COBRA model JSON'.
+
+        Ref: King, Z. A., Dräger, A., Ebrahim, A., Sonnenschein, N., Lewis, N. E., & Palsson, B. O. (2015).
+        Escher: A Web Application for Building, Sharing, and Embedding Data-Rich Visualizations of
+        Biological Pathways. PLOS Computational Biology, 11(8), e1004321.
+        https://doi.org/10.1371/journal.pcbi.1004321
+
+        Example: Generation of a JSON file with gene essentiality status added to gene ids.
+        Here `keio_ess` and `keio_red` contain sets of genes that are experimentally
+        considered essential and redundant.
+
+        .. code-block:: python
+
+            gpid2label = {}
+            for gpid, data in xba_model.gps.items():
+                if data.label in keio_ess:
+                    sgko_type = 'ess'
+                elif data.label in keio_red:
+                    sgko_type = 'red'
+                else:
+                    sgko_type = 'not_in_Keio'
+                gpid2label[gpid] = f'{data.label}/{data.name}/{sgko_type}'
+
+                xba_model.export('iML1515.json', gpid2label)
+
+        :param str fname: filename with extension '.xml', '.xlsx' or '.json'
+        :param dict(str, str) gpid2label: (optional) remapping of gene product ids for JSON export.
+        :return: success status
         :rtype: bool
         """
         extension = fname.split('.')[-1]
@@ -701,22 +854,34 @@ class XbaModel:
             print(f'model not exported, unknown file extension, expected ".xml", ".xlsx" or ".json": {fname}')
             return False
 
-        model = self.create_sbml_model()
+        sbml_model = self._create_sbml_model()
         if extension == 'xml':
-            model.export_sbml(fname)
+            sbml_model.export_sbml(fname)
             print(f'model exported to SBML format: {fname}')
         elif extension == 'xlsx':
-            model.to_excel(fname)
-            print(f'model exported to Excel Spreadsheet: {fname}')
+            sbml_model.to_excel(fname)
+            print(f'model exported to Microsoft Excel Spreadsheet: {fname}')
         elif extension == 'json':
-            self.export_to_json(fname, gpid2label)
+            self._export_to_json(fname, gpid2label)
             print(f'model exported to JSON format: {fname}')
         return True
 
     def export_kcats(self, fname):
-        """Export turnover numbers to file.
+        """Export turnover numbers configuration data.
 
-        The file can be used as a template to revise reaction specific turnover numbers.
+        Enzyme catalyzed reactions in the model have turnover numbers assigned for
+        each iso-enzyme in forward and reverse direction. This configuration data can be exported
+        to spreadsheet (.xlsx). During XbaModel configuration, turnover number configuration
+        data can be loaded from file by configuring the parameter `kcats_fname` in the
+        XBA parameter file, sheet `general`.
+
+        Example: Export turnover number configuration to spreadsheet.
+
+        .. code-block:: python
+
+            xba_model = XbaModel('iML1515.xml')
+            xba_model.configure('xba_parameters.xlsx')
+            xba_model.export_kcats(kcats.xlsx')
 
         :param str fname: filename with extension '.xlsx'
         """
@@ -753,9 +918,22 @@ class XbaModel:
             print(f'{len(df_rid_kcats)} reaction kcat values exported to', fname)
 
     def export_enz_composition(self, fname):
-        """Export enzyme composition to file.
+        """Export enzyme composition data.
 
-        The file can be used as a template to revise enzyme compositions.
+        Each enzyme used in the model is composed of proteins with configured copy numbers.
+        An enzyme may consist of one or several active sites. Turnover number values
+        are defined per active site. Enzyme composition data can be exported
+        to spreadsheet (.xlsx). During XbaModel configuration, enzyme configuration
+        data can be loaded from file by configuring the parameter `enzyme_comp_fname` in the
+        XBA parameter file, sheet `general`.
+
+        Example: Export enzyme composition to spreadsheet.
+
+        .. code-block:: python
+
+            xba_model = XbaModel('iML1515.xml')
+            xba_model.configure('xba_parameters.xlsx')
+            xba_model.export_enz_composition('enzyme_composition.xlsx')
 
         :param str fname: filename with extension '.xlsx'
         """
@@ -775,27 +953,53 @@ class XbaModel:
 
     def generate_turnup_input(self, orig_kcats_fname, kind='metabolic', mids2ref=None,
                               input_basename='tmp_turnup_input', max_records=500):
-        """Generate input files for TurNuP web portal.
+        """Generate input files for TurNuP web portal for prediction of turnover numbers.
 
         Ref: Kroll, et al., 2023, Turnover number predictions for kinetically uncharacterized enzymes using
         machine and deep learning. Nature Communications, 14(1), 4139.
         DOI: https://doi.org/10.1038/s41467-023-39840-4
 
-        The TurNuP web portal (https://turnup.cs.hhu.de/Kcat_multiple_input) can be used to predicts turnover
-        numbers for enzyme catalyzed reactions. Input files, with up to 500 records, contain protein amino acid
-        sequence and optionally KEGG compound identifiers (or Smiles, InChi) for substrates. As TurNuP predicts
-        same values for the forward and reverse directions, input records are only generated for the forward
-        directions.
+        The TurNuP web portal (https://turnup.cs.hhu.de/Kcat_multiple_input) predicts turnover
+        number values (kcat) for enzyme catalyzed reactions. The web portal accepts input files with
+        a maximum of 500 records. Each record contains amino acid sequence information of the proteins
+        composing the catalyzing enzyme and references to the reactants of the catalyzed reaction.
+        TurNuP predicts the same value for forward and backward direction.
+        TurNuP has not yet been trained on transporters.
 
-        :param str orig_kcats_fname: baseline turnover number configuration file,
-            e.g. created by XbaModel.export_kcats().
-        :param str kind: reaction kind: 'metabolic', 'transporter' or 'all' (default: 'metabolic')
-        :param mids2ref: manual mapping of metabolite ids to KEGG, InChI or SMILES reference
-        :type mids2ref: dict (key: mid/str, value: reference/str) (default: None)
-        :param str input_basename: file name for TurNuP input file, without suffix (default: tmp_turnup_input)
-        :param int max_records: maximum number of records per input file (default: 500)
-        :return: metabolites which could not be mapped to KEGG, InChi or SMILES references
-        :rtype: dict (key: mid/str, value: sid/str)
+        Input records are based on the turnover number configuration data loaded from `orig_kcats_fname`.
+        By default, all metabolic reactions in forward direction are selected.
+        The reaction filter can be changed with the optional parameter `kind`. Amino acid sequence data
+        is based on enzyme composition by concatenating sequences of its proteins.
+        KEGG compound identifiers are extracted from Miriam annotation data of the SBML model and used
+        as reactant references. Optionally, reactant references can be provided with the
+        parameter `mids2ref`, mapping metabolite ids (without compartment postfix) to valid
+        KEGG compound, InChI or SMILES identifiers.
+        The base name for produced input files can be selected using the optional parameter `input_basename`
+        and the number of records per input file can be limited by the optional parameter `max_records`.
+
+        Example: Generate input files for upload to TurNuP web portal for subsequent prediction of turnover numbers.
+
+        .. code-block:: python
+
+            xba_model = XbaModel('iML1515.xml')
+            xba_model.configure('xba_parameters.xlsx')
+            xba_model.export_kcats(kcats.xlsx')
+            mids_no_ref = xba_model.generate_turnup_input('kcats.xlsx', 'tmp_turnup_input')
+
+        Metabolites without references can be manually mapped, using parameter `mids2ref` in a second run.
+        TurNuP input files need to be uploaded to the TurNuP web server
+        (https://turnup.cs.hhu.de/Kcat_multiple_input). The TurNuP output files, containing
+        predictions for turnover numbers, can be used to generate an updated turnover number
+        configuration file. The update turnover numbers can be referenced in the XBA configuration file
+        (parameter `kcats_fname`) and used for XbaModel configuration. See tutorial.
+
+        :param str orig_kcats_fname: turnover number configuration file of baseline model
+        :param str kind: (optional) reaction kind: 'metabolic', 'transporter' or 'all' (default: 'metabolic')
+        :param dict(str, str) mids2ref: (optional) mapping table of metabolite ids to KEGG, InChI or SMILES references
+        :param str input_basename: (optional) base name for TurNuP input files
+        :param int max_records: (optional) maximum number of records per input file (default: 500)
+        :return: metabolites not mapped to reactant references with species identifiers
+        :rtype: dict(str, str)
         """
         # aa_freq used to Kozlowski, 2016, Table 2, pubmed: 27789699, used to filter invalid amino acids ids
         aa_freq = {'A': 8.76, 'C': 1.38, 'D': 5.49, 'E': 6.32, 'F': 3.87,
@@ -910,9 +1114,10 @@ class XbaModel:
         """Remove gene products from Gene Product Rules.
 
         Used to remove dummy protein gene product and
-        gene products related to coezymes that already
+        gene products related to coenzymes that already
         appear in reaction reactants/products
 
+        :meta private:
         :param del_gps: gene product ids to be removed
         :type del_gps: set or list of str, or str
         """
@@ -931,8 +1136,9 @@ class XbaModel:
         """remove reactions form the model
 
         removal of obsolete gene products, species, compartments and groups entries
-        will be done during cleanup().
+        will be done during clean().
 
+        :meta private:
         :param del_rids: reaction ids to be removed
         :type del_rids: set or list of str, or str
         """
@@ -948,6 +1154,7 @@ class XbaModel:
     def add_unit_def(self, u_dict):
         """Add a single unit definition to the model.
 
+        :meta private:
         :param dict u_dict: unit definition
         """
         unit_id = u_dict['id']
@@ -959,6 +1166,7 @@ class XbaModel:
         parameter id must be SBML compliant
         p_dict must incluce 'value' and may include 'units', 'constant', 'name', 'sboterm', 'metaid'
 
+        :meta private:
         :param str pid: parameter id to be used
         :param dict p_dict: parameter definition
         """
@@ -969,6 +1177,7 @@ class XbaModel:
     def add_function_def(self, fd_dict):
         """Add a single function definition to the model.
 
+        :meta private:
         :param dict fd_dict: function definition
         """
         if self.func_defs is None:
@@ -977,8 +1186,9 @@ class XbaModel:
         self.func_defs[fd_id] = SbmlFunctionDef(pd.Series(fd_dict, name=fd_id))
 
     def add_initial_assignment(self, ia_dict):
-        """Add a single initial assignmentto the model.
+        """Add a single initial assignment to the model.
 
+        :meta private:
         :param dict ia_dict: initial assignment definition
         """
         if self.init_assigns is None:
@@ -995,8 +1205,8 @@ class XbaModel:
                            'miriamAnnotation': 'bqbiol:is, chebi/CHEBI:1333',
                            'fbcCharge': -3, 'fbcChemicalFormula': 'C14H3N2O8'}, ...}
 
-        :param df_species: species configurations
-        :type df_species: pandas.DataFrame
+        :meta private:
+        :param pandas.DataFrame df_species: species configurations
         """
         n_count = 0
         for sid, row in df_species.iterrows():
@@ -1017,8 +1227,8 @@ class XbaModel:
         df_parameters structure:
         - based on sbmlxdf parameters structure
 
-        :param df_parameters: parameters configurations
-        :type df_parameters: pandas.DataFrame
+        :meta private:
+        :param pandas.DataFrame df_parameters: parameters configurations
         """
         n_count = 0
         for pid, row in df_parameters.iterrows():
@@ -1045,9 +1255,8 @@ class XbaModel:
         - instead of providing 'reactants', 'products' and 'reversible', a 'reactionString'
           can be provided to determine 'reactants', 'products' and 'reversible'
 
-        :param df_reactions: reaction records
-        :type df_reactions: pandas.DataFrame
-        :return:
+        :meta private:
+        :param pandas.DataFrame df_reactions: reaction records
         """
         n_count = 0
         for rid, r_data in df_reactions.iterrows():
@@ -1078,8 +1287,8 @@ class XbaModel:
         configuration. Parameters not provide will be set with default values.
         e.g. {'c-p': {'name': 'inner membrane', 'spatialDimensions': 2}, ...}
 
-        :param compartments_config: compartment configurations
-        :type compartments_config: dict[dict]
+        :meta private:
+        :param dict(dict) compartments_config: compartment configurations
         """
         for cid, data in compartments_config.items():
             if 'constant' not in data:
@@ -1097,8 +1306,8 @@ class XbaModel:
         configuration. Instead of providing 'fluxObjectives' (str) one can provide
         'coefficients' (dict) directly.
 
-        :param objectives_config: objectives configurations
-        :type objectives_config: dict[dict]
+        :meta private:
+        :param dict(dict) objectives_config: objectives configurations
         """
         for obj_id, data in objectives_config.items():
             self.objectives[obj_id] = FbcObjective(pd.Series(data, name=obj_id))
@@ -1126,10 +1335,9 @@ class XbaModel:
         - set change the stoichiometry factor for a single reactant/product
             - e.g.: id='R_CAT', component='reaction', attribute='reactant', value='M_h2o_c=2.0'
 
-        :param df_modify: structure with modifications
-        :type df_modify: pandas.DataFrame
+        :meta private:
+        :param pandas.DataFrame df_modify: structure with modifications
         :param str component_type: type of component, e.g. 'species'
-        :return:
         """
         component_mapping = {'gp': self.gps,
                              'species': self.species, 'reaction': self.reactions,
@@ -1155,15 +1363,14 @@ class XbaModel:
                 return
             print(f'{value_counts[component_type]:4d} attributes on {component_type} instances updated')
 
-
     def del_components(self, component, ids):
         """Delete / remove components from the model.
 
-        We are not cleaning up yet any leftovers, e.g. species no longer requried
+        We are not cleaning up yet any leftovers, e.g. species no longer required.
 
+        :meta private:
         :param str component: component type, e.g. 'species', 'reactions', etc.
-        :param ids: list of component ids to be deleted
-        :type ids: list[str]
+        :param list(str) ids: list of component ids to be deleted
         """
         component_mapping = {'species': self.species, 'reactions': self.reactions,
                              'proteins': self.proteins, 'enzymes': self.enzymes,
@@ -1186,21 +1393,23 @@ class XbaModel:
     def create_proteins(self):
         """Create proteins related to gene products used in the model.
 
-        For each gene product create a related protein
-        - if corresponding uniprot record exists (loaded from UniProt file), use uniprot id
-          as reference and configure model protein with data from uniprot record
-          - try extracting the uniprot id from gene product MiriamAnnotation
-          - alternatively check mapping of uniprot records to gene labels
-            - in which case we add the uniprot id to the gene product data
-        - if corresponding uniprot not found, collect protein data from NCBI sequence data
+        For each gene product create a related protein.
+        If corresponding UniProt record exists (loaded from UniProt file), use UniProt id
+        as reference and configure model protein with data from UniProt record.
+        Try extracting the UniProt id from gene product MiriamAnnotation
+        Alternatively check mapping of UniProt records to gene labels, in which case we
+        add the UniProt id to the gene product data.
+        If corresponding UniProt not found, collect protein data from NCBI sequence data.
 
-        We also configure gene id and gene name 'notes'-field of gene product
+        We also configure gene id and gene name 'notes'-field of gene product.
+
+        :meta private:
         """
         proteins_not_found = []
         n_created = 0
         for gp in self.gps.values():
 
-            # in case of invalid uniprot id, assign uid based on uniprot_data
+            # in case of invalid UniProt id, assign uid based on uniprot_data
             if gp.uid not in self.uniprot_data.proteins:
                 if gp.label in self.uniprot_data.locus2uid:
                     gp.miriam_annotation.replace_refs('bqbiol:is', 'uniprot', self.uniprot_data.locus2uid[gp.label])
@@ -1220,11 +1429,11 @@ class XbaModel:
 
                 if cid is not None:
                     p = None
-                    # try retrieving protein data from Uniprot Proteins (normal case)
+                    # try retrieving protein data from UniProt proteins (normal case)
                     if pid in self.uniprot_data.proteins:
                         p = Protein(self.uniprot_data.proteins[pid], gp.label, cid)
 
-                    # as fallback, retrieve protein data from NCBI Proteins
+                    # as fallback, retrieve protein data from NCBI proteins
                     elif (self.ncbi_data is not None) and (gp.label in self.ncbi_data.label2locus):
                         ncbi_locus = self.ncbi_data.label2locus[gp.label]
                         p = Protein(self.ncbi_data.locus2protein[ncbi_locus], gp.label, cid)
@@ -1235,7 +1444,7 @@ class XbaModel:
                         gp.add_notes(f'[{p.gene_name}], {p.name}')
                         n_created += 1
 
-        # update mapping, in case we modified uniprot information
+        # update mapping, in case we modified UniProt information
         self.locus2uid = {gp.label: gp.uid for gp in self.gps.values()}
         self.uid2gp = {gp.uid: gp_id for gp_id, gp in self.gps.items()}
         if len(proteins_not_found) > 0:
@@ -1259,11 +1468,11 @@ class XbaModel:
                 'compartment': location of gene product, e.g. 'c'
 
         Add 'name' and 'sboterm' if not provided
-        Add miriamAnnotation with Uniprot id, if miriamAnnotation has not been provided.
-        Uniprot ID is retrieved with Uniprot data
+        Add MiriamAnnotation with UniProt id, if MiriamAnnotation has not been provided.
+        UniProt ID is retrieved with UniProt data
 
-        :param df_add_gps: configuration data for gene product, see sbmlxdf
-        :type df_add_gps: pandas.DataFrame
+        :meta private:
+        :param pandas.DataFrame df_add_gps: configuration data for gene product, see sbmlxdf
         :return: number of added gene products
         :rtype: int
         """
@@ -1292,15 +1501,16 @@ class XbaModel:
     def map_protein_cofactors(self):
         """Map cofactors to species ids and add to protein data.
 
-        Cofactors are retrieved from Uniprot.
+        Cofactors are retrieved from UniProt.
         CHEBI ids are used for mapping to model species.
-           - Uniprot cofactor names already have mapping to one CHEBI ids.
-           - model species have mapings to zero, one or several CHEBI ids
+           - UniProt cofactor names already have mapping to one CHEBI ids.
+           - model species have map to zero, one or several CHEBI ids
            - species in different compartments can map to same CHEBI id
            - based on protein location we identify a matching species
         - mapping table in df_chebi2sid provides a direct mapping to sid,
-          required for cofactor CHEBI ids that can not be mapped to model species
+          required for cofactor CHEBI ids that cannot be mapped to model species
 
+        :meta private:
         :return: number of mapped cofactors
         :rtype: int
         """
@@ -1320,7 +1530,7 @@ class XbaModel:
         n_cof_mapped = 0
         for pid, p in self.proteins.items():
             if len(p.up_cofactors) > 0:
-                # uniprot cofactors with stoichiometry
+                # UniProt cofactors with stoichiometry
                 for up_cf_name, cf_data in p.up_cofactors.items():
                     stoic = cf_data['stoic']
                     chebi = cf_data['chebi']
@@ -1360,6 +1570,7 @@ class XbaModel:
     def get_protein_compartments(self):
         """Get the compartments where proteins are located with their count.
 
+        :meta private:
         :return: protein compartments used
         :rtype: dict (key: compartment id, value: number of proteins
         """
@@ -1378,7 +1589,7 @@ class XbaModel:
         """Create model enzymes based on reaction gene product associations.
 
         Default stoichiometry of 1.0 for gene products
-        Enzyme stochiometries can be updated in a subsequent step.
+        Enzyme stoichiometries can be updated in a subsequent step.
         Cofactors and stoichiometry are retrieved from proteins
 
         Enzymes are connected to reactions
@@ -1387,6 +1598,7 @@ class XbaModel:
             'enz_' followed by sorted list of gene loci ids separated by '_'
             e.g. 'enz_b1234_b3321'
 
+        :meta private:
         :return: number of created enzymes
         :rtype: int
         """
@@ -1409,11 +1621,11 @@ class XbaModel:
             r.set_enzymes(eids)
         return n_created
 
-    def set_enzyme_composition_from_biocyc(self, biocyc_dir, org_prefix):
+    def set_enzyme_composition_from_biocyc(self, org_prefix, biocyc_dir):
         """Configure enzyme composition from BioCyc.
 
-        Biocyc enzyme related data is read from files in directory biocyc_dir, if files exist,
-        alternatively Biocyc data is downloaded from Biocyc (assuming access for given
+        BioCyc enzyme related data is read from files in directory biocyc_dir, if files exist,
+        alternatively, BioCyc data is downloaded from BiBioCyc (assuming access for given
         database is available)
 
         Enzyme active site number is configured based on heuristics.
@@ -1421,13 +1633,13 @@ class XbaModel:
         - for metabolic enzymes we assume we take the minimum of the composition stoichiometry
           as number of active sites.
 
-        :param str biocyc_dir: directory where to retrieve/store biocyc organism data
-        :param str org_prefix:Biocyc organism prefix (when using Biocyc Enzyme composition)
+        :meta private:
+        :param str org_prefix: BioCyc organism prefix (when using BioCyc enzyme composition)
+        :param str biocyc_dir: directory where to retrieve/store BioCyc organism data
         :return: number of updates
         :rtype: int
         """
-        biocyc = BiocycData(biocyc_dir, org_prefix=org_prefix)
-        biocyc.set_enzyme_composition()
+        biocyc = BiocycData(org_prefix, biocyc_dir)
 
         cols = ['name', 'synonyms', 'composition', 'enzyme']
         enz_comp = {}
@@ -1443,10 +1655,10 @@ class XbaModel:
         df = df.reset_index().set_index('enzyme')
         print(f'{len(df)} enzymes extracted from Biocyc')
 
-        # update model enzymes with biocyc composition data
-        # enzyme in the model are based on reaction gene product associations.
-        #  These enzymes might be composed of one or several Biocyc enzyme sub-complexes.
-        #  We try to identify such sub-complexes and update that part of the enzyme compositoin.
+        # update model enzymes with BioCyc composition data
+        # enzymes in the model are based on reaction gene product associations.
+        #  These enzymes might be composed of one or several BioCyc enzyme sub-complexes.
+        #  We try to identify such sub-complexes and update that part of the enzyme composition.
         biocyc_eid2comp = {eid: biocyc.proteins[row['index']].gene_composition for eid, row in df.iterrows()}
         count = 0
         for eid, e in self.enzymes.items():
@@ -1484,6 +1696,7 @@ class XbaModel:
         Model enzyme id is determined by concatenating the locus ids (after sorting)
         e.g. 'gene=b2222, stoic=2.0; gene=b2221, stoic=2.0' - > 'enz_b2221_b2222'
 
+        :meta private:
         :param str fname: name of Excel document specifying enzyme composition
         :return: number of updates
         :rtype: int
@@ -1507,6 +1720,7 @@ class XbaModel:
 
         collect reaction ids that are reversible,
 
+        :meta private:
         :return: model reaction ids under reaction kinds
         :rtype: dict (key: reaction type, val: set of reaction ids
         """
@@ -1525,7 +1739,7 @@ class XbaModel:
     ######################
 
     def create_default_kcats(self, default_kcats, subtypes=None):
-        """Create a default mapping for reactions to default catalytic rates.
+        """Create a default mapping for reactions to default turnover numbers.
 
         Only set kcat values if default value for reaction type is finite.
         Both forward and reverse kcat values are set to the same default kcat.
@@ -1536,10 +1750,9 @@ class XbaModel:
         Subtypes specific values will be used, if reaction id is assigned to
         specified subtype in subtypes dict.
 
-        :param default_kcats: default values for selected kinds
-        :type default_kcats: dict (key: reaction kind, val: default kcat value or np.nan.)
-        :param subtypes: subtypes of specific reactions
-        :type subtypes: dict (key: reaction id, val: subtype) or None
+        :meta private:
+        :param dict(str, float) default_kcats: default values for selected kinds
+        :param dict(str, str) subtypes: subtypes of specific reactions
         """
         if type(subtypes) is not dict:
             subtypes = {}
@@ -1566,6 +1779,7 @@ class XbaModel:
                 e.g. 'b1263, b1264', or np.nan/empty, if kcat is not isoenzyme specific
             'kcat': kcat value in per second (float)
 
+        :meta private:
         :param str fname: file name of Excel document with specific kcat values
         :return: number of kcat updates
         :rtype: int
@@ -1599,8 +1813,8 @@ class XbaModel:
                 'rid': specific reaction id, e.g. 'R_ANS' or np.nan/empty
                 'kcat': kcat value in per second (float)
 
-        :param df_enz_kcats: enzyme specific kcat values
-        :type df_enz_kcats: pandas.DataFrame
+        :meta private:
+        :param pandas.DataFrame df_enz_kcats: enzyme specific kcat values
         :return: number of kcat updates
         :rtype: int
         """
@@ -1634,8 +1848,8 @@ class XbaModel:
                 'scale': scale value (float) (used to divide kcat)
         scale factor will be used as divisor for existing kcat value
 
-        :param df_scale_costs: dataframe with cost scale factor
-        :type df_scale_costs: pandas.DataFrame
+        :meta private:
+        :param pandas.DataFrame df_scale_costs: table with cost scale factor
         :return: number of kcat updates
         :rtype: int
         """
@@ -1659,7 +1873,9 @@ class XbaModel:
 
         If 'reuse' is set to False, a new parameter is created that will not be shared.
 
-        also extends uids:
+        Extends uids.
+
+        :meta private:
         :param float val:
         :param str unit_id: unit id
         :param str proposed_pid: proposed parameter id that would be created
@@ -1727,6 +1943,7 @@ class XbaModel:
 
         Add newly created reverse reaction to the model reactions
 
+        :meta private:
         :return: reverse reaction with reactants/bounds inverted
         :rtype: Reaction
         """
@@ -1769,12 +1986,12 @@ class XbaModel:
         total flux through these isoenzyme reactions that all originate from same
         original reaction.
         Isoenzyme reactions consume original reactant and produce a common pseudo metabolite
-        Arm reaction consume the pseudo metabolite and produces original product.
+        Arm reactions consume the pseudo metabolite and produces original product.
 
         :param orig_r: reaction for which to produce an arm reaction and a pseudo metabolite
-        :type orig_r: f2xba.xba_model.sbml_reaction.SbmlReaction
+        :type orig_r: :class:`SbmlReaction`
         :return: arm reaction
-        :rtype: f2xba.xba_model.sbml_reaction.SbmlReaction
+        :rtype: :class:`SbmlReaction`
         """
         # add pseudo metabolite to connect iso reactions with arm reaction, exclude other constraints
         product_srefs = {sid: stoic for sid, stoic in orig_r.products.items()
@@ -1816,6 +2033,8 @@ class XbaModel:
         Arm reactions can be added to combine flux of iso-reactions in forward/reverse direction.
         This introduces new reactions 'R_<rid>_arm' and 'R_<rid>_arm_REV'
         This introduces new pseudo metabolites 'M_pmet_<rid>_<cid>' and 'M_pmet_<rid>_REV<cid>'
+
+        :meta private:
         """
         arm_data = defaultdict(list)
         for rid, r in self.reactions.items():
@@ -1871,14 +2090,14 @@ class XbaModel:
         """Add reactions catalyzed by isoenzymes.
 
         This will only affect reactions catalyzed by isoenzymes.
-        We only split a reaction into isoreactions, if kcat value are defined.
+        We only split a reaction into iso-reactions (one reaction per catalyzing enzyme), if kcat value are defined.
 
         in non-TD constraint models, e.g. GECKO, a reversible FBA reaction catalyzed by several iso-enzymes will
         be split in reversible sub-reactions, one per isoenzyme. A subsequent call in ECM configuration can
         split these reversible sub-reactions in irreversible forward/reverse sub reactions
 
         TD configuration may split reversible FBA reactions catalyzed by several iso-enzymes in irreversible
-        forward/reverse reactions. Subsequenlly, this function (add_isoenzyme_reactions) will split
+        forward/reverse reactions. Subsequently, this function (add_isoenzyme_reactions) will split
         irreversible forward/reverse reactions in irreversible forward/reverse sub-reactions
 
         Integration with Thermodynamic FBA (TFA):
@@ -1894,6 +2113,8 @@ class XbaModel:
         - several new iso reactions, each catalyzed by a single isoenzyme
         - reaction parameters are updated accordingly
         - original reaction is removed
+
+        :meta private:
         """
         reactions_to_add = {}
         rids_to_del = []
@@ -1944,13 +2165,15 @@ class XbaModel:
         check that flux bounds are >= 0.0 and configure kcat value from
         kcatsf
 
-        For enzyme catalzyed reversible reactions add a new reaction
+        For enzyme catalyzed reversible reactions add a new reaction
         with postfix '_REV', switch reactants/products and inverse flux
         bounds (create new flux bound parameters if required).
 
         Result: all enzyme catalyzed reactions are made irreversible.
         Reversible reactions of the original model will be split in fwd/rev
         Flux bound are checked and reversible flag set to 'False'
+
+        :meta private:
         """
         # Note: self.reactions gets modified in the loop, therefore iterate though initial list of reactions
         zero_flux_bnd_pid = self.get_fbc_bnd_pid(0.0, self.flux_uid, f'zero_flux_bnd')
@@ -1973,8 +2196,9 @@ class XbaModel:
     def remove_unused_gps(self):
         """Remove unused genes, proteins, enzymes from the model
 
+        :meta private:
         """
-        _, _, used_gpids = self.get_used_sids_pids_gpids()
+        _, _, used_gpids = self._get_used_sids_pids_gpids()
         unused_gpids = set(self.gps).difference(used_gpids)
 
         used_eids = set()
@@ -2001,8 +2225,9 @@ class XbaModel:
 
         Determine molecular weight, based on species formula
         Determine mg_per_gDW based on stoichiometry
-        :param srefs: species references for either reaction reactants or products
-        :type self: dict (key: species id/str, val: stoic/float)
+
+        :meta private:
+        :param dict(str, float) srefs: species references for either reaction reactants or products
         :return: species reference data collected
         :rtype: pandas.DataFrame
         """
@@ -2028,6 +2253,7 @@ class XbaModel:
         Determine molecular weight, based on species formula
         Determine mg_per_gDW based on stoichiometry
 
+        :meta private:
         :param str rid: (biomass) reaction id of the model
         :return: reactant and product data
         :rtype: two pandas DataFrames

@@ -1,7 +1,7 @@
 """Implementation of RbaFitKcats class.
 
 Support fitting of turnover numbers to proteomics data in RBA models.
-Excluding flux switching between isoreactions
+Excluding flux switching between iso-reactions
 
 Peter Schubert, HHU Duesseldorf, CCB, October 2025
 """
@@ -27,6 +27,7 @@ class RbaFitKcats:
         rfk = RbaFitKcats(ro, 'baseline_RBA_kcats.xlsx')
         tot_fitted_mpmf = rfk.process_data(solution.fluxes, measured_mpmfs)
         exceeding_max_scale = rfk.update_kcats('fitted_RBA_kcats.xlsx', max_scale_factor=2.5)
+
     """
 
     def __init__(self, optim, orig_kcats_fname):
@@ -46,19 +47,19 @@ class RbaFitKcats:
     def process_data(self, var_values, measured_mpmfs):
         """Process RBA solution and proteomics data, prior to updating kcat values.
 
-        'var_values' (i.e. optimization variable values) in RBA solution contain both the reaction fluxes
+        `var_values` (i.e. optimization variable values) in RBA solution contain both the reaction fluxes
         for metabolic reactions, split by catalyzing enzyme (i.e. iso-reaction fluxes) in mmol/gDWh
         and the predicted enzyme and process machine concentrations in µmol/gDWh.
 
         In a first step the predicted protein concentrations in mmol/gDW is determined using the values
-        of the optmization variables for enzyme and process machine concentrations and values encoded
+        of the optimization variables for enzyme and process machine concentrations and values encoded
         in the RBA model providing the enzyme/process machine composition and protein molecular weights.
         Include protein concentration from target concentrations, e.g. dummy protein requirements.
 
         Subsequently, convert the units from mmol/gDW to mpmf (mg protein / g total protein)
 
         :param var_values: values for optimization variables of RBA solution for given condition
-        :type var_values: dict or pandas.Series, key: variable id (without `R_` prefix), val: value, float
+        :type var_values: dict or pandas.Series
         :param dict measured_mpmfs: gene loci and protein mass fractions measured in mg protein / g total protein
         :return: tot_fitted_mpmf: protein mass fraction used for kcat fitting
         :rtype: float
@@ -106,7 +107,7 @@ class RbaFitKcats:
               f'total protein of {tot_fitted_mpmf:.1f} mg/gP (based on proteomics)')
         return tot_fitted_mpmf
 
-    def update_kcats(self, fitted_kcats_fname, target_sat=None, max_scale_factor=None, min_kcat=0.01, log_scale=False):
+    def update_kcats(self, fitted_kcats_fname, target_sat=0.5, max_scale_factor=None, min_kcat=0.01, log_scale=False):
         """Fit turnover numbers to proteomics data and export updated turnover numbers to file.
 
         This requires process_data() to be executed first.
@@ -121,7 +122,7 @@ class RbaFitKcats:
         protein component, this scaling factor is just the ratio of predicted to measured protein mass fraction.
         Only scaling factors in the range of 1/max_scale_factor ond max_scale factor are considered.
         For enzyme complexes a weighted scaling factor, wrt measured protein mass fractions, is determined.
-        Weighing for enzyme complexes can be based lin or log scale of pmf.
+        Weighing for enzyme complexes can be based linear or log scale of pmf.
 
         Turnover numbers of all iso-reactions of a given net_reaction are rescaled, to avoid that another
         iso-reaction become more favorable, which would change the type of proteins used.
@@ -129,12 +130,12 @@ class RbaFitKcats:
         Fitted kcat values are exported to fitted_kcats_fname
 
         :param str fitted_kcats_fname: filename for fitted and exported turnover numbers (.xlsx)
-        :param float target_sat: average target saturation of fitted model (default: None)
+        :param float target_sat: expected target saturation of fitted model (default: 0.5)
         :param float max_scale_factor: maximum scaling [1/factor ... factor] (default None)
         :param float min_kcat: minimal turnover number in s-1 (default: 0.01)
         :param bool log_scale: select weighing based on lin/log scale protein mass fractions (default: False)
         :return: records not scaled due to exceeding max scaling
-        :rtype: dict[dict]
+        :rtype: dict(dict)
         """
         # get a mapping from net reaction id to iso reaction ids
         net2isorids = defaultdict(list)
@@ -174,7 +175,7 @@ class RbaFitKcats:
                 weighted_factor += factors[i] * mpmfs[i] / tot_mpmf
 
             # scale the turnover numbers across all iso-reactions for given direction
-            # kcats file holds records iso-rections in forward and reverse direction
+            # kcats file holds records iso-reactions in forward and reverse direction
             net_rid = self.optim.rdata_model[iso_rid]['net_rid']
             if weighted_factor > 0.0:
                 if self.var_values[re.sub(f'^{pf.R_}', '', iso_rid)] > 0:

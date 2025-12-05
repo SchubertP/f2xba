@@ -38,10 +38,9 @@ def get_seq_composition(seq_str):
 
     Sequence string is a string of single chars, e.g. 'MDEIIRQ...'
 
-    :param seq_str: sequence string of single chars
-    :type seq_str: str
+    :param str seq_str: sequence string of single chars
     :return: sequence compostion
-    :rtype: dict (key: char, val: count)
+    :rtype: dict(char, int)
     """
     return {seq_char: seq_str.count(seq_char) for seq_char in sorted(set(seq_str))}
 
@@ -58,15 +57,14 @@ def extract_atoms(formula):
 
 
 def calc_mw_from_formula(formula):
-    """Calclulate molecular weight based on chemical formula
+    """Calculate metabolite molecular weight based on chemical formula
 
     using NIST atomic weights table (standard atomic weight):
         https://physics.nist.gov/cgi-bin/Compositions/stand_alone.pl
 
     E.g. 'C10H12N5O7P' for AMP -> 345.050 g/mol
 
-    :param formula: chemical formula, e.g. 'H2O'
-    :type formula: str
+    :param str formula: chemical formula, e.g. 'H2O'
     :return: molecular weight in Da (g/mol)
     :rtype: float
     """
@@ -81,8 +79,8 @@ def calc_mw_from_formula(formula):
 # data copied from https://web.expasy.org/findmod/findmod_masses.html#AA
 # polymerized amino acids considered, e.g. L-Alanine 89.09 g/mol,
 #  in protein H2O is removed per peptide bond: i.e. A = 89.09 - 18.01 = 71.08 g/mol
-# Note: mean aa_weight: 110.74 g/mol (major 20 aa, H2O rmoved, weighted as per Kozlowski, 2016, pubmed: 27789699)
-#  note: uknown aa could be replaced by L (most frequent)
+# Note: mean aa_weight: 110.74 g/mol (major 20 aa, H2O removed, weighted as per Kozlowski, 2016, pubmed: 27789699)
+#  note: unknown aa could be replaced by L (most frequent)
 aa_mw = {'A': 71.0788, 'C': 103.1388, 'D': 115.0886, 'E': 129.1155, 'F': 147.1766,
          'G': 57.0519, 'H': 137.1411, 'I': 113.1594, 'K': 128.1741, 'L': 113.1594,
          'M': 131.1926, 'N': 114.1038, 'P': 97.1167, 'Q': 128.1307, 'R': 156.1875,
@@ -98,13 +96,12 @@ h2o_avg_mw = 18.01524   # average isotopic mass of one water molecule
 
 
 def protein_mw_from_aa_comp(aa_dict):
-    """Calculate protein molecular weight from on amino acid composition.
+    """Calculate protein molecular weight from amino acid composition.
 
-    Based on Expasy Compyte pI/Mw tool
+    Based on Expasy Compute pI/Mw tool
     one H20 is removed from amino acid per peptide bond
 
-    :param aa_dict: dictionary with amino acid one-letter code and stoichiometry
-    :type aa_dict: dict (key: string of length 1, val: float)
+    :param dict(char, float) aa_dict: dictionary with amino acid one-letter code and stoichiometry
     :return: molecular weight in g/mol (Da)
     :rtype: float
     """
@@ -115,14 +112,13 @@ def protein_mw_from_aa_comp(aa_dict):
 
 
 def protein_mw_from_aa_seq(aa_seq):
-    """Calculate protein molecular weight from on amino acid sequence.
+    """Calculate protein molecular weight from amino acid sequence.
 
-    Based on Expasy Compyte pI/Mw tool
+    Based on Expasy Compute pI/Mw tool
     one H20 is removed from amino acid per peptide bond
     unknown sequence identifiers get assigned a dummy cost of 100 g/mol
 
-    :param aa_seq: sequence of amino acid one letter chars
-    :type aa_seq: str
+    :param str aa_seq: sequence of amino acid one letter chars
     :return: molecular weight in g/mol (Da)
     :rtype: float
     """
@@ -139,10 +135,9 @@ nt_ukn_mw = np.mean(list(nt_weights.values()))   # molecular weight of unknown i
 
 
 def rna_mw_from_nt_comp(nt_dict):
-    """Calculate RNA mw from nucleotide composition.
+    """Calculate RNA molecular from nucleotide composition.
 
-    :param nt_dict: nucleotide composition ('A', 'C', 'G', 'U')
-    :type nt_dict: dict (key: one-letter char, val: float for stoic)
+    :param dict(char, float) nt_dict: nucleotide composition ('A', 'C', 'G', 'U')
     :return: molecular weight in g/mol (Da)
     :rtype: float
     """
@@ -153,17 +148,16 @@ def rna_mw_from_nt_comp(nt_dict):
 
 
 # mw of individual deoxy nucleoside monophosphates with 'HO' removed due to condensation
-#  based on deprotonated deocxy nucleoside monophosphates, e.g. dAMP: 'C10H12N5O6P',
+#  based on deprotonated deoxy nucleoside monophosphates, e.g. dAMP: 'C10H12N5O6P',
 dnt_weights = {'A': 312.052, 'C': 288.041, 'G': 328.047, 'T': 303.041}
 dnt_ukn_mw = np.mean(list(dnt_weights.values()))    # molecular weight of unknown dnt identifiers (should not appear)
 dnt_complements = {'A': 'T', 'C': 'G', 'T': 'A', 'G': 'C'}
 
 
 def ssdna_mw_from_dnt_comp(dnt_dict):
-    """Calculate DNA mw from deoxy nucleotide composition (single strand).
+    """Calculate DNA molecular weight from deoxy nucleotide composition (single strand).
 
-    :param dnt_dict: deoxy nucleotide compositions ('A', 'C', 'G', 'T')
-    :type dnt_dict: dict (key: one-letter char, val: float for stoic
+    :param dict(char, float) dnt_dict: deoxy nucleotide compositions ('A', 'C', 'G', 'T')
     :return: molecular weight in g/mol (Da)
     :rtype: float
     """
@@ -174,12 +168,11 @@ def ssdna_mw_from_dnt_comp(dnt_dict):
 
 
 def dsdna_mw_from_dnt_comp(dnt_dict):
-    """Calculate DNA mw from dexoy nucleotide composition (double strand).
+    """Calculate DNA molecular from deoxy nucleotide composition (double strand).
 
-    Adding deoxy nucleotides for complementary strang
+    Adding deoxy nucleotides for the complementary strand.
 
-    :param dnt_dict: deoxy nucleotide compositions ('A', 'C', 'G', 'T')
-    :type dnt_dict: dict (key: one-letter char, val: float for stoic
+    :param dict(char, float) dnt_dict: deoxy nucleotide compositions ('A', 'C', 'G', 'T')
     :return: molecular weight in g/mol (Da)
     :rtype: float
     """

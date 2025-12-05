@@ -1,7 +1,7 @@
 """Implementation of EcModel class.
 
 Extend the XbaModel to become an enzyme constraint model.
-The implementation of GECKO is based on the GECKO 1.0 matlab package (Sánchez et al., 2017).
+The implementation of GECKO is based on the GECKO 1.0 MATLAB package (Sánchez et al., 2017).
 The implementation of ccFBA and MOMENTmr is based on the R-package sybilccFBA (Desouki, 2015)
 The implementation of MOMENT is based on literature (Adadi et al., 2012)
 
@@ -18,39 +18,59 @@ MAX_CONC_PROT = 100  # mg/gDW maximum protein concentration in kpmf (kilo protei
 
 
 class EcModel:
-    """Extend a XbaModel to an enzyme constraint model.
+    """Create an enzyme constraint model by extending a XbaModel instance.
 
-    The implementation of GECKO is based on the GECKO 1.0 matlab package (Sánchez et al., 2017),
-    ccFBA and MOMENTmr on the R-package sybilccFBA (Desouki, 2015) and MOMENT on literature
-    (Adadi et al., 2012).
+    Support is provided for generation of GECKO, MOMENT, MOMENTmr and ccFBA models.
+
+    GECKO is implemented based on the GECKO 1.0 MATLAB package (Sánchez et al., 2017),
+    MOMENT is described in literature (Adadi et al., 2012),
+    ccFBA and MOMENTmr are based on the R-package sybilccFBA (Desouki, 2015).
+
+    Example: Create a GECKO model by extending an existing genome scale metabolic model.
+    The spreadsheet files `xba_parameters.xlsx` and `ecm_parameters.xlsx`
+    contain configuration data. See tutorials.
 
     .. code-block:: python
 
-        xba_model = XbaModel('iJO1366.xml')
-        xba_model.configure('iJO1366_GECKO_xba_parameters.xlsx')
+        xba_model = XbaModel('iML1515.xml')
+        xba_model.configure('xba_parameters.xlsx')
 
         ec_model = EcModel(xba_model)
-        ec_model.configure('iJO1366_GECKO_ecm_parameters.xlsx')
+        ec_model.configure('ecm_parameters.xlsx')
         if ec_model.validate():
-            ec_model.export('iJO1366_GECKO.xml')
+            ec_model.export('iML1515_GECKO.xml')
     """
 
     def __init__(self, xba_model):
         """Instantiate the EcModel instance.
 
         :param xba_model: a reference to a XbaModel instance
-        :type xba_model: :class:`f2xba.XbaModel`
+        :type xba_model: :class:`XbaModel`
         """
         self.model = xba_model
+        """Reference to the XbaModel instance."""
+
         self.arm_flag = False
 
     def configure(self, fname):
-        """Configuration with ECM configuration data.
+        """Configure the EcModel instance with information provided in the ECM configuration file.
 
-        Accepted table: 'general'
+        The ECM configuration spreadsheet should contain the table 'general'. See tutorials.
+
+        Example: Create a GECKO model by extending an existing genome scale metabolic model.
+        The spreadsheet files `xba_parameters.xlsx` and `ecm_parameters.xlsx` contain the
+        configuration data.
+
+        .. code-block:: python
+
+            xba_model = XbaModel('iML1515.xml')
+            xba_model.configure('xba_parameters.xlsx')
+
+            ec_model = EcModel(xba_model)
+            ec_model.configure('ecm_parameters.xlsx')
 
         :param str fname: filename of ECM configuration file (.xlsx)
-        :return: success
+        :return: success status
         :rtype: bool
         """
         sheet_names = ['general', 'rescale_reactions']
@@ -72,8 +92,8 @@ class EcModel:
             if type(general_params['pm2totpm_val_or_paxdb']) is float:
                 pm2totpm = general_params['pm2totpm_val_or_paxdb']
             else:
-                pm2totpm = self.get_modelled_protein_mass_fraction(general_params['pm2totpm_val_or_paxdb'])
-        print(f'modeled protein fraction of total protein mass {pm2totpm:.4f} g/g')
+                pm2totpm = self._get_modelled_protein_mass_fraction(general_params['pm2totpm_val_or_paxdb'])
+        print(f'modelled protein fraction of total protein mass {pm2totpm:.4f} g/g')
 
         if 'rescale_reactions' in ecm_params:
             self._rescale_reactions(ecm_params['rescale_reactions'])
@@ -100,7 +120,7 @@ class EcModel:
             self.model.add_arm_reactions()
 
         protein_pool = p_total * pm2totpm
-        print(f'protein constraint: {protein_pool*1000.0:.2f} mg/gDW - modeled protein')
+        print(f'protein constraint: {protein_pool*1000.0:.2f} mg/gDW - modelled protein')
         self._add_total_protein_constraint(protein_pool)
         self._reaction_enzyme_coupling(avg_enz_sat)
 
@@ -108,13 +128,13 @@ class EcModel:
         self.model.clean()
 
         # add some parameter values for reference (after model.clean() so they are not removed)
-        add_params = {'gmodeledP_per_gP': {'value': pm2totpm, 'name': 'protein mass fraction modeled'},
+        add_params = {'gmodeledP_per_gP': {'value': pm2totpm, 'name': 'protein mass fraction modelled'},
                       'gP_per_gDW': {'value': p_total, 'name': 'protein mass fraction of total dry mass'},
                       'avg_enz_sat': {'value': avg_enz_sat, 'name': 'average enzyme saturation level'}}
         for pid, p_data in add_params.items():
             self.model.add_parameter(pid, p_data)
 
-        # modify some model attributs and create L3V2 SBML model
+        # modify some model attributes and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_{ecm_type}'
         if 'name' in self.model.model_attrs:
             self.model.model_attrs['name'] = f'{ecm_type} model of ' + self.model.model_attrs['name']
@@ -132,7 +152,7 @@ class EcModel:
         been provided. Useful for gene deletion studies.
 
         :return: gene product ids used by the enzymes in the model
-        :rtype: set of str
+        :rtype: set(str)
         """
         used_enzymes = set()
         for rid, r in self.model.reactions.items():
@@ -181,10 +201,10 @@ class EcModel:
     def _add_moment_protein_species(self):
         """Add protein species to MOMENT model.
 
-        Execute before making model irreversilbe.
+        Execute before making model irreversible.
 
         In MOMENT promiscuous enzymes can catalyze several reactions in parallel
-        To implement this constraint, we add for each catalzyed (iso)reaction
+        To implement this constraint, we add for each catalyzed (iso)reaction
         a specific protein species
 
         add protein species to the model
@@ -260,15 +280,15 @@ class EcModel:
                         dir_r.kcatsr = None
 
     def _add_total_protein_constraint(self, total_protein):
-        """add total modeled protein constraint to the enzyme constraint model.
+        """add total modelled protein constraint to the enzyme constraint model.
 
         add protein pool species to the model
         add protein drain reactions to the model
-        add protein pool exchange reation to the model
+        add protein pool exchange reaction to the model
 
         protein concentration in model has units of mg/gDW (i.e. 1000.0 * pmf)
 
-        :param float total_protein: total modeled protein mass in g/gDW
+        :param float total_protein: total modelled protein mass in g/gDW
         """
         # add total protein pool species in default compartment
         pool_sid = f'{pf.C_prot_pool}'
@@ -281,7 +301,7 @@ class EcModel:
         # add total protein pool exchange reaction
         protein_vars = {}
         draw_rid = pf.V_PC_total
-        draw_name = f'total concentration modeled protein'
+        draw_name = f'total concentration modelled protein'
         zero_mg_pid = self.model.get_fbc_bnd_pid(0.0, 'mg_per_gDW', 'zero_mass_conc_mg_per_gDW')
         total_prot_mg_pid = self.model.get_fbc_bnd_pid(total_protein * 1000.0, 'mg_per_gDW', 'conc_protein_mg_per_gDW')
         protein_vars[draw_rid] = [draw_name, f' => {pool_sid}', zero_mg_pid, total_prot_mg_pid, None, 'protein']
@@ -308,8 +328,8 @@ class EcModel:
         print(f'{len(df_add_rids):4d} protein variables to add')
         self.model.add_reactions(df_add_rids)
 
-    def get_modelled_protein_mass_fraction(self, fname):
-        """Determine protein mass fraction based on Pax-db.org downlaod.
+    def _get_modelled_protein_mass_fraction(self, fname):
+        """Determine protein mass fraction based on Pax-db.org download.
 
         Determine which part of organism protein mass fraction is modelled.
         Protein abundance file needs first to be downloaded from Pax-db.org
@@ -379,7 +399,7 @@ class EcModel:
         :param float avg_enz_sat: average enzyme saturation applicable to all reactions
         """
         for r in self.model.reactions.values():
-            assert len(r.enzymes) <= 1, ('Something went wrong, at this stage of isoreactions, we expect a maximum'
+            assert len(r.enzymes) <= 1, ('Something went wrong, at this stage of iso-reactions, we expect a maximum'
                                          'of one enzyme catalyzing this reaction')
             if len(r.enzymes) == 1 and r.kcat is not None:
                 e = self.model.enzymes[r.enzymes[0]]
@@ -409,16 +429,14 @@ class EcModel:
         biomass dict contains
         - biomass reaction id 'rid'
         - rescale tasks 'rescale' a list of dict, each with
-            - either rescale factor 'factor' or an absolute value 'value', flaat
-            - 'rectants' and/or 'products', consisting of list of species ids
+            - either rescale factor 'factor' or an absolute value 'value', float
+            - 'reactants' and/or 'products', consisting of list of species ids
 
         amino acids get scaled by parameter f_p
         carbohydrates get scaled by parameter f_c
         GAM related species get set to gam level
 
-        :param df_rescale: biomass rescaling parameters
-        :type df_rescale: pandas.DataFrame
-        :return:
+        :param pandas.DataFrame df_rescale: biomass rescaling parameters
         """
         modify_reactants = {}
         modify_products = {}
@@ -467,44 +485,43 @@ class EcModel:
         print(f'reaction rescaling')
         self.model.modify_attributes(df_modify_attrs, 'reaction')
 
-    def query_kcats(self):
-        """Query enzyme-reaction kcat values.
-
-        Generate a table that can be used to configure kcats
-
-        :return: table with kcat values
-        :rtype: pandas.DataFrame
-        """
-        notes = f'kcat export from {self.model.model_attrs.id}'
-        rid_kcats = []
-        for sub_rid, r in self.model.reactions.items():
-            tmp_rid = re.sub('_REV$', '', sub_rid)
-            rid = re.sub(r'_iso\d$', '', tmp_rid)
-            if len(r.enzymes) == 1:
-                dirxn = -1 if re.search('_REV$', sub_rid) else 1
-                eid = r.enzymes[0]
-                genes = ', '.join([locus.strip() for locus in eid.split('_')[1:]])
-                active_sites = self.model.enzymes[eid].active_sites,
-                rid_kcats.append([rid, sub_rid, dirxn, genes, r.kcatsf, active_sites, notes])
-        cols = ['rid', 'sub_rid', 'dirxn', 'genes', 'kcat_per_s', 'active_sites', 'notes']
-        df_rid_kcats = pd.DataFrame(rid_kcats, columns=cols)
-        df_rid_kcats.sort_values(by=['sub_rid', 'dirxn'], inplace=True)
-        df_rid_kcats.set_index('rid', inplace=True)
-        return df_rid_kcats
-
     def validate(self):
-        """Validate compliance to SBML standards.
+        """Validate compliance with SBML standards, including units configuration.
 
-        :return: success
+        Validation is an optional task taking time. Validation could be skipped once model
+        configuration is stable.
+
+        Information on non-compliance is printed. Details are written to `tmp/tmp.txt`.
+        In case of an unsuccessful validation, it is recommended to review `tmp/tmp.txt` and
+        improve on the model configuration.
+
+        Example: Ensure compliance with SBML standards for an EcModel instance prior to its export to file.
+
+        .. code-block:: python
+
+            if ec_model.validate():
+                ec_model.export('iML1515_GECKO.xml')
+
+        :return: success status
         :rtype: bool
         """
         return self.model.validate()
 
     def export(self, fname):
-        """Export EcModel to SBML coded file or in tabular format.
+        """Export EcModel to SBML encoded file (.xml) or spreadsheet (.xlsx).
 
-        :param str fname: filename (with extension '.xml' or '.xlsx')
-        :return: success
+        The spreadsheet (.xlsx) is helpful to inspect model configuration.
+
+        Example: Export EcModel instance to SBML encoded file and to spreadsheet format.
+
+        .. code-block:: python
+
+            if ec_model.validate():
+                ec_model.export('iML1515_GECKO.xml')
+                ec_model.export('iML1515_GECKO.xlsx')
+
+        :param str fname: filename with extension '.xml' or '.xlsx'
+        :return: success status
         :rtype: bool
         """
         return self.model.export(fname)

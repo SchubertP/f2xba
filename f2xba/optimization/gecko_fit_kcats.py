@@ -13,17 +13,42 @@ import f2xba.prefixes as pf
 
 
 class GeckoFitKcats:
-    """Support fitting of turnover numbers to proteomics data.
+    """Support the fitting of turnover numbers to proteomics data for GECKO models.
 
-    Usage, with the dictionary measured_mpmfs of measured protein levels:
+    Using the optimization result of the original GECKO model, the turnover numbers
+    of the original GECKO model are fitted to the supplied measured protein mass fractions (mg/gP).
+    A configuration file with the fitted turnover numbers is generated. This file can be used to
+    generate a new GECKO model.
+
+    Using the COBRApy interface for turnover number fitting:
+
+     .. code-block:: python
+
+        import cobra
+
+        ecm = cobra.io.read_sbml_model('iML1515_GECKO.xml')
+        eo = EcmOptimization('iML1515_GECKO.xml', ecm)
+
+        ecm.medium = {rid: 1000.0 for rid in lb_medium}
+        solution = ecm.optimize()
+
+        gfk = GeckoFitKcats(eo, 'iML1515_GECKO_kcats.xlsx')
+        tot_fitted_mpmf = gfk.process_data(solution.fluxes, measured_mpmfs)
+        exceeding_max_scale = gfk.update_kcats('iML1515_fitted_kcats.xlsx', target_sat=0.5, max_scale_factor=100.0)
+        # subsequently, generate a new GECKO model using the fitted turnover numbers.
+
+    Using the gurobipy interface for turnover number fitting:
+    Note: GUROBI optimizer with gurobipy (https://www.gurobi.com) needs to be installed on your system.
 
     .. code-block:: python
 
-        eo = EcmOptimization('iJO1366_GECKO.xml)
+        eo = EcmOptimization('iML1515_GECKO.xml)
         solution = eo.optimize()
-        gfk = GeckoFitKcats(eo, 'iJO1366_predicted_kcats.xlsx')
+
+        gfk = GeckoFitKcats(eo, 'iML1515_GECKO_kcats.xlsx')
         tot_fitted_mpmf = gfk.process_data(solution.fluxes, measured_mpmfs)
-        exceeding_max_scale = gfk.update_kcats('iJO1366_fitted_kcats.xlsx', target_sat=0.5, max_scale_factor=100.0)
+        exceeding_max_scale = gfk.update_kcats('iML1515_fitted_kcats.xlsx', target_sat=0.5, max_scale_factor=100.0)
+        # subsequently, generate a new GECKO model using the fitted turnover numbers.
     """
 
     def __init__(self, optim, orig_kcats_fname):
@@ -31,7 +56,7 @@ class GeckoFitKcats:
 
         :param optim: a reference to a EcmOptimization instance
         :type optim: :class:`EcmOptimization`
-        :param str orig_kcats_fname: filename containing original turnover numbers (.xlsx)
+        :param str orig_kcats_fname: filename containing original turnover numbers with extension .xlsx
         """
         self.optim = optim
         self.orig_kcats_fname = orig_kcats_fname
@@ -57,13 +82,11 @@ class GeckoFitKcats:
         self.fitted_kcats = {}
 
     @staticmethod
-    def get_predicted_enzyme_mpmf(flux, protein_coupling):
+    def _get_predicted_enzyme_mpmf(flux, protein_coupling):
         """Determine mass fraction for enzyme based on reaction flux and protein coupling
 
-        :param flux: reaction flux through iso-reaction in mmol/gDWh
-        :type flux: float >= 0.0
-        :param protein_coupling:
-        :type protein_coupling: dict (key: gene locus, val: coupling coefficient / float)
+        :param float flux: reaction flux through iso-reaction in mmol/gDWh
+        :param dict(str, float) protein_coupling: genes with related coupling coefficient
         :return: predicted enzyme mass fraction mg/gP
         :rtype: float >= 0.0
         """
@@ -90,8 +113,7 @@ class GeckoFitKcats:
            flux per active reaction. The iso-reaction with the highest measured protein cost is selected.
            Measured protein costs for promiscuous enzymes are allocated as per predicted flux distribution.
 
-        :param fluxes: reaction fluxes of GECKO solution for given condition
-        :type fluxes: dict or pandas.Series, key: iso-reaction id (without `R_` prefix), val: flux in mmol/gDWh, float
+        :param dict or pandas.Series fluxes: reaction fluxes of GECKO solution for given condition
         :param dict measured_mpmfs: gene loci and related protein mass fractions measured in mg protein / g total protein
         :return: tot_fitted_mpmf: protein mass fraction used for kcat fitting
         :rtype: float
@@ -103,7 +125,7 @@ class GeckoFitKcats:
             net_flux = max([fluxes[iso_rid] for iso_rid in iso_rids])
             if net_flux > 0.0:
                 for iso_rid in iso_rids:
-                    pred_enz_mpmf = self.get_predicted_enzyme_mpmf(net_flux, self.optim.rdata[iso_rid]['mpmf_coupling'])
+                    pred_enz_mpmf = self._get_predicted_enzyme_mpmf(net_flux, self.optim.rdata[iso_rid]['mpmf_coupling'])
                     self.iso_rid_pred_mpmf[iso_rid] = pred_enz_mpmf
                     if fluxes[iso_rid] > 0.0:
                         direction = 'rev' if re.match('.*_REV$', iso_rid) else 'fwd'
@@ -150,8 +172,8 @@ class GeckoFitKcats:
 
         return tot_fitted_mpmf
 
-    def update_kcats(self, fitted_kcats_fname, target_sat=None, max_scale_factor=None, min_kcat=0.01, max_kcat=5000.0):
-        """Fit turnover numbers to proteomics data and export updated turnover numbers to file.
+    def update_kcats(self, fitted_kcats_fname, target_sat=0.5, max_scale_factor=None, min_kcat=0.01, max_kcat=5000.0):
+        """Fit turnover numbers to proteomics data and export fitted turnover numbers to file.
 
         This requires process_data() to be executed first.
 
@@ -173,37 +195,37 @@ class GeckoFitKcats:
         by proteomics, and subsequently we adjust the scaling to the measured protein concentration.
 
         A further kcat scaling is applied to move the model to a given target enzyme saturation level.
-        It is ensured that kcat volues fall into the min_kcat, max_kcat range
+        It is ensured that kcat values fall into the min_kcat, max_kcat range.
 
-        Fitted kcat values are exported to fitted_kcats_fname
+        Fitted kcat values are exported to fitted_kcats_fname.
 
         :param str fitted_kcats_fname: filename for fitted and exported turnover numbers (.xlsx)
-        :param float target_sat: average target saturation of fitted model (default: None)
-        :param float max_scale_factor: maximum scaling [1/factor ... factor] (default None)
-        :param float min_kcat: minimal turnover number in s-1 (default: 0.01)
-        :param float max_kcat: maximal turnover number in s-1 (default: 5000.0)
+        :param float target_sat: (optional) expected target saturation of fitted model (default: 0.5)
+        :param float max_scale_factor: (optional) maximum scaling [1/factor ... factor] (default None)
+        :param float min_kcat: (optional) minimal turnover number in s-1 (default: 0.01)
+        :param float max_kcat: (optional) maximal turnover number in s-1 (default: 5000.0)
         :return: kcat records not scaled due to exceeding max scaling
-        :rtype: dict[dict]
+        :rtype: dict(dict)
         """
         # load model kcat records used for flux solution
         with pd.ExcelFile(self.orig_kcats_fname) as xlsx:
             df_kcats = pd.read_excel(xlsx, sheet_name='kcats', index_col=0)
             print(f'{len(df_kcats):4d} original kcat records loaded from {self.orig_kcats_fname}')
 
-        target_saturation_scale = self.optim.avg_enz_saturation / target_sat if target_sat else 1.0
+        target_saturation_scale = self.optim.avg_enz_saturation / target_sat
 
         exceed_max_scale = {}
         for net_rid, meas_data in self.meas_net_rid_data.items():
             pred_iso_rid = self.pred_net_rid_data[net_rid]['iso_rid']
             meas_iso_rid = meas_data['iso_rid']
 
-            # make proteomics suggested iso-reaction more favourable, if it is not already predicted
+            # make proteomics suggested iso-reaction more favorable, if it is not already predicted
             if meas_iso_rid == pred_iso_rid:
-                scale_favourable = 1.0
+                scale_favorable = 1.0
                 pred_mpmf_ref = self.iso_rid_pred_mpmf[meas_iso_rid]
             else:
-                scale_favourable = 1.02 * self.iso_rid_pred_mpmf[meas_iso_rid] / self.iso_rid_pred_mpmf[pred_iso_rid]
-                pred_mpmf_ref = self.iso_rid_pred_mpmf[meas_iso_rid] / scale_favourable
+                scale_favorable = 1.02 * self.iso_rid_pred_mpmf[meas_iso_rid] / self.iso_rid_pred_mpmf[pred_iso_rid]
+                pred_mpmf_ref = self.iso_rid_pred_mpmf[meas_iso_rid] / scale_favorable
 
             # fit kcat value to proteomics and rescale to selected target enzyme saturation level
             scale_factor = pred_mpmf_ref / meas_data['meas_mpmf'] * target_saturation_scale
@@ -216,10 +238,10 @@ class GeckoFitKcats:
                                                  'factor': scale_factor}
                     continue
 
-            # scale kcat values of all iso reactions, that none becomes more favourable
+            # scale kcat values of all iso reactions, that none becomes more favorable
             for iso_rid in self.net2iso_rids[net_rid]:
                 if iso_rid == meas_iso_rid:
-                    factor = scale_favourable * scale_factor
+                    factor = scale_favorable * scale_factor
                 else:
                     factor = 0.9 * scale_factor
                 key = iso_rid if iso_rid in df_kcats.index else f'{pf.R_}{iso_rid}'
@@ -236,7 +258,7 @@ class GeckoFitKcats:
         print(f'{len(exceed_max_scale):4d} (net) reactions would exceed the maximum scaling factor of '
               f'{max_scale_factor} and will not be scaled')
 
-        # rescale all other kcat values in case target saturation level is higher than avg enz sat of original model
+        # rescale all other kcat values in case target saturation level is higher than avg_enz_sat of original model
         if target_saturation_scale < 1.0:
             all_keys = {re.sub('^R_', '', key) for key in df_kcats.index}
             balance_keys = all_keys.difference(self.fitted_kcats)

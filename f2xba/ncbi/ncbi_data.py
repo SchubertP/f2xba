@@ -16,25 +16,54 @@ from .ncbi_chromosome import NcbiChromosome
 
 
 class NcbiData:
+    """Access to data from NCBI nucleotide online resource.
 
-    def __init__(self, chromosome2accids, ncbi_dir):
-        """Initialize
+    Resource balance constraint models require access to genome data during model construction.
+    Genome data can be referenced by GeneBank or RefSeq accession identifiers.
+    Select genome data sets that can be mapped to the gene identifiers used in the model under construction.
+    As model genes may be located on different chromosomes, access to several chromosomes is supported.
+
+    Use configuration data in the XBA configuration file, sheet `general`, to set `chromosome2accids`,
+    which maps arbitrary chromosome ids to accession ids, and `organism_dir`, were downloaded data
+    is stored locally. Delete locally stored NCBI data to enforce a retrieval from the online database.
+
+    Example: Access chromosome data for E. coli K-12 MG1655 strain (accession id: U00096.3).
+
+    .. code-block:: python
+
+        from f2xba.ncbi.ncbi_data import NcbiData
+
+        ncbi_data = NcbiData({'chromosome':'U00096.3'}, 'data_refs/ncbi')
+
+        gene = 'b0928'
+        ncbi_data.locus2record[gene].__dict__
+
+    :param dict(str, str) chromosome2accids: Map chromosome ids to accession ids
+    :param str organism_dir: directory where NCBI exports are stored
+    """
+
+    def __init__(self, chromosome2accids, organism_dir):
+        """Instantiate NcbiData with genome data retrieved from NCBI nucleotide online resource.
 
         Download NCBI nucleotide information for given accession ids.
-        Use stored file, if found in ncbi_dir.
+        Use stored file, if found in organism_dir.
 
-        :param chromosome2accids: Mapping chromosome id to GeneBank accession_id
-        :type chromosome2accids: dict (key: chromosome id, str; value: Genbank accession_id, str)
-        :param ncbi_dir: directory where ncbi exports are stored
-        :type ncbi_dir: str
+        :param dict(str, str) chromosome2accids: Map chromosome ids to accession ids
+        :param str organism_dir: directory where NCBI exports are stored
         """
         self.chromosomes = {}
+        """Chromosome related information."""
+
         for chrom_id, accession_id in chromosome2accids.items():
-            self.chromosomes[chrom_id] = NcbiChromosome(chrom_id, accession_id, ncbi_dir)
+            self.chromosomes[chrom_id] = NcbiChromosome(chrom_id, accession_id, organism_dir)
 
         # mapping of NCBI record loci to feature records and proteins across chromosomes
         self.locus2record = {}
+        """Map gene identifier to NCBI feature record."""
+
         self.locus2protein = {}
+        """Map gene identifier to NCBI protein sequence information."""
+
         for chrom_id, chrom in self.chromosomes.items():
             self.locus2record.update(chrom.mrnas)
             self.locus2record.update(chrom.rrnas)
@@ -43,6 +72,8 @@ class NcbiData:
 
         # mapping of gene product label to NCBI locus (including NCBI old_locus_tag)
         self.label2locus = {}
+        """Map gene label to NCBI locus identifiers."""
+
         self.update_label2locus()
 
     def update_label2locus(self):
@@ -53,12 +84,11 @@ class NcbiData:
                 self.label2locus[record.old_locus] = locus
 
     def modify_attributes(self, df_modify_attrs):
-        """modify attribute values of ncbi feature records
+        """modify attribute values of NCBI feature records
 
         e.g. update 'locus' or 'old_locus' attributes to improve mapping with model loci
 
-        :param df_modify_attrs: table with 'attribute', 'value' columns and index set to gene locus
-        :type df_modify_attrs: pandas DataFrame
+        :param pandas.DataFrame df_modify_attrs: table with 'attribute', 'value' columns and index set to gene locus
         """
         for locus, row in df_modify_attrs.iterrows():
             if locus in self.locus2record:
@@ -69,10 +99,9 @@ class NcbiData:
         self.update_label2locus()
 
     def get_gc_content(self, chromosome_id=None):
-        """Retrieve GC content accross all or a specifiec chromosome
+        """Retrieve GC content across all or one specific chromosome
 
-        :param chromosome_id: specific chromosome id
-        :type chromosome_id: str or None (optional: default: None)
+        :param str chromosome_id: (optional) specific chromosome id
         :return: GC content
         :rtype: float
         """
@@ -90,12 +119,11 @@ class NcbiData:
         return total_gc / total_nts
 
     def get_mrna_avg_composition(self, chromosome_id=None):
-        """Retrieve average mrna composition across all or a chromosome
+        """Retrieve average mRNA composition across all or a chromosome
 
-        :param chromosome_id: specific chromosome id
-        :type chromosome_id: str or None (optional: default: None)
-        :return: relative mrna nucleotide composition
-        :rtype: dict (key: nucleotide id, val: fequency/float)
+        :param str chromosome_id: (optional) specific chromosome id
+        :return: relative mRNA nucleotide composition
+        :rtype: dict(str,float)
         """
         chrom_ids = [chromosome_id] if chromosome_id is not None else self.chromosomes.keys()
 

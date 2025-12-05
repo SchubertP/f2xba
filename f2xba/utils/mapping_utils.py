@@ -36,15 +36,27 @@ def valid_sbml_sid(component_id):
 
 
 def load_parameter_file(fname, sheet_names=None):
-    """Load tables from configuration file.
+    """Load configuration data from a spreadsheet file.
 
-    We can limit the sheet names to selected set of sheet names provided.
-    If sheet names are not provide, all sheets of spreadsheet file will be loaded
+    Configuration files are required during extended model creation. These files are
+    Microsoft Excel spreadsheets (.xlsx) containing one or several sheets.
 
-    :param str fname: filename of XBA configuration file (.xlsx)
-    :param list sheet_names: list of table to import (default: None)
+    While configuration files can be created and updated using spreadsheet editors,
+    it may be more convenient to create and modify these files using program code.
+
+    Using this function all sheets (default) or selected sheets (parameter `sheet_names`)
+    can be loaded from file.
+
+    .. code-block:: python
+
+        from f2xba.utils.mapping_utils import load_parameter_file
+
+        xba_params = load_parameter_file('xba_parameters.xlsx')
+
+    :param str fname: filename of configuration file (.xlsx)
+    :param list(str) sheet_names: (optional) sheet names of tables to import
     :return: imported tables
-    :rtype: dict of pandas.DataFrames
+    :rtype: dict(str, pandas.DataFrame)
     """
     if not os.path.exists(fname):
         print(f'{fname} not found')
@@ -63,17 +75,28 @@ def load_parameter_file(fname, sheet_names=None):
     return params
 
 
-def write_parameter_file(fname, params):
-    """Write tables to configuration file.
+def write_parameter_file(fname, tables):
+    """Export configuation data to a spreadsheet file.
 
-    :param str fname: filename of XBA configuration file (.xlsx)
-    :param params: tables to export
-    :type params: dict[pandas.DataFrame]
+    Configuration files are required during extended model creation. These files are
+    Microsoft Excel spreadsheets (.xlsx) containing one or several sheets.
+
+    While configuration files can be created and updated using spreadsheet editors,
+    it may be more convenient to create and modify these files using program code.
+
+    .. code-block:: python
+
+        from f2xba.utils.mapping_utils import write_parameter_file
+
+        write_parameter_file('xba_parameters.xlsx', xba_params)
+
+    :param str fname: filename of configuration file (.xlsx)
+    :param dict(pandas.DataFrame) tables: sheet names and tables with configuration data
     """
     with pd.ExcelWriter(fname) as writer:
-        for sheet, df in params.items():
+        for sheet, df in tables.items():
             df.to_excel(writer, sheet_name=sheet)
-        print(f'{len(params)} table(s) with parameters written to  {fname}')
+        print(f'{len(tables)} table(s) with parameters written to {fname}')
 
 
 def get_srefs(srefs_str):
@@ -83,7 +106,7 @@ def get_srefs(srefs_str):
     Each record contains ',' separated key=value pairs. Required keys are
     'species' and 'stoic'.
 
-    :param str srefs_str: species references string with attibutes 'species' and 'stoic'
+    :param str srefs_str: species references string with attributes 'species' and 'stoic'
     :return: composition (components with stoichiometry
     :rtype: dict (key: species id, value: stoichiometry (float)
     """
@@ -100,10 +123,9 @@ def generate_srefs_str(stoichometric_str):
     E.g. '2.0 M_h_e + M_mal__L_e' gets converted to
     {'species=M_h_e, stoic=2.0; species=M_mal__L_e, stoic=1.0'}
 
-    :param stoichometric_str: stoichiometric string
-    :type stoichometric_str: str
+    :param str stoichometric_str: stoichiometric string
     :returns: species ids with stoichiometry
-    :rtype: dict
+    :rtype: str
     """
     d_srefs = {}
     for sref in stoichometric_str.split('+'):
@@ -151,7 +173,7 @@ def stoicstr2srefs(stoichometric_str):
 
     :param str stoichometric_str: stoichiometric string
     :returns: species with stoichiometry
-    :rtype: dict (key: species/str, val: stoic/float)
+    :rtype: dict(str,float)
     """
     srefs = {}
     components = [item.strip() for item in stoichometric_str.split('+')]

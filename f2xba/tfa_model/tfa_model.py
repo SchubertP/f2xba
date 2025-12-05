@@ -32,9 +32,14 @@ GAS_CONSTANT = 8.314462/1000.0            # kJ mol-1 K-1
 FARADAY_CONSTANT = 9.648533e4 / 1000.0    # kC mol-1  or kJ mol-1 V-1
 KJ_PER_KCAL = 4.184                       # 4.184 KJ equals 1 Kcal
 
-MAX_DRG = 1000.0                          # kJ/mol, maximum ∆rG' as variable bound
-IRR_NO_TD_DRG0 = -200.0                   # kJ/mol, ∆rG'˚ below which an irr reactions requires no TD constraints
-DEFAULT_DRG_ERROR = 2.0 * 4.184           # kJ/mol
+MAX_DRG = 1000.0
+"""Maximum value of ∆rG' considered in calculations and variable bounds."""
+
+IRR_NO_TD_DRG0 = -200.0
+"""Minimal ∆rG'˚ in kJ/mol for adding TD reaction constraints for irreversible reactions."""
+
+DEFAULT_DRG_ERROR = 2.0 * 4.184
+"""Default error value of ∆Gr in kJ/mol, used if it cannot be determined from TD data."""
 
 # special metabolites protons and water
 CPD_PROTON = 'cpd00067'        # seed id for protons (H) - not part of TD formulations
@@ -42,34 +47,80 @@ CPD_WATER = 'cpd00001'         # seed id for H2O - not used in reaction quotient
 
 
 class TfaModel:
-    """Extend a XbaModel to a thermodynamics constraint model.
+    """Extend a XbaModel instance by adding thermodynamic constraints.
 
-    The implementation of TFA is based on Python package pyTFA (Salvy et al., 2019).
+    The extended XbaModel can be used to create a TFA model, thermodynamics enabled
+    enzyme constraint (e.g. TGECKO) and resource balance constraint (TRBA) models.
+
+    Optimization of models might produce infeasible results, when adding thermodynamic
+    constraints. In such cases, parameter relaxation of the TD constrain model might be required.
+    Relaxation would adjust bounds of ∆rG'˚ (standard transformed Gibbs energy of reaction)
+    optimization variables. The adjusted bounds can be included in the TFA configuration file.
+    See tutorial.
+
+    The implementation is based on Python package pyTFA (Salvy et al., 2019).
+
+    Ref: Salvy, P., Fengos, G., Ataman, M., Pathier, T., Soh, K. C., & Hatzimanikatis, V. (2019).
+    pyTFA and matTFA: a Python package and a Matlab toolbox for Thermodynamics-based Flux Analysis.
+    Bioinformatics, 35(1), 167-169. https://doi.org/10.1093/bioinformatics/bty499
+
+    Example 1: Create a TFA model by extending an existing genome scale metabolic model.
+    The spreadsheet file `tfa_parameters.xlsx` contains configuration data. See tutorials.
 
     .. code-block:: python
 
-        xba_model = XbaModel('iJO1366.xml')
+        xba_model = XbaModel('iML1515.xml')
         xba_model.configure()
 
         tfa_model = TfaModel(xba_model)
-        tfa_model.configure('iJO1366_tfa_parameters.xlsx')
+        tfa_model.configure('tfa_parameters.xlsx')
         if tfa_model.validate():
-            tfa_model.export('iJO1366_TFA.xml')
+            tfa_model.export('iML1515_TFA.xml')
+
+    Example 2: Create a TGECKO model. The spreadsheet files `xba_parameters.xlsx`, `tfa_parameters.xlsx`
+    and `ecm_parameters.xlsx` contain configuration data.
+
+    .. code-block:: python
+
+        xba_model = XbaModel('iML1515.xml')
+        xba_model.configure('xba_parameters.xlsx')
+
+        tfa_model = TfaModel(xba_model)
+        tfa_model.configure('tfa_parameters.xlsx')
+
+        ec_model = EcModel(xba_model)
+        ec_model.configure('ecm_parameters.xlsx')
+        ec_model.export('iML1515_TGECKO.xml')
+
     """
 
     def __init__(self, xba_model):
         """Instantiate the TfaModel instance.
 
-        :param xba_model: a reference to a XbaModel instance
-        :type xba_model: :class:`f2xba.XbaModel`
+        :param xba_model: a reference to the XbaModel instance
+        :type xba_model: :class:`XbaModel`
         """
         self.model = xba_model
+        """Reference to the XbaModel instance."""
+
         self.td_params = {}
+        """General parameters extracted from TFA configuration file, sheet `general`."""
+
         self.td_compartments = {}
+        """TD data related to compartments."""
+
         self.td_species = {}
+        """TD data of TD species, extracted from the TD database."""
+
         self.td_cues = {}
+        """TD data of TD cues (components of TD species), extracted from the TD database."""
+
         self.td_reactions = {}
+        """TD data related to model reactions."""
+
         self.td_reactants = {}
+        """TD data related to model species."""
+
         self.td_units = None
         self.temperature = 298.15 # temperature in Kevlin (25 ˚C)
 
@@ -78,15 +129,27 @@ class TfaModel:
         return GAS_CONSTANT * self.temperature
 
     def configure(self, fname):
-        """Configuration with TFA configuration data.
+        """Configure the TfaModel instance with information provided in the TFA configuration file.
 
-        Accepted tables: 'general', 'td_compartments', 'modify_td_sids', 'modify_thermo_data',
-        'modify_drg0_bounds'
+        The TFA configuration spreadsheet may contain the sheets: 'general', 'td_compartments',
+        'modify_td_sids', 'modify_thermo_data', 'modify_drg0_bounds'.
+
+        Example: Create a TFA model by extending an existing genome scale metabolic model.
+        The spreadsheet file `tfa_parameters.xlsx` contains configuration data.
+
+        .. code-block:: python
+
+                xba_model = XbaModel('iML1515.xml')
+                xba_model.configure()
+
+                tfa_model = TfaModel(xba_model)
+                tfa_model.configure('tfa_parameters.xlsx')
 
         :param str fname: filename of TFA configuration file (.xlsx)
-        :return: success
+        :return: success status of operation
         :rtype: bool
         """
+
         sheet_names = ['general', 'td_compartments', 'modify_td_sids', 'modify_thermo_data', 'modify_drg0_bounds']
         tfa_params = load_parameter_file(fname, sheet_names)
         if 'general' not in tfa_params.keys():
@@ -114,7 +177,7 @@ class TfaModel:
                 rid = re.sub(f'^{pf.V_DRG0_}', pf.R_, vid)
                 if self.td_reactions[rid].add_td_constraints:
                     dgr0_vids.append(vid)
-            self.modify_drg0_bounds(tfa_params['modify_drg0_bounds'].loc[dgr0_vids], remove_slack=False)
+            self._modify_drg0_bounds(tfa_params['modify_drg0_bounds'].loc[dgr0_vids], remove_slack=False)
 
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_TFA'
@@ -128,12 +191,28 @@ class TfaModel:
         return True
 
     def export_slack_model(self, fname):
-        """Create a slack model and export it as SBML coded file.
+        """Export a TFA model with slack variables to perform TFA parameter relaxation.
 
-        The slack model is used for model parameter relaxation.
+        The slack model can be used for model parameter relaxation to adjust bounds of ∆rG'˚ variables
+        and create/update the sheet 'modify_drg0_bounds' in the TFA configuration file.
 
-        :param str fname: filename (with extension '.xml' or '.xlsx')
-        :return: success
+        Example: Create TFA model with slack variables.
+
+        .. code-block:: python
+
+                xba_model = XbaModel('iML1515.xml')
+                xba_model.configure()
+
+                tfa_model = TfaModel(xba_model)
+                tfa_model.configure('tfa_parameters.xlsx')
+                tfa_model.export_slack_model('iML1515_TFA_slack.xml')
+
+        Subsequently, load and optimize the slack model. Determine adjustments of variable bounds, update
+        the TFA configuration file and generate a TFA model with relaxed bounds.
+        See tutorial related to TFA model creation.
+
+        :param str fname: filename with extension '.xml'
+        :return: success status of operation
         :rtype: bool
         """
         self._add_slack_variables()
@@ -141,7 +220,9 @@ class TfaModel:
         self.export(fname)
 
     def print_td_stats(self):
-        """Print TD statistics on species/reactions
+        """Print TD statistics on species/reactions.
+
+        :meta private:
         """
         var_ids = set(self.model.reactions)
         sids = []
@@ -173,15 +254,16 @@ class TfaModel:
     def integrate_min_slack(self, fba_fluxes):
         """Integrate optimization results from slack minimization of slack model.
 
-        Called, with the flux values of a CobraPy optimiztion of the slack model
+        Called, with the flux values of a CobraPy optimization of the slack model
 
         Negative and positive slacks will be used to update bounds of related
         ∆Gr˚ variables.
 
         Summary of updates is returned
 
+        :meta private:
         :param fba_fluxes: CobraPy fluxes from solution object
-        :type fba_fluxes: pandas.Series or dict (key: rid / str, val: flux / float)
+        :type fba_fluxes: pandas.Series or dict(str, float)
         :return: summary of ∆Gr˚ bound updates performed
         :rtype: dict
         """
@@ -189,21 +271,17 @@ class TfaModel:
         self._remove_slack_configuration()
         return drgo_relaxations
 
-    def modify_drg0_bounds(self, df_modify_drg0_bounds, remove_slack=True):
+    def _modify_drg0_bounds(self, df_modify_drg0_bounds, remove_slack=True):
         """Modify ∆rG'˚ bounds after model relaxation.
 
-        We reused exising parameter ids for ∆rG'˚.
-        These get updated with data from df_modify_drg0_bounds.
-            index: variable id (str) for drg0 variables 'V_DRG0_<rid>'
-            columns:
-                component: set to 'reaction' / str
-                attribute: either 'fbc_lower_bound' or 'fbc_upper_bound' / str
-                value: new bound value / float
+        We reused existing parameter ids for ∆rG'˚. These get updated with data from df_modify_drg0_bounds.
+        Index: variable id (str) for drg0 variables 'V_DRG0_<rid>'
+        Columns: component: set to 'reaction' / str
+        attribute: either 'fbc_lower_bound' or 'fbc_upper_bound' / str
+        value: new bound value / float
 
-        :param df_modify_drg0_bounds: data on bounds to be updated
-        :type df_modify_drg0_bounds: pandas.DataFrame
-        :param remove_slack: if True, remove slack variables
-        :type remove_slack: bool (default: True)
+        :param pandas.DataFrame df_modify_drg0_bounds: data on bounds to be updated
+        :param bool remove_slack: (optional) if False do not remove slack variables (default: True)
         """
         modify_attrs = {}
         for var_id, row in df_modify_drg0_bounds.iterrows():
@@ -216,35 +294,51 @@ class TfaModel:
         print(f"{len(df_modify_attrs):4d} ∆Gr'˚ variables need relaxation.")
         self.model.modify_attributes(df_modify_attrs, 'parameter')
 
-        if remove_slack is True:
+        if remove_slack:
             self._remove_slack_configuration()
 
-    def add_displacement(self):
-        """Add displacement variable for ∆Gr.
-
-        The subsequent investigation will explore how far reactions are operating from TD equilibrium.
-        """
-        self._add_displacement_constraints()
-        self._add_displacement_variables()
-
     def validate(self):
-        """Validate compliance to SBML standards.
+        """Validate compliance with SBML standards, including units configuration.
 
-        :return: success
+        Validation is an optional task taking time. Validation could be skipped once model
+        configuration is stable.
+
+        Information on non-compliance is printed. Details are written to `tmp/tmp.txt`.
+        In case of an unsuccessful validation, it is recommended to review `tmp/tmp.txt` and
+        improve on the model configuration.
+
+        Example: Ensure compliance with SBML standards for a TfaModel instance prior to its export to file.
+
+        .. code-block:: python
+
+            if tfa_model.validate():
+                tfa_model.export('iML1515_TFA.xml')
+
+        :return: success status
         :rtype: bool
         """
         return self.model.validate()
 
     def export(self, fname):
-        """Export TfaModel to SBML coded file or in tabular format.
+        """Export TfaModel to SBML encoded file (.xml) or spreadsheet (.xlsx).
 
-        :param str fname: filename (with extension '.xml' or '.xlsx')
-        :return: success
+        The spreadsheet (.xlsx) is helpful to inspect model configuration.
+
+        Example: Export TfaModel to SBML encoded file and to spreadsheet format.
+
+        .. code-block:: python
+
+            if tfa_model.validate():
+                tfa_model.export('iML1515_TFA.xml')
+                tfa_model.export('iML1515_TFA.xlsx')
+
+        :param str fname: filename with extension '.xml' or '.xlsx'
+        :return: success status
         :rtype: bool
         """
         return self.model.export(fname)
 
-    def check_compatible_thermo_data(self, sid, metabolite_td_data):
+    def _check_compatible_thermo_data(self, sid, metabolite_td_data):
         """Check compatibility between the model species corresponding thermo data record.
 
         For the check to pass, the TD record must have a valid ∆Gf° and be error free.
@@ -252,6 +346,7 @@ class TfaModel:
         be compatible with the formula and chemical charge configured in the TD record. The number
         of protons and corresponding charges are allowed to differ.
 
+        :meta private:
         :param str sid: species id in the model
         :param dict metabolite_td_data: metabolite record extracted from TD data
         :return: success/failure of test
@@ -287,7 +382,7 @@ class TfaModel:
 
         We make used of SEED refs in species model annotation and species name.
         We configure 'td_sid' attribute on model species to corresponding TD species,
-          alternatively it is set to None
+          alternatively, it is set to None
         only select TD species, that contain a valid formula
 
         Assignment of a td_sid is done in steps:
@@ -304,13 +399,11 @@ class TfaModel:
             with the TD data record. Only exception is a difference in protonation state and corresponding
             charge.
 
-        If no valid TD record can be found fo a model species, reactions using the species cannot
+        If no valid TD record can be found for a model species, reactions using the species cannot
         be configured with TD constraints.
 
-        :param all_td_data: reference to all TD metabolite records in the TD database
-        :type all_td_data: dict (key: td_sid / str, val: dict with TD data)
-        :param modify_td_ids: mapping of metabolite ids to TD species id (seed compound id)
-        :type modify_td_ids: dict (key: metabolite id / str, value: td_sid / str)
+        :param dict(str, dict) all_td_data: reference to all TD metabolite records in the TD database
+        :param dict(str, str) modify_td_ids: mapping of metabolite ids to TD species id (seed compound id)
         :return: TD species ids that have been selected for the species in the model
         :rtype: set(str)
         """
@@ -345,7 +438,7 @@ class TfaModel:
 
                 # check that formula and charges are compatible
                 if selected_td_sid is not None:
-                    if not self.check_compatible_thermo_data(sid, all_td_data[selected_td_sid]):
+                    if not self._check_compatible_thermo_data(sid, all_td_data[selected_td_sid]):
                         selected_td_sid = None
                 s.modify_attribute('td_sid', selected_td_sid)
                 if selected_td_sid is not None:
@@ -357,7 +450,7 @@ class TfaModel:
         """Load TD database and configure TD data based on TFA configuration file.
 
         We only extract records from the TD database that relate to our model.
-        TD database must be formated as per TD database used by pyTFA (Salvy et al., 2019), see
+        TD database must be formatted as per TD database used by pyTFA (Salvy et al., 2019), see
         https://github.com/EPFL-LCSB/pytfa/raw/refs/heads/master/data/thermo_data.thermodb
 
         - Create td_compartments based on TFA configuration table 'td_compartments'.
@@ -372,8 +465,7 @@ class TfaModel:
         - create TD species for species in the model where a valid TD record has been found
 
         :param str thermo_db_fname: file name of thermodynamics database
-        :param tfa_params: configuration tables from TFA configuration file
-        :type tfa_params: dict of pandas.DataFrames
+        :param dict(str, pandas.DataFrame) tfa_params: configuration tables from TFA configuration file
         :return:
         """
         # TD configuration of compartments
@@ -508,15 +600,15 @@ class TfaModel:
         Charge transport across multiple compartments is supported.
 
         We use the charges configured for model species (i.e. biochemical reactants),
-        as we assume that a specific charged chemical species from within the pseudoisomer group
+        as we assume that a specific charged chemical species from within the pseudo isomer group
         is transported and not a mixture of chemical species.
 
-        We return total postive charge transfer from source to destination compartments.
+        We return total positive charge transfer from source to destination compartments.
 
         :param r: model reaction
-        :type r: :class:`f2xba.xba_model.sbml_reaction.SbmlReaction`
-        :return: direction of
-        :rtype: dict (key: src_cid -> dest_cid / str, val: charge amount
+        :type r: :class:`SbmlReaction`
+        :return: value and direction of charge transport
+        :rtype: dict (str, flaot)
         """
         charge_balance = {cid: 0.0 for cid in r.compartment.split('-')}
         if len(charge_balance) == 1:
@@ -550,7 +642,7 @@ class TfaModel:
     def _get_std_transformed_gibbs_reaction(self, r):
         """Calculate standard transformed Gibbs energy of reaction
 
-        both for reactions in single compartent and transport reactions
+        both for reactions in single compartment and transport reactions
 
         Equation 4.4-2 in Alberty's book, 2003:
             ∆rG'˚ = ∑ v_i ∆fG'˚
@@ -569,7 +661,7 @@ class TfaModel:
                 - charge transport spanning several compartments is considered
 
         :param r: model reaction
-        :type r: :class:`f2xba.xba_model.sbml_reaction.SbmlReaction`
+        :type r: :class:`SbmlReaction`
         :return: standard transformed Gibbs energy for reactions (or None for invalid)
         :rtype: float
         """
@@ -603,7 +695,7 @@ class TfaModel:
         drg_error == sqrt(∑ (cue_est_error * stoic)^2)
 
         :param r: model reaction
-        :type r: :class:`f2xba.xba_model.sbml_reaction.SbmlReaction`
+        :type r: :class:`SbmlReaction`
         :return: estimated error relating to species ∆Gf (or 1e7 for invalid)
         :tupe: float
         """
@@ -620,7 +712,6 @@ class TfaModel:
         cues_unbalance = {cue_id: balance for cue_id, balance in cues_balance.items() if balance != 0.0}
 
         total_cues_dg_error = 0.0  # pyTFA calculation sqrt of sum of squared errors
-        # TODO use sum of errors instead of sqrt of sum of squared errors
         # sum_cue_dfg_error_sum = 0.0  # alternative
         for cue_id, cues_stoic in cues_unbalance.items():
             cue_data = self.td_cues[cue_id]
@@ -649,10 +740,10 @@ class TfaModel:
                 print(f'{rid}, {td_rdata.kind} not supported for ∆Gr calculation')
 
     def _add_tfa_constraints(self):
-        """Add TFA constraints to model as pseudio species.
+        """Add TFA constraints to model as pseudo species.
 
         Note: irreversible reactions with TD data get not split
-        and some constrations are not required
+        and some constraints are not required
         """
         constr2name_rev = {pf.C_DRG_: "∆rG'",
                            pf.C_SU_: 'simultaneous use',
@@ -805,7 +896,7 @@ class TfaModel:
         - C_DRG_<rid>: - V_DRG_<rid> + V_DRG0_<rid> + RT ∑ v_i * V_LC_<sid>_i = 0
 
         Protons (H) are not included in transformed Gibbs energy calculations, as
-        proton concentration is hold constant by the compartment pH.
+        proton concentration is held constant by the compartment pH.
         Water (H2O) is generally not included in reaction quotient for reaction in diluted
         aqueous solutions.
         """
@@ -982,7 +1073,7 @@ class TfaModel:
         A summary of updated values is returned
 
         :param fluxes: CobraPy fluxes from solution object
-        :type fluxes: pandas.Series or dict (key: rid / str, val: flux / float)
+        :type fluxes: pandas.Series or dict(str, float)
         :return: summary of ∆Gr˚ bound updates performed
         :rtype: dict
         """
@@ -1035,67 +1126,3 @@ class TfaModel:
 
         old_obj_id = self.td_params['objective_id']
         self.model.objectives[old_obj_id].modify_attribute('active', True)
-
-    # ADDING DISPLACEMENT VARIABLES AND CONSTRAINTS
-    def _add_displacement_constraints(self):
-        """Add displacement constraints wrt to ∆Gr.
-
-        based on pyTFA
-
-        Adding new species (constraints) to the model
-        """
-        constr2name = {'C_DC': "∆rG' displacement constraint"}
-
-        pseudo_sids = {}
-        for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.add_td_constraints:
-                ridx = re.sub(f'^{pf.R_}', '', rid)
-                for constr, name in constr2name.items():
-                    pseudo_sids[f'{constr}_{ridx}'] = [f'{name} for {rid}', 'c', False, False, False]
-
-        cols = ['name', 'compartment', 'hasOnlySubstanceUnits', 'boundaryCondition', 'constant']
-        df_add_species = pd.DataFrame(pseudo_sids.values(), index=list(pseudo_sids), columns=cols)
-        print(f"{len(df_add_species):4d} ∆rG' displacements constraints to add")
-        self.model.add_species(df_add_species)
-
-    def _add_displacement_variables(self):
-        """Add variables for thermodynamic displacement.
-
-        based on pyTFA, see Salvy et al. 2018
-
-        Thermodynamic displacement variables V_LNG_<rid> hold information how far
-        the transformed Gibbs energy of reaction is away from equilibrium.
-            V_LNG_<rid> = V_DRG_<rid> / RT
-        exp(V_LNG_<rid>) give a factor that multiplied with a product concentration
-        results in equilibrium.
-
-        The equation is implemented by a displacement constraint C_DC_<rid>
-            C_DC_<rid>: - V_DRG_<rid> / RT + V_LNG_<rid> = 0
-        """
-        var2name = {'LNG': 'thermodynamic displacement'}
-
-        lb_pid = self.model.get_fbc_bnd_pid(-MAX_DRG, 'fbc_dimensionless', 'displacement_lb', reuse=False)
-        ub_pid = self.model.get_fbc_bnd_pid(MAX_DRG, 'fbc_dimensionless', 'displacement_ub', reuse=False)
-
-        pseudo_rids = {}
-        for rid, td_rdata in self.td_reactions.items():
-            if td_rdata.add_td_constraints:
-                ridx = re.sub(f'^{pf.R_}', '', rid)
-                pseudo_rids[pf.V_LNG_ + ridx] = [f'{var2name["LNG"]} for {ridx}', f'-> {pf.C_DC_}{ridx}',
-                                                 lb_pid, ub_pid, 'td_variable', 'continuous']
-
-        cols = ['name', 'reactionString', 'fbcLowerFluxBound', 'fbcUpperFluxBound', 'kind', 'notes']
-        df_add_rids = pd.DataFrame(pseudo_rids.values(), index=list(pseudo_rids), columns=cols)
-        print(f'{len(df_add_rids):4d} thermodynamic displacement variables to add')
-        self.model.add_reactions(df_add_rids)
-
-        # connect DG variables to displacement constraints
-        modify_attrs = {}
-        for rid, td_rdata in self.td_reactions.items():
-            ridx = re.sub(f'^{pf.R_}', '', rid)
-            modify_attrs[pf.V_DRG_ + ridx] = ['reaction', 'reactant', f'{pf.C_DC_}{ridx}={1.0/self.rt}']
-
-        cols = ['component', 'attribute', 'value']
-        df_modify_attrs = pd.DataFrame(modify_attrs.values(), index=list(modify_attrs), columns=cols)
-        print(f"{len(df_modify_attrs):4d} ∆rG' variables coupled to thermodynamic displacement constraints")
-        self.model.modify_attributes(df_modify_attrs, 'reaction')

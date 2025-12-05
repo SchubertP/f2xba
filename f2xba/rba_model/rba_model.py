@@ -24,12 +24,23 @@ from ..utils.mapping_utils import valid_sbml_sid, load_parameter_file
 from .initital_assignments import InitialAssignments
 import f2xba.prefixes as pf
 
-DEFAULT_GROWTH_RATE = 1.0         # h-1 (used to set initial values for growth rate dependent parameters)
-DEFAULT_ENZ_SATURATION = 0.5      # dimensionless, is overwritten in RBA Parameters Excel document
-DEFAULT_MICHAELIS_CONSTANT = 1.0  # mmol/l
-MAX_ENZ_CONC = 10                 # mmol/gDW
-MAX_MM_PROCESSING_FLUX = 10       # in µmol per gDW per h
-MAX_DENSITY_SLACK = 10            # maximum denisty slack in mmol AA per gDW
+DEFAULT_GROWTH_RATE = 1.0
+"""Growth rate used to configure growth rate dependent parameters in the SBML model."""
+
+DEFAULT_ENZ_SATURATION = 0.5
+"""Default enzyme saturation level, unless adjusted by `avg_enz_sat` in table `general`."""
+
+DEFAULT_MICHAELIS_CONSTANT = 1.0
+"""Default Michaelis constant KM for medium uptake reactions in mmol/l"""
+
+MAX_ENZ_CONC = 10
+"""Upper bound enzyme concentration in mmol/gDW"""
+
+MAX_MM_PROCESSING_FLUX = 10
+"""Upper bound for macromolecular synthesis and degradation fluxes in µmol/gDWh"""
+
+MAX_DENSITY_SLACK = 10
+"""Upper bound on compartmental density in mmolAA/gDW"""
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
 XML_REACTION_NS = 'http://www.hhu.de/ccb/rba/reaction/ns'
@@ -40,19 +51,28 @@ components = {'parameters', 'dna', 'rnas', 'proteins', 'metabolism',
 
 
 class RbaModel:
-    """Extend a XbaModel to a resource balance constraint model.
+    """Create a resource balance constraint model (RBA or TRBA) by extending a XbaModel instance.
 
-    The implementation of RBA is based on the Python package RbaPy (Bulović et al., 2019).
+    RBA mplementation is based on the Python package RbaPy (Bulović et al., 2019).
+
+    Ref: Bulović, A., Fischer, S., Dinh, M., Golib, F., Liebermeister, W., Poirier, C., Tournier,
+    L., Klipp, E., Fromion, V., & Goelzer, A. (2019). Automated generation of bacterial resource
+    allocation models. Metabolic Engineering, 55, 12-22.
+    https://doi.org/https://doi.org/10.1016/j.ymben.2019.06.001
+
+    Example: Create a RBA model by extending an existing genome scale metabolic model.
+    The spreadsheet files `xba_parameters.xlsx` and `rba_parameters.xlsx`
+    contain configuration data. See tutorials.
 
     .. code-block:: python
 
-        xba_model = XbaModel('iJO1366.xml')
-        xba_model.configure('iJO1366_RBA_xba_parameters.xlsx')
+        xba_model = XbaModel('iML1515.xml')
+        xba_model.configure('xba_parameters.xlsx')
 
         rba_model = RbaModel(xba_model)
-        rba_model.configure('iJO1366_RBA_rba_parameters.xlsx')
+        rba_model.configure('rba_parameters.xlsx')
         if rba_model.validate():
-            rba_model.export('iJO1366_RBA.xml')
+            rba_model.export('iML1515_RBA.xml')
     """
 
     def __init__(self, xba_model):
@@ -62,37 +82,65 @@ class RbaModel:
         :type xba_model: :class:`f2xba.XbaModel`
         """
         self.model = xba_model
+        """Reference to the XbaModel instance."""
+
         self.dna = RbaMacromolecules('dna')
+        """Reference to DNA macromolecule configuration."""
+
         self.rnas = RbaMacromolecules('rna')
+        """Reference to RNA macromolecule configurations."""
+
         self.proteins = RbaMacromolecules('protein')
+        """Reference to protein macromolecule configurations."""
+
         self.metabolism = RbaMetabolism()
+        """Reference to RBA compartment, species and reaction configurations."""
+
         self.parameters = RbaParameters()
+        """Reference to RBA function configurations."""
+
         self.processes = RbaProcesses()
+        """Reference to RBA processes configurations."""
+
         self.densities = RbaDensities()
+        """Reference to RBA compartment density configurations."""
+
         self.targets = RbaTargets()
+        """Reference to RBA targets configurations."""
+
         self.enzymes = RbaEnzymes()
+        """Reference to RBA enzyme configurations."""
+
         self.medium = RbaMedium()
+        """Reference to RBA medium configuration."""
+
         self.cid_mappings = {}
+        """Map compartment identifiers to compartment specific roles."""
+
         self.mmid2mm = {}
+        """Map macromolecules to configuration data."""
+
         self.initial_assignments = InitialAssignments(self.parameters)
+        """Reference to initial assignments used in the SBML model."""
+
         self.parameter_values = {}
+        """Parameter values configured in the model."""
+
         self.avg_enz_sat = None
 
-    def get_dummy_translation_targets(self, rba_params):
-        """get translation targets for dummy proteins
+    def _get_dummy_translation_targets(self, rba_params):
+        """Extract translation targets for dummy proteins.
 
-        extract translation targets from rba_params['compartments']
+        Extract translation targets from rba_params['compartments'] and
         return target data for dummy protein translation targets
 
-        :param rba_params: rba configuration data loaded from file
-        :type rba_params: dict of dataframes
-        :return: Target configuration data related to dummy proteins
+        :param dict(str, pandas.DataFrame) rba_params: rba configuration data loaded from file
+        :return: target configuration data related to dummy proteins
         :rtype: pandas.DataFrame
         """
         df_c_data = rba_params['compartments']
         dummy_proteins = self.cid_mappings['dummy_proteins']
 
-        # create a dataframe to use as parameters to add
         df = df_c_data.loc[dummy_proteins.values()]
         df.rename(columns=lambda x: re.sub(r'^translation_', '', x), inplace=True)
         df['target_group'] = 'translation_targets'
@@ -106,10 +154,10 @@ class RbaModel:
         df.set_index('target_group', inplace=True)
         return df
 
-    def add_dummy_proteins(self):
+    def _add_dummy_proteins(self):
         """Add dummy proteins to different compartments based on configuration.
 
-        use average protein composition in terms of amino acids
+        Use average protein composition in terms of amino acids.
         """
         dummy_proteins = self.cid_mappings['dummy_proteins']
 
@@ -122,7 +170,7 @@ class RbaModel:
         avg_aa_len = total_count / len(self.model.proteins)
         composition = {aa: avg_aa_len * count / total_count for aa, count in aa_count.items()}
 
-        # Amino acids with low frequency (here, selenocystein), set stoic coef to zero
+        # Amino acids with low frequency (here, selenocysteine), set stoic coefficient to zero
         for aa in composition:
             if composition[aa] < 0.01:
                 composition[aa] = 0.0
@@ -138,15 +186,15 @@ class RbaModel:
         print(f'{len(dummy_proteins):4d} dummy proteins added')
 
     @staticmethod
-    def get_cid_mappings(rba_params):
-        """get mapping of compartment ids.
+    def _get_cid_mappings(rba_params):
+        """Extract specific compartment functions.
 
         Depending on 'type' column in sheet 'compartments'
         - 'cytoplasm': default compartment for unassigned gene products, e.g. rRNA proteins
         - 'uptake': compartment with transporters for medium uptake, e.g. 'outer_membrane'
         - 'medium': compartment in which species for uptake are located, e.g. 'external'
 
-        Mapping of xba model compartment ids to RBA compartment names
+        Mapping of XbaModel compartment ids to RBA compartment names
         Each reaction is connected to a compartment (based on its substrates)
         Transport reactions are connected to a compartment composed of a sorted concatenation
         of substrate cids, e.g. 'c-p'.
@@ -164,8 +212,7 @@ class RbaModel:
                'dummy_proteins': {'dummy_protein_c': 'c', 'dummy_protein_e': 'e', 'dummy_protein_p': 'p',
                'dummy_protein_im': 'im', 'dummy_protein_om': 'om'}}
 
-        :param rba_params: RBA specific parameters loaded from parameter Excel spreadsheet
-        :type rba_params: dict of pandas.DataFrames
+        :param dict(str, pandas.DataFrame) rba_params: RBA specific parameters loaded from parameter Excel spreadsheet
         :return: model specific compartment id mappings
         :rtype: dict
         """
@@ -205,22 +252,21 @@ class RbaModel:
                         cid_mappings['dummy_proteins'][p_name] = cid
         return cid_mappings
 
-    def prepare_xba_model(self, rba_params):
-        """Prepare XBA model for conversion to RBA.
+    def _prepare_xba_model(self, rba_params):
+        """Prepare XbaModel instance for conversion to RBA.
 
         extract data from:
             rba_params['machineries']
             rba_params['compartments']
 
-        Add membrane compartment to the XBA model based on 'compartments' sheet
-        Add gene products required for RBA machineries based on 'machineries' sheet
-        Create relevant proteins in the XBA model and map cofactors
-        Split reactions into (reversible) iso-reactions, each catalyzed by a single enzyme
+        Add membrane compartment to the XbaModel based on 'compartments' sheet.
+        Add gene products required for RBA machineries based on 'machineries' sheet.
+        Create relevant proteins in the XbaModel instance and map cofactors.
+        Split reactions into (reversible) iso-reactions, each catalyzed by a single enzyme.
 
-        :param rba_params: RBA specific parameters loaded from parameter Excel spreadsheet
-        :type rba_params: dict of pandas.DataFrames
+        :param dict(str, pandas.DataFrame) rba_params: RBA specific parameters loaded from parameter spreadsheet
         """
-        # add (membrane) compartments to the xba model
+        # add (membrane) compartments to the XbaModel
         cs_config = {}
         for cid, row in rba_params['compartments'].iterrows():
             if cid not in self.model.compartments:
@@ -252,20 +298,33 @@ class RbaModel:
             if count > 0:
                 print(f'{count:4d} cofactor(s) mapped to species ids for added protein')
 
-        # split reactions into (reversible) isoreactions
+        # split reactions into (reversible) iso-reactions
         n_r = len(self.model.reactions)
         self.model.add_isoenzyme_reactions()
         n_isor = len(self.model.reactions)
-        print(f'{n_r} reactions -> {n_isor} isoreactions, including pseudo reactions')
+        print(f'{n_r} reactions -> {n_isor} iso-reactions, including pseudo reactions')
 
     def configure(self, fname):
-        """Configuration with RBA configuration data.
+        """Configure the RbaModel instance with information provided in the RBA configuration file.
 
-        Accepted tables: 'general', 'trna2locus', 'coenzymes', 'compartments', 'targets',
-        'functions', 'processing_maps', 'processes', 'machineries'
+        The RBA configuration spreadsheet must contain following sheets:
+        'general', 'trna2locus', 'compartments', 'targets', 'functions', 'processing_maps',
+        'processes' and 'machineries'. The sheet 'coenzymes' is optional.
+
+        Example: Create a RBA model by extending an existing genome scale metabolic model.
+        The spreadsheet files `xba_parameters.xlsx` and `rba_parameters.xlsx`
+        contain configuration data. See tutorials.
+
+        .. code-block:: python
+
+            xba_model = XbaModel('iML1515.xml')
+            xba_model.configure('xba_parameters.xlsx')
+
+            rba_model = RbaModel(xba_model)
+            rba_model.configure('rba_parameters.xlsx')
 
         :param str fname: filename of RBA configuration file (.xlsx)
-        :return: success
+        :return: success status
         :rtype: bool
         """
         sheet_names = ['general', 'trna2locus', 'coenzymes', 'compartments', 'targets',
@@ -278,19 +337,19 @@ class RbaModel:
             print(f'missing required tables {missing_sheets}')
             raise ValueError
 
-        if not self.check_rba_params_functions(rba_params):
+        if not self._check_rba_params_functions(rba_params):
             print('ERRORs in RBA Parameter file')
             return False
-        if not self.check_rba_params_labels(rba_params):
+        if not self._check_rba_params_labels(rba_params):
             print('ERRORs in RBA Parameter file')
             return False
 
         general_params = rba_params['general']['value'].to_dict()
         self.avg_enz_sat = general_params.get('avg_enz_sat', DEFAULT_ENZ_SATURATION)
 
-        self.prepare_xba_model(rba_params)
+        self._prepare_xba_model(rba_params)
 
-        self.cid_mappings = self.get_cid_mappings(rba_params)
+        self.cid_mappings = self._get_cid_mappings(rba_params)
         # check compartment mapping
         used_rcids = set()
         for p in self.model.proteins.values():
@@ -307,7 +366,7 @@ class RbaModel:
         self.parameters.from_xba(rba_params)
         self.densities.from_xba(rba_params, self.parameters)
         self.targets.from_xba(rba_params, self.model, self.parameters)
-        df_dummy_targets = self.get_dummy_translation_targets(rba_params)
+        df_dummy_targets = self._get_dummy_translation_targets(rba_params)
         self.targets.from_xba({'targets': df_dummy_targets}, self.model, self.parameters)
         self.metabolism.from_xba(rba_params, self.model)
 
@@ -319,7 +378,7 @@ class RbaModel:
         if 'rna' in macromolecules:
             self.rnas.from_xba(rba_params, self.model, self.cid_mappings)
         self.proteins.from_xba(rba_params, self.model, self.cid_mappings)
-        self.add_dummy_proteins()
+        self._add_dummy_proteins()
         self.enzymes.from_xba(self.avg_enz_sat, self.model, self.parameters, self.cid_mappings, self.medium,
                               DEFAULT_MICHAELIS_CONSTANT)
         self.processes.from_xba(rba_params, self)
@@ -327,25 +386,22 @@ class RbaModel:
         print(f'{len(self.parameters.functions):4d} functions, {len(self.parameters.aggregates):4d} aggregates')
         print(f'>>> RBA model created')
 
-        self.update_xba_model()
+        self._update_xba_model()
         return True
 
-    def update_xba_model(self):
-        """Based on configured RBA model implement a corresponding XBA model.
+    def _update_xba_model(self):
+        """Based on configured RBA model update the corresponding XbaModel.
 
-        RBA model will be exported in RBA proprietary format.
-        XBA model will be exported in standardized SBML formatt.
+        RbaModel can be exported in RBA proprietary format.
+        XbaModel can be exported in standardized SBML format.
 
         values of growth_rate and configured medium are used to calculate
         function values, like enzyme efficiencies, enzyme/process concentration
         requirements, targets
 
-        Note: some xba model updates already performed in prepare_xba_model()
-
-        Note: this is currently implemented as an add-on to the RBA modelling.
-              Alternatively, we could update XBA model alongside RBA model creation.
+        Note: some XbaModel updates already performed in _prepare_xba_model()
         """
-        print('update XBA model with RBA parameters')
+        print('update XbaModel with RBA parameters')
 
         growth_rate = DEFAULT_GROWTH_RATE
         protect_ids = set()
@@ -415,7 +471,7 @@ class RbaModel:
         for pid, p_data in add_params.items():
             self.model.add_parameter(pid, p_data)
 
-        # modify some model attributs and create L3V2 SBML model -
+        # modify some model attributes and create L3V2 SBML model -
         #  set fbcStrict to False, which is required to supports immediate assignments
         self.model.model_attrs['fbcStrict'] = False
         self.model.model_attrs['id'] += f'_RBA'
@@ -424,17 +480,17 @@ class RbaModel:
         self.model.sbml_container['level'] = 3
         self.model.sbml_container['version'] = 2
 
-        print('XBA model updated with RBA configuration')
+        print('XbaModel updated with RBA configuration')
 
     @staticmethod
-    def check_rba_params_functions(rba_params):
-        """Check functions used in RBA Parameters file
+    def _check_rba_params_functions(rba_params):
+        """Check functions used in RBA parameters file.
 
         Functions used in aggregates of 'compartments', 'targets'
         of 'processes' sheets must also be defined in 'functions'
 
-        :param rba_params:
-        :return: success
+        :param dict(str, pandas.DataFrame) rba_params:
+        :return: success status
         :rtype: bool
         """
         ok_flag = True
@@ -483,14 +539,14 @@ class RbaModel:
                 print(f'{fid:35s} function defined, but not used')
         return ok_flag
 
-    def check_rba_params_labels(self, rba_params):
+    def _check_rba_params_labels(self, rba_params):
         """Check gene labels used in RBA Parameters file.
 
         Labels used 'trna2locus' and 'machineries' must exist
-        in model uniprot data or ncbi-data (for rnas)
+        in model UniProt data or NCBI data (for rnas)
 
-        :param rba_params:
-        :return: success/failure
+        :param dict(str, pandas.DataFrame) rba_params:
+        :return: success status
         :rtype: bool
         """
         ok_flag = True
@@ -505,7 +561,7 @@ class RbaModel:
                 if row.get('set', '') == 'protein':
                     if (row['label'] not in self.model.uniprot_data.locus2uid and
                             row['label'] not in self.model.ncbi_data.locus2protein):
-                        print(f"{row['label']:35s} not found in uniprot nor ncbi data")
+                        print(f"{row['label']:35s} not found in UniProt nor NCBI data")
                         ok_flag = False
                 elif row.get('set', '') == 'rna':
                     if row['label'] not in self.model.ncbi_data.locus2record:
@@ -514,11 +570,11 @@ class RbaModel:
         return ok_flag
 
     def _xba_add_macromolecule_species(self):
-        """Add macromolecules to XBA model species (proteins, dna, rna)
+        """Add macromolecules to XbaModel species (proteins, dna, rna).
 
         Constraint ID: 'MM_<mmid>
 
-        Macromolecules (except of small macromolecules, i.e. single dna, mrna single components)
+        Macromolecules (except for small macromolecules, i.e. single dna, mrna single components)
         are scaled at a fixed factor of 1000, i.e. µmol instead of mmol (improves LP problem) for large
         macromolecules, i.e. > 10 amino acids weight.
         The scale factor is set on the macromolecule instance.
@@ -526,7 +582,7 @@ class RbaModel:
         MIRIAM annotation and Uniport id is added
         XML annotation with equivalent amino acid weight and scale factor is added
 
-        Note: production / degradation reaction and target concentration variables are scalled accordingly.
+        Note: production / degradation reaction and target concentration variables are scaled accordingly.
         """
         xml_prefix = f'ns_uri={XML_SPECIES_NS}, prefix=rba, token=macromolecule'
 
@@ -535,7 +591,7 @@ class RbaModel:
         for mm_id, mm in self.proteins.macromolecules.items():
             mm.sid = pf.MM_ + valid_sbml_sid(mm_id)
             mm.scale = 1000.0 if mm.weight > 10 else 1.0
-            # for indiviually modeled proteins (Uniprot data is collected)
+            # for indiviually modeled proteins (UniProt data is collected)
             if mm_id in self.model.locus2uid:
                 uid = self.model.locus2uid[mm_id]
                 name = f'macromolecule {mm_id} ({uid})'
@@ -576,9 +632,9 @@ class RbaModel:
         self.model.add_species(df_add_species)
 
     def _xba_add_rba_constraints(self):
-        """Add rba constraints to XBA model.
+        """Add RBA constraints to XbaModel instance.
 
-        constrains are added as pseudo species (similare to mass balance constraints of metabolites)
+        constrains are added as pseudo species (similar to mass balance constraints of metabolites)
         'C_PMC_<prod_id>: process machine capacities
         'C_EF_<eid>: forward enzyme capacities
         'C_ER_<eid>: reverse enzyme capacities
@@ -618,7 +674,7 @@ class RbaModel:
         self.model.add_species(df_add_species)
 
     def _xba_couple_reactions(self):
-        """Couple reactions to Enzyme Efficiencies.
+        """Couple reactions to enzyme efficiencies.
 
         i.e. respective forward enzyme efficiency added as product to enzyme catalyzed reaction
              respective reverse enzyme efficiency added as substrate to reversible enzyme catalyzed reaction
@@ -654,11 +710,11 @@ class RbaModel:
     def _xba_add_macromolecule_processing_reactions(self):
         """Create production and degradation reactions for macromolecules.
 
-        Here, macromolecule production/degradation reactions are implement in detail, whereas these
+        Here, macromolecule production/degradation reactions are implemented in detail, whereas these
         are lumped in the original RBA formulation, making it difficult to follow the implementation in RBApy.
 
         Though this will add more variables to the linear problem, the advantages of separating the
-        individiual cost terms (to better understand the underlying mechanism) could improve
+        individual cost terms (to better understand the underlying mechanism) could improve
         understanding of the model construction.
 
         for specified macromolecules we add up production requirements and create a 'R_PROC_<mm_id> reaction
@@ -689,7 +745,7 @@ class RbaModel:
         degr_reactions = {}
         for mm_id in sorted(self.mmid2mm):
             mm = self.mmid2mm[mm_id]
-            # seperately check production processes and degradation processes
+            # separately check production processes and degradation processes
             for proc_type, mm2maps in {'PROD': mm_productions, 'DEGR': mm_degradations}.items():
                 reactants = defaultdict(float)
                 products = defaultdict(float)
@@ -716,7 +772,7 @@ class RbaModel:
                                 for sid, s_stoic in comp_proc.get('products', {}).items():
                                     products[sid] += comp_stoic * float(s_stoic)/mm.scale
 
-                        # processing cost, wrt. processing machine capacity, if any
+                        # processing cost, wrt processing machine capacity, if any
                         if pm.constr_id:
                             pm_costs = 0.0
                             for comp_id, comp_stoic in mm.composition.items():
@@ -760,12 +816,11 @@ class RbaModel:
         self.model.add_reactions(df_add_rids)
 
     def _xba_get_parameter_values(self, growth_rate):
-        """calculate parameter values based on given growth rate.
+        """Calculate parameter values based on given growth rate.
 
-        :param growth_rate: growth rate in h-1 for which to determine values
-        :type growth_rate: float
+        :param float growth_rate: growth rate in h-1 for which to determine values
         :return: parameter values determined based on params
-        :rtype: dict (key: function/aggregate id / str, val value / float)
+        :rtype: dict(str, float)
         """
         medium_cid = self.cid_mappings['medium_cid']
         mid2sid = {}
@@ -782,10 +837,9 @@ class RbaModel:
     def _couple_weights(self, srefs):
         """Calculate enzymes/process machines weight and couple to density constraints.
 
-        :param srefs: species reference with reactants and stoic coefficient of composition
-        :type srefs: dict (key: mmid / str, val: stoic / float)
+        :param dict(str, float) srefs: species reference with reactants and stoic coefficient of composition
         :return: density constraints affected by weight
-        :rtype: dict: (key: density constraint id / str, val: stoic / float)
+        :rtype: dict(str, float)
         """
         weights = defaultdict(float)
         for comp_id, stoic in srefs.items():
@@ -808,26 +862,23 @@ class RbaModel:
 
         These variables are in units of µmol/gDW. Coefficients need to be scaled
 
-        RBA macromolecue ids are converted to respective XBA species id
-        Rectants/products are based on stoichiometry of machinery composition
-        Rectants/products are diluted as per growth rate
-        Rectants/products are scaled to match units of concentration variable (µmol_per_gDW)
-        As stoichiometry is based on growth rate, data for initial assigment is collected
-        as well as sprecies reference ids
+        RBA macromolecule ids are converted to respective XbaModel species id
+        Reactants/products are based on stoichiometry of machinery composition
+        Reactants/products are diluted as per growth rate
+        Reactants/products are scaled to match units of concentration variable (µmol_per_gDW)
+        As stoichiometry is based on growth rate, data for initial assignment is collected
+        as well as species reference ids
 
         SBML Validation:
           When the value of the attribute variable in an InitialAssignment object refers to a SpeciesReference object,
           the unit of measurement associated with the InitialAssignment's math expression should be consistent with
           the unit of stoichiometry, that is, dimensionless.
 
-        :param var_id: id of variable, e.g. 'V_EC_<eid>', required for sref id construction
-        :type var_id: str
-        :param growth_rate: growth rate in h-1, dilute molecule accordingly
-        :type growth_rate: float
-        :param composition_srefs: reactants or product species refs
-        :type composition_srefs: dict (key: sid or macromolecule id, value: stoichiometry / float)
+        :param str var_id: id of variable, e.g. 'V_EC_<eid>', required for sref id construction
+        :param float growth_rate: growth rate in h-1, dilute molecule accordingly
+        :param dict(str, float) composition_srefs: reactants or product species refs
         :return: srefs with stoichiometry
-        :rtype: dict
+        :rtype: dict(str, float)
         """
         dilution_srefs = {}
         for m_sid, m_stoic in composition_srefs.items():
@@ -847,7 +898,7 @@ class RbaModel:
         return dilution_srefs
 
     def _xba_add_enzyme_concentration_variables(self, growth_rate):
-        """Add enzyme concentration variables.
+        """Add enzyme concentration variables to the XbaModel instance.
 
         Enzyme concentration variables: V_EC_<ridx>
         Couple variables to macromolecule mass balances.
@@ -913,7 +964,7 @@ class RbaModel:
         self.model.add_reactions(df_add_rids)
 
     def _xba_add_pm_concentration_variables(self, growth_rate):
-        """Add process machine concentration variables.
+        """Add process machine concentration variables to the XbaModel instance.
 
         see _xba_add_enzyme_concentration_variables
         Process machinery concentration variables: V_PMC_<pm_id>
@@ -979,7 +1030,7 @@ class RbaModel:
         self.model.add_reactions(df_add_rids)
 
     def _xba_add_macromolecule_target_conc_variables(self, growth_rate):
-        """Add variables for macromolecule target concentrations to XBA model.        :
+        """Add variables for macromolecule target concentrations to the XbaModel instance.
 
         V_TMMC_<mid>: For each target concentration of a macromolecule a separate variable is introduced.
         Units: µmol/gDW or mmol/gDW
@@ -1032,7 +1083,7 @@ class RbaModel:
         self.model.add_reactions(df_add_rids)
 
     def _xba_add_metabolite_target_conc_variables(self, growth_rate):
-        """Add variables for metabolite (small molecules) target concentrations to XBA model.        :
+        """Add variables for metabolite (small molecules) target concentrations to the XbaModel instance.
 
         V_TSMC: Target concentrations for small molecules are collected in a single variable
         Unit: µmol/gDW
@@ -1068,13 +1119,13 @@ class RbaModel:
         self.model.add_reactions(df_add_rids)
 
     def _xba_add_target_density_variables(self):
-        """Add variables for target compartment density and slack variable to XBA model.        :
+        """Add variables for target compartment density and slack variable to XbaModel.
 
         V_TCD: Target density concentrations
         Units: mmol AA/gDW
         The variable is fixed at 1.
         Reactant coefficients are the target densities for the various compartments
-        Target concentrations that depend on growth rate need to be updated during bisection aptimization
+        Target concentrations that depend on growth rate need to be updated during bisection optimization
 
         V_SLACK_<cid>: positive slack on compartment density constraints
         Units: mmol AA/gDW
@@ -1112,17 +1163,17 @@ class RbaModel:
         self.model.add_reactions(df_add_rids)
 
     def _xba_add_flux_targets(self):
-        """Add RBA reaction/production/degradation flux targets to XBA model.
+        """Add RBA reaction/production/degradation flux targets to the XbaModel instance.
 
         Such targets are implemented as reaction/variable bounds (fbc_bounds)
 
         reactionFlux targets are applied to model reactions
-        productionFLux and degradatationFlux are appliedd on macromolecule production/degradation reactions.
+        productionFLux and degradatationFlux are applied on macromolecule production/degradation reactions.
         Note: a productionFlux target is implemented as a lower bound.
 
         reaction/variable bound parameters are created with 'correct' units.
 
-        We also collect the flux bounds depending on growth rate. So they can be applied during optimization.
+        We also collect the flux bounds depending on growth rate, to be applied during optimization.
         """
         non_const_fids = defaultdict(dict)
 
@@ -1179,13 +1230,13 @@ class RbaModel:
         self.model.modify_attributes(df_modify_attrs, 'reaction')
 
     def _xba_set_dummy_fba_objective(self):
-        """Set FBA objective for RBA optimization.
+        """Add optimization objective to the XbaModel instance.
 
         RBA is an LP feasibility problem where, where coefficients and bounds are reconfigured
         depending on a selected growth rate.
-        The optmization algorithm of RBA selects for the highest growth rate, which still
-        results in a feasible problem. FBA objective is not relevenat, though
-        in the contexts of FBA optimization (here, just feasibility checking) an (arbitraty)
+        The optimization algorithm of RBA selects for the highest growth rate, which still
+        results in a feasible problem. FBA objective is not relevant, though
+        in the contexts of FBA optimization (here, just feasibility checking) an (arbitrary)
         FBA objective is defined, so problem can be solved using LP solvers
         """
         # remove any existing objectives
@@ -1197,47 +1248,17 @@ class RbaModel:
         self.model.add_objectives(objectives_config)
         print(f'Dummy FBA objective configured: maximize {pf.V_TSMC}')
 
-    def _xba_unblock_exchange_reactions_old(self):
-        """Unblock import of metabolites.
+    def to_excel(self, fname):
+        """Export RBA model in RBApy format to Microsoft Excel spreadsheet
 
-        In RBA formulation, nutrient environment is provided as metabolite concentrations (medium).
-        Medium uptake in RBA is controlled via Michaelis Mentent saturation terms in Importer efficiencies.
-        I.e. Importer efficiency is set to zero (import reaction is blocked) if a specific metabolite is
-        not part of the medium.
-
-        Original RBA formulation (RBApy) removes external metabolites from species and
-        from reaction reactants in the linear problem formulation.
-
-        In our formulation we keep the external metabolites in the problem formulation and also in
-        the reactants of reactions. Import is also controlled with Michaelis Menten saturation terms
-        in importer efficiencies. Exchange reactions need to be unblocked to ensure free flux of metabolites.
+        :meta private:
+        :param str fname: file name of spreadsheet
+        :return: success status
+        :rtype: bool
         """
-        min_flux_val = min(self.model.fbc_flux_range)
-        lb_pid = self.model.get_fbc_bnd_pid(min_flux_val, self.model.flux_uid, f'lower_exchange_flux_bnd')
-
-        modify_attrs = []
-        for rid, r in self.model.reactions.items():
-            if r.kind == 'exchange':
-                modify_attrs.append([rid, 'reaction', 'fbc_lower_bound', lb_pid])
-        df_modify_attrs = pd.DataFrame(modify_attrs, columns=['id', 'component', 'attribute', 'value'])
-        df_modify_attrs.set_index('id', inplace=True)
-        print(f"{len(df_modify_attrs):4d} Exchange reactions to unblocked.")
-        self.model.modify_attributes(df_modify_attrs, 'reaction')
-
-    def to_df(self):
         m_dict = {}
         for component in components:
             m_dict |= getattr(self, component).to_df()
-        return m_dict
-
-    def to_excel(self, fname):
-        """Export RBA model in RBApy format
-
-        :param str fname: file name of spreadsheet
-        :return: success (always True for now)
-        :rtype: bool
-        """
-        m_dict = self.to_df()
 
         # add target value information strings
         for idx, row in m_dict['enzymes'].iterrows():
@@ -1264,6 +1285,7 @@ class RbaModel:
         return True
 
     def check_unused(self):
+
         molecules = (set(self.metabolism.species) | set(self.dna.macromolecules) |
                      set(self.rnas.macromolecules) | set(self.proteins.macromolecules))
         parameters = set(self.parameters.functions) | set(self.parameters.aggregates)
@@ -1296,12 +1318,27 @@ class RbaModel:
             print('no unused parameters/molecules')
 
     def validate(self, validate_sbml=True):
-        """Validate RBA configuration and compliance to SBML standards.
+        """Validate compliance with SBML standards and completeness wrt RBA.
 
-        Check completeness of RBA configuration and check compliance to SBML standards.
+        The validation with SBML standards can be suppressed using the optional
+        parameter `validate_sbml`.
+
+        Validation against SBML standards is an optional task taking time.
+        Validation could be skipped once model configuration is stable.
+
+        Information on non-compliance is printed. Details are written to `tmp/tmp.txt`.
+        In case of an unsuccessful validation, it is recommended to review `tmp/tmp.txt` and
+        improve on the model configuration.
+
+        Example: Ensure completeness of RbaModel and ensure compliance with SBML standards prior to export.
+
+        .. code-block:: python
+
+            if rba_model.validate():
+                rba_model.export('iML1515_RBA.xml')
 
         :param bool validate_sbml: validate SBML compliance (default: True)
-        :return: success
+        :return: success status
         :rtype: bool
         """
         component_ids = {'species': set(self.metabolism.species),
@@ -1323,11 +1360,30 @@ class RbaModel:
             return valid
 
     def export(self, fname, export_format='SBML'):
-        """Export RbaModel to SBML coded file, to RBA formated directory or in tabular formats.
+        """Export RbaModel instance to SBML encoded file, RBApy encoded format (directory) or spreadsheet (.xlsx).
 
-        :param str fname: filename (with extension '.xml' or '.xlsx') or a directory name
+        Setting the optional parameter `export_format` to `RBApy` and providing a directory name in
+        `fname` exports the file in proprietary RBApy 1.0 format. The SBML encoded model
+        may include additional features and functionality.
+
+        The spreadsheet (.xlsx) is helpful to inspect model configuration for of SBML and RBApy formats.
+
+        Example: Export RbaModel instance to SBML encoded file and to spreadsheet.
+
+        .. code-block:: python
+
+            xba_model = XbaModel('iML1515.xml')
+            xba_model.configure('xba_parameters.xlsx')
+
+            rba_model = RbaModel(xba_model)
+            rba_model.configure('rba_parameters.xlsx')
+            if rba_model.validate():
+                rba_model.export('iML1515_RBA.xml')
+                rba_model.export('iML1515_RBA.xlsx')
+
+        :param str fname: filename with extension '.xml' or '.xlsx', or a directory name for RBApy format
         :param str export_format: export format: 'SBML' or 'RBApy' (default: 'SBML')
-        :return: success
+        :return: success status
         :rtype: bool
         """
         assert export_format in {'SBML', 'RBApy'}, 'argument format must be "SBML" or "RBApy")'
