@@ -246,7 +246,7 @@ class Optimize:
     def _get_id2groups(self):
         """Extract Groups component information from SBML model to map ids to group names.
 
-        Optional SBML Groups package may contain assignemnt of reaction ids to specific groups.
+        Optional SBML Groups package may contain assignment of reaction ids to specific groups.
 
         :return: mapping of model identifies to group names as per GROUPS component
         :rtype: dict (key: model id / str, val: list if group names / str)
@@ -1265,10 +1265,13 @@ class Optimize:
 
         return pfba_solution
 
-    def fva(self, rids=None, fraction_of_optimum=1.0):
+    def fva(self, rids=None, fraction_of_optimum=1.0, net=False, cutoff=None):
         """Perform a Flux Variability Analysis (FVA) on a FBA model using the gurobipy interface.
 
         A list of reaction ids can be provided to limit the scope of the FVA analysis.
+        With the optional parameter 'net' set to True, fluxes of isoreactions and forward/reverse
+        are combined. With optional parameter 'cutoff', absolute flux values below the cutoff, e.g. 1e-8,
+        are considered to be zero.
 
         Example: Execute FVA analyis for a set of reactions using the gurobipy interface.
 
@@ -1278,6 +1281,8 @@ class Optimize:
 
         :param list(str) rids: reaction identifiers (without leading `R_`) (default: None)
         :param float fraction_of_optimum: scaling of wild type objective value (default: 1.0)
+        :param bool net: (optional) select if fluxes of isoreactions and rev/fwd should be aggregated
+        :param float cutoff: (optional) cutoff value for fluxes to be considered to be zero, e.g. 1e-8
         :return: table with minimum and maximum reaction fluxes
         :rtype: pandas.DataFrame
         """
@@ -1311,11 +1316,46 @@ class Optimize:
 
                 fva_gpm.setObjective(var, gp.GRB.MAXIMIZE)
                 max_flux = self.optimize(fva_gpm).objective_value
-                results[re.sub('^R_', '', rid)] = [min_flux, max_flux]
 
+                if cutoff:
+                    if abs(max_flux) < cutoff:
+                        max_flux = 0.0
+                    if abs(min_flux) < cutoff:
+                        min_flux = 0.0
+
+                results[re.sub('^R_', '', rid)] = [min_flux, max_flux]
             fva_gpm.close()
 
-        return pd.DataFrame(results.values(), list(results.keys()), columns=['minimum', 'maximum'])
+        net_rids = set()
+        if not net:
+            df_fva_results = pd.DataFrame(results.values(), list(results.keys()), columns=['minimum', 'maximum'])
+        else:
+            net_flux_ranges = {}
+            for rid, (flux_min, flux_max) in results.items():
+                if re.match(pf.V_, rid) is None and re.search(r'_arm(_REV)?$', rid) is None:
+                    fwd_rid = re.sub('_REV$', '', rid)
+                    net_rid = re.sub(r'_iso\d*', '', fwd_rid)
+                    net_rids.add(net_rid)
+                    if flux_max > 0.0:
+                        if re.search('_REV$', rid):
+                            net_flux_min = -flux_max
+                            net_flux_max = -flux_min
+                        else:
+                            net_flux_min = flux_min
+                            net_flux_max = flux_max
+                        if net_rid in net_flux_ranges:
+                            net_flux_min = min(net_flux_ranges[net_rid][0], net_flux_min)
+                            net_flux_max = max(net_flux_ranges[net_rid][1], net_flux_max)
+                        net_flux_ranges[net_rid] = [net_flux_min, net_flux_max]
+            # add ranges for blocked net reactions
+            for net_rid in net_rids:
+                if net_rid not in net_flux_ranges:
+                    net_flux_ranges[net_rid] = [0.0, 0.0]
+
+            df_fva_results = pd.DataFrame(net_flux_ranges.values(), list(net_flux_ranges.keys()),
+                                          columns=['minimum', 'maximum'])
+
+        return df_fva_results
 
     def solve(self, **rba_solve_params):
         """RBA solver, overwritten by RbaOptimization

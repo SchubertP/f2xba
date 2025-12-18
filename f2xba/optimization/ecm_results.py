@@ -112,7 +112,7 @@ class EcmResults(Results):
         """
         fluxes = {}
         for rid, mmol_per_gdwh in solution.fluxes.items():
-            if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
+            if re.match(pf.V_, rid) is None and re.search(r'_arm(_REV)?$', rid) is None:
                 rdata = self.optim.rdata[rid]
                 fluxes[rid] = [rdata['reaction_str'], rdata['net_rid'], rdata['gpr'],
                                rdata['groups'], mmol_per_gdwh, abs(mmol_per_gdwh)]
@@ -128,10 +128,10 @@ class EcmResults(Results):
         """
         net_fluxes = defaultdict(float)
         for rid, val in solution.fluxes.items():
-            if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
-                fwd_rid = re.sub(r'_REV$', '', rid)
+            if re.match(pf.V_, rid) is None and re.search(r'_arm(_REV)?$', rid) is None:
+                fwd_rid = re.sub('_REV$', '', rid)
                 net_rid = re.sub(r'_iso\d*', '', fwd_rid)
-                if re.search('_REV', rid):
+                if re.search('_REV$', rid):
                     net_fluxes[net_rid] -= val
                 else:
                     net_fluxes[net_rid] += val

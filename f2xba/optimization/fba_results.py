@@ -63,7 +63,7 @@ class FbaResults(Results):
         for rid, val in solution.fluxes.items():
             if re.match(pf.V_, rid) is None:
                 net_rid = re.sub('_REV$', '', rid)
-                if re.search('_REV', rid):
+                if re.search('_REV$', rid):
                     net_fluxes[net_rid] -= val
                 else:
                     net_fluxes[net_rid] += val

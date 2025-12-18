@@ -124,7 +124,7 @@ class EcModel:
         self._add_total_protein_constraint(protein_pool)
         self._reaction_enzyme_coupling(avg_enz_sat)
 
-        # remove model components that are not used in the model
+        # remove model components that are not used in the model and update SBML groups
         self.model.clean()
 
         # add some parameter values for reference (after model.clean() so they are not removed)

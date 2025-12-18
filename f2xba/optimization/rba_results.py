@@ -117,7 +117,7 @@ class RbaResults(Results):
                     # collapse any iso reactions, and combine forward/reverse reactions
                     net_rid = re.sub(r'_iso\d*', '', rid)
                     net_rid = re.sub('_REV$', '', net_rid)
-                    if re.search('_REV', rid):
+                    if re.search('_REV$', rid):
                         net_fluxes[net_rid] -= val
                     else:
                         net_fluxes[net_rid] += val

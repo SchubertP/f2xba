@@ -179,6 +179,9 @@ class TfaModel:
                     dgr0_vids.append(vid)
             self._modify_drg0_bounds(tfa_params['modify_drg0_bounds'].loc[dgr0_vids], remove_slack=False)
 
+        # remove model components that are not used in the model and update SBML groups
+        self.model.clean()
+
         # modify some model attributs and create L3V2 SBML model
         self.model.model_attrs['id'] += f'_TFA'
         if 'name' in self.model.model_attrs:
