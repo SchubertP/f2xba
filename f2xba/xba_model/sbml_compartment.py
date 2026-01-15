@@ -35,15 +35,12 @@ class SbmlCompartment(SbmlSBase):
         :type s_compartment: pandas Series
         """
         super().__init__(s_compartment)
-        self.constant = s_compartment['constant']
+        self.constant = s_compartment.get('constant', False)
         if 'size' in s_compartment:
             self.size = s_compartment['size']
         if 'spatialDimension' in s_compartment:
             self.dimension = s_compartment['spatialDimension']
-            if 'units' in s_compartment:
-                self.units = s_compartment['units']
-        else:
-            self.units = s_compartment.get('units', 'dimensionless')
+        self.units = s_compartment.get('units', 'dimensionless')
 
     def to_dict(self):
         data = super().to_dict()

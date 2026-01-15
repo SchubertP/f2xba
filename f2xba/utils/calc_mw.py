@@ -47,7 +47,12 @@ def get_seq_composition(seq_str):
 
 def extract_atoms(formula):
     """Iterator to return atom quantities in chemical formula.
-    E.g. 'C6H12O6'
+
+    E.g. 'C6H12O6' -> {'C': 6.0, 'H': 12.0, 'O': 6.0}
+
+    :param str formula: chemical formula
+    :return: atom id and stoichiometry
+    :rtype: tuple (str, float)
     """
     if type(formula) is str:
         for x in atom_regex_pattern.finditer(formula):

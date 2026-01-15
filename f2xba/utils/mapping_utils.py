@@ -107,7 +107,7 @@ def get_srefs(srefs_str):
     'species' and 'stoic'.
 
     :param str srefs_str: species references string with attributes 'species' and 'stoic'
-    :return: composition (components with stoichiometry
+    :return: composition (components with stoichiometry)
     :rtype: dict (key: species id, value: stoichiometry (float)
     """
     srefs = {}
@@ -121,7 +121,7 @@ def generate_srefs_str(stoichometric_str):
     """Generate species references from one side of reaction string.
 
     E.g. '2.0 M_h_e + M_mal__L_e' gets converted to
-    {'species=M_h_e, stoic=2.0; species=M_mal__L_e, stoic=1.0'}
+    {'species=M_h_e, stoic=2.0, const=True; species=M_mal__L_e, stoic=1.0, const=True'}
 
     :param str stoichometric_str: stoichiometric string
     :returns: species ids with stoichiometry
@@ -135,7 +135,7 @@ def generate_srefs_str(stoichometric_str):
         sid = parts[-1]
         if len(sid) > 0:
             d_srefs[sid] = stoic
-    return '; '.join([f'species={sid}, stoic={stoic}' for sid, stoic in d_srefs.items()])
+    return '; '.join([f'species={sid}, stoic={stoic}, const=True' for sid, stoic in d_srefs.items()])
 
 
 def parse_reaction_string(reaction_str):

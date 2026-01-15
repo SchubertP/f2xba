@@ -58,10 +58,10 @@ class SbmlReaction(SbmlSBase):
         self.gene_product_assoc = s_reaction.get('fbcGeneProdAssoc')
         self.scale = s_reaction.get('scale', 1.0)
 
-        self.rp_counts = [len(self.reactants), len(self.products)]
-        self.rp_compartments = [self.get_compartments(self.reactants, species_dict),
-                                self.get_compartments(self.products, species_dict)]
-        self.compartment = '-'.join(sorted(self.rp_compartments[0].union(self.rp_compartments[1])))
+        self.rp_counts = {'reactants': len(self.reactants), 'products': len(self.products)}
+        self.rp_compartments = {'reactants': self.get_compartments(self.reactants, species_dict),
+                                'products': self.get_compartments(self.products, species_dict)}
+        self.compartment = '-'.join(sorted(self.rp_compartments['reactants'].union(self.rp_compartments['products'])))
         self.kind = s_reaction.get('kind', self.get_reaction_kind())
         self.enzymes = []
         self.kcatsf = None
@@ -190,10 +190,9 @@ class SbmlReaction(SbmlSBase):
         :rtype: str
         """
         kind = 'metabolic'
-
-        if (self.rp_counts[0] == 0) or (self.rp_counts[1] == 0):
+        if (self.rp_counts['reactants'] == 0) or (self.rp_counts['products'] == 0):
             kind = 'exchange'
-        elif len(self.rp_compartments[0].union(self.rp_compartments[1])) > 1:
+        elif len(self.rp_compartments['reactants'].union(self.rp_compartments['products'])) > 1:
             kind = 'transporter'
         return kind
 

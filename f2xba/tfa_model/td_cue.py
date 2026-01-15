@@ -1,17 +1,15 @@
-"""Implementation of TdCueData class.
+"""Implementation of TdCue class.
 
 holding thermodynamic data for a metabolite
 based on pyTFA thermo data
 
 Peter Schubert, HHU Duesseldorf, Octobert 2023
 """
-# import re
 
+class TdCue:
 
-class TdCueData:
-
-    def __init__(self, cue_id, cue_data, conv_factor):
-        """Instantiate thermodynamic cue data.
+    def __init__(self, cue_id, cue_data):
+        """Instantiate thermodynamic cue.
 
         pased on pyTFA thermo data file
         Energy units in thermo data get converted, if required, to kJ/mol
@@ -33,7 +31,6 @@ class TdCueData:
 
         :param str cue_id: cue id
         :param dict cue_data: thermodynamic data for cue
-        :param float conv_factor: optional, energy units conversion factor, default 1.0
         """
         self.id = cue_id
         self.names = cue_data['names']
@@ -43,5 +40,5 @@ class TdCueData:
             formula = None
         self.formula = formula
         self.charge = cue_data['charge']
-        self.energy = cue_data['energy'] * conv_factor if cue_data['energy'] > -9999.0 else None
-        self.error = cue_data['error'] * conv_factor
+        self.energy = cue_data['energy']
+        self.error = cue_data['error']

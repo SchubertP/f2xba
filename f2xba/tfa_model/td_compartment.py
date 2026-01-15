@@ -1,4 +1,4 @@
-"""Implementation of TdCompartmentData class.
+"""Implementation of TdCompartment class.
 
 holding thermodynamics data for a compartment
 
@@ -7,10 +7,10 @@ Peter Schubert, HHU Duesseldorf, Octobert 2023
 import re
 
 
-class TdCompartmentData:
+class TdCompartment:
 
     def __init__(self, cid, c_data):
-        """Instantiate thermodynamics compartment data.
+        """Instantiate thermodynamics compartment.
 
         Collect information supplied
         convert membrane potentials from mV to V

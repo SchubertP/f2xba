@@ -32,7 +32,7 @@ from .enzyme import Enzyme
 from ..ncbi.ncbi_data import NcbiData
 from ..uniprot.uniprot_data import UniprotData
 from ..utils.mapping_utils import get_srefs, parse_reaction_string, load_parameter_file
-from ..utils.calc_mw import calc_mw_from_formula
+from ..utils.calc_mw import calc_mw_from_formula, extract_atoms
 from ..biocyc.biocyc_data import BiocycData
 import f2xba.prefixes as pf
 
@@ -63,22 +63,30 @@ class XbaModel:
     """
 
 
-    def __init__(self, sbml_file):
+    def __init__(self, sbml_file=None):
         """Instantiate the XbaModel instance.
 
-        :param str sbml_file: filename of SBML model (FBA model)
+        :param str or dict sbml_file: filename of SBML model (FBA model) or sbmlxdf model_dict
         """
-        # Load SBML model and extract model data
-        if not os.path.exists(sbml_file):
-            print(f'{sbml_file} does not exist')
-            raise FileNotFoundError
-        print(f'loading: {sbml_file} (last modified: {time.ctime(os.path.getmtime(sbml_file))})')
-        sbml_model = sbmlxdf.Model(sbml_file)
-        if sbml_model.isModel is False:
-            print(f'{sbml_file} seems not to be a valid SBML model')
-            return
 
-        model_dict = sbml_model.to_df()
+        # try creating file from m_dict
+        if type(sbml_file) is str:
+            # Load SBML model and extract model data
+            if not os.path.exists(sbml_file):
+                print(f'{sbml_file} does not exist')
+                raise FileNotFoundError
+            print(f'loading: {sbml_file} (last modified: {time.ctime(os.path.getmtime(sbml_file))})')
+            sbml_model = sbmlxdf.Model(sbml_file)
+            if sbml_model.isModel is False:
+                print(f'{sbml_file} seems not to be a valid SBML model')
+                return
+            model_dict = sbml_model.to_df()
+        elif type(sbml_file) is dict:
+            model_dict = sbml_file
+        else:
+            print('parmater "sbml_file" is neither a valid file name nor a dict with model data')
+            raise ValueError
+
         self.sbml_container = model_dict['sbml']
         """SBML container data."""
 
@@ -133,6 +141,12 @@ class XbaModel:
                       'units': ('kind=mole, exp=1.0, scale=-3, mult=1.0; '
                                 'kind=gram, exp=-1.0, scale=0, mult=1.0')}
             self.add_unit_def(u_dict)
+
+        self.atom_imbalances = {}
+        """Reactions with atom imbalances (right_side - left_side)."""
+
+        self.charge_imbalances = {}
+        """Reactions with charge imbalances (right_side - left_side)."""
 
         self.cofactor_flag = True
         self.uid2gp = {}
@@ -225,7 +239,10 @@ class XbaModel:
                 if cid not in cids:
                     cids[cid] = 0
                 cids[cid] += 1
-        return sorted([(count, cid) for cid, count in cids.items()])[-1][1]
+        if len(cids) > 0:
+            return sorted([(count, cid) for cid, count in cids.items()])[-1][1]
+        else:
+            return list(self.compartments.keys())[0]
 
     def _get_locus2rids(self):
         """Determine mapping of locus (gene-id) to reaction ids.
@@ -315,6 +332,18 @@ class XbaModel:
         #     r.correct_reversibility(self.parameters, exclude_ex_reactions=True)
         # update mappings (just in case)
         self.update_gp_mappings()
+
+        # check atom and charge imbalances of reactions
+        self.atom_imbalances = self.check_atom_imbalances()
+        self.charge_imbalances = self.check_charge_imbalances()
+        if len(self.atom_imbalances) > 0:
+            sample = [rid for rid in list(self.atom_imbalances)[:min(3, len(self.atom_imbalances))]]
+            print(f'{len(self.atom_imbalances)} reactions with atom imbalances, '
+                  f'e.g. [{", ".join(sample)}, ...], check XbaModel.atom_imbalances.')
+        if len(self.charge_imbalances) > 0:
+            sample = [rid for rid in list(self.charge_imbalances)[:min(3, len(self.charge_imbalances))]]
+            print(f'{len(self.charge_imbalances)} reactions with charge imbalances, '
+                  f'e.g. [{", ".join(sample)}, ...], check XbaModel.charge_imbalances.')
 
         #################
         # add NCBI data #
@@ -531,6 +560,71 @@ class XbaModel:
               f'{size["n_rids"]} variables ({size["n_rids"] - self.gem_size["n_rids"]:+}); '
               f'{size["n_gps"]} genes ({size["n_gps"] - self.gem_size["n_gps"]:+}); '
               f'{size["n_pids"]} parameters ({size["n_pids"] - self.gem_size["n_pids"]:+})')
+
+    def check_atom_imbalances(self):
+        """Check atom imbalances of reactions.
+
+        Parse through reactions, excludings variables starting with 'V_' and excluding
+        exchange and drain reactions.
+        Parse through reactions strings, exluding constraints starting with 'C_'.
+        Based on species formula and stoichiometry, add up atoms for left and right
+        side of the reaction. Collect any differences in atom counts (right side - left side).
+
+        :return: reactions with atom imbalances (right side - left side)
+        :rtype: dict (str, dict)
+        """
+        atom_imbalances = {}
+        for rid, r in self.reactions.items():
+            if re.match(pf.V_, rid) is None and len(r.reactants) > 0 and len(r.products) > 0:
+                ls_atoms = defaultdict(float)
+                rs_atoms = defaultdict(float)
+                for sid, stoic in r.reactants.items():
+                    if re.match('C_', sid) is None:
+                        s = self.species[sid]
+                        for atom, count in extract_atoms(getattr(s, 'formula', None)):
+                            ls_atoms[atom] += stoic * count
+                for sid, stoic in r.products.items():
+                    if re.match('C_', sid) is None:
+                        s = self.species[sid]
+                        for atom, count in extract_atoms(getattr(s, 'formula', None)):
+                            rs_atoms[atom] += stoic * count
+                delta_atoms = {}
+                for atom in set(ls_atoms.keys()).union(set(rs_atoms.keys())):
+                    delta = rs_atoms.get(atom, 0.0) - ls_atoms.get(atom, 0.0)
+                    if delta != 0:
+                        delta_atoms[atom] = delta
+                if len(delta_atoms) > 0:
+                    atom_imbalances[rid] = delta_atoms
+        return atom_imbalances
+
+    def check_charge_imbalances(self):
+        """Check charge imbalances of reactions.
+
+        Parse through reactions, excludings variables starting with 'V_' and excluding
+        exchange and drain reactions.
+        Parse through reactions strings, exluding constraints starting with 'C_'.
+        Based on species electrical charge and stoichiometry, add up charges on for left and right
+        side of the reaction. Collect any differences in charges (right side - left side).
+
+        :return: reactions with charge imbalances (right side - left side)
+        :rtype: dict (str, float)
+        """
+        charge_imbalances = {}
+        for rid, r in self.reactions.items():
+            if re.match(pf.V_, rid) is None and len(r.reactants) > 0 and len(r.products) > 0:
+                ls_charge = 0
+                rs_charge = 0
+                for sid, stoic in r.reactants.items():
+                    if re.match('C_', sid) is None:
+                        s = self.species[sid]
+                        ls_charge += stoic * getattr(s, 'charge', 0)
+                for sid, stoic in r.products.items():
+                    if re.match('C_', sid) is None:
+                        s = self.species[sid]
+                        rs_charge += stoic * getattr(s, 'charge', 0)
+                if ls_charge != rs_charge:
+                    charge_imbalances[rid] = rs_charge - ls_charge
+        return charge_imbalances
 
     def _get_used_cids(self):
         """Identify compartments used by the model.
