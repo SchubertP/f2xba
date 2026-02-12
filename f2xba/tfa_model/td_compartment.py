@@ -28,11 +28,14 @@ class TdCompartment:
         """
         self.id = cid
         self.ph = c_data['ph']
-        self.ionic_strength = c_data['ionic_strength_M']
+        self.ionic_str = c_data['ionic_strength_M']
         self.c_min = c_data['c_min_M']
         self.c_max = c_data['c_max_M']
         self.membrane_pots = {}
         for key, val in c_data.items():
-            if key.endswith('_mV'):
-                other_cid = re.sub('_mV$', '', key)
-                self.membrane_pots[other_cid] = val / 1000.0   # V -> mV
+            if key.endswith('_V'):
+                other_cid = re.sub('_V$', '', key)
+                self.membrane_pots[other_cid] = val
+            elif key.endswith('_mV'):
+                    other_cid = re.sub('_mV$', '', key)
+                    self.membrane_pots[other_cid] = val / 1000.0   # V -> mV

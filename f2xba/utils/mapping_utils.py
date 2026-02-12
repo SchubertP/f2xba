@@ -8,6 +8,7 @@ import time
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+import f2xba.prefixes as pf
 import sbmlxdf
 
 
@@ -164,6 +165,27 @@ def parse_reaction_string(reaction_str):
         srefs['products'] = generate_srefs_str(components[1])
     return srefs
 
+def construct_metabolic_reactions_string(r):
+    """Construct reaction string with metabolites only (excluding other constraints)
+
+    :param r: reaction object
+    :type r: :class:`SbmlReaction`
+    :return: reactions string
+    :rtype: str
+    """
+    l_srefs = []
+    r_srefs = []
+    for sid, stoic in r.reactants.items():
+        if re.match(pf.C_, sid) is None:
+            l_srefs.append(sid) if stoic == 1.0 else l_srefs.append(f'{stoic} {sid}')
+    for sid, stoic in r.products.items():
+        if re.match(pf.C_, sid) is None:
+            r_srefs.append(sid) if stoic == 1.0 else r_srefs.append(f'{stoic} {sid}')
+
+    arrow = ' -> ' if r.reversible else ' => '
+    reaction_string = ' + '.join(l_srefs) + arrow + ' + '.join(r_srefs)
+
+    return reaction_string
 
 def stoicstr2srefs(stoichometric_str):
     """Generate species references from one side of reaction string.

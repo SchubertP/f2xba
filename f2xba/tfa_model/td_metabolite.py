@@ -48,7 +48,7 @@ class TdMetabolite:
         :param dict all_td_cues: TD cues from TD database
         :param dict td_sdata: thermodynamics data record for metabolite extracted from TD database
         """
-        self.id = td_sid
+        self.id = str(td_sid)
         self.name = str(td_sdata['name'])
         self.formula = str(td_sdata['formula'])
         self.charge_std = td_sdata['charge_std']

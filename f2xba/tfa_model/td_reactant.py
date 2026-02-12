@@ -12,28 +12,30 @@ Peter Schubert, HHU Duesseldorf, Octobert 2023
 """
 
 import numpy as np
+from f2xba.utils.calc_mw import extract_atoms
 from .td_constants import CPD_PROTON, RT, DEBYE_HUCKEL_A, DEBYE_HUCKEL_B, MAX_PH
 
 class TdReactant:
 
-    def __init__(self, sid, td_m, ph, ionic_str):
+    def __init__(self, s, td_m, td_c):
         """Instantiate thermodynamic reactant data.
 
         contains reactant TD data for reactant at specific pH and ionic strength
         based on pyTFA thermo data file
 
-        :param str sid: model species id
+        :param s: corresponding model species
+        :type s: :class:`SbmlSpecies`
         :param td_m: corresponding TD metabolite
         :type td_m: :class:`TdMetabolite`
-        :param float ph: compartmental pH
-        :param float ionic_str: compartmental ionic strength in mol/L
-
+        :param td_c: corresponding TD compartment
+        :type td_c: :class:`TdCompartment`
         """
-        self.id = sid
+        self.id = s.id
+        self.s = s
         self.td_m = td_m
         self.td_metabolite = self.td_m.id
-        self.ph = ph
-        self.ionic_str = ionic_str
+        self.td_c = td_c
+        self.nh_species = {atom: count for atom, count in extract_atoms(s.formula)}.get('H', 0)
         self.dfg0_tr = 0.0
         self.avg_h_atoms_tr = 0.0
         self.avg_charge_tr = 0.0
@@ -127,14 +129,15 @@ class TdReactant:
         :return: transformed gibbs energy of formation
         :rtype: float
         """
-        ext_dh_factor = DEBYE_HUCKEL_A * np.sqrt(self.ionic_str) / (1.0 + DEBYE_HUCKEL_B * np.sqrt(self.ionic_str))
+        ext_dh_factor = (DEBYE_HUCKEL_A * np.sqrt(self.td_c.ionic_str) /
+                         (1.0 + DEBYE_HUCKEL_B * np.sqrt(self.td_c.ionic_str)))
 
-        h_atom_adjustment = RT * np.log(10) * nh_std * self.ph
+        h_atom_adjustment = RT * np.log(10) * nh_std * self.td_c.ph
         ionic_str_adjustment = RT * np.log(10) * (charge_std ** 2 - nh_std) * ext_dh_factor
 
         return dfg0_std + h_atom_adjustment - ionic_str_adjustment
 
-    def set_gibbs_formation_energy(self):
+    def get_gibbs_formation_energy_std_tr(self):
         """Calculate the transformed Gibbs energy of formation for reactant (pseudoisomeric group).
 
         Thermodymamics of pseudoisomer groups at specified pH
@@ -143,21 +146,26 @@ class TdReactant:
             - P(I): binding polynomial (partitioning function) at specified ionic strength I
             - ∆fG1'˚(I): transformed Gibbs energy of formation of least protonated species of isomer group
 
-        :returns: standard transformed Gibbs energy of formation, avg H atoms, avg charge
-        :rtype: float, float, float, numpy.ndarray
+        :returns: standard transformed Gibbs energy of formation in kJ/mol
+        :rtype: float
         """
 
-        # deprotonation steps from TD metabolite in standard state up to MAX_PH
-        pka_levels_below_max_ph = sum([1 for pka in self.td_m.pkas if pka < MAX_PH])
-        target_deprot_steps = pka_levels_below_max_ph - self.get_std_pka_level()
+        # protons have a ∆fG`˚(I) of zero, see Alberty, 2003 eq. 4.4-10
+        #   ∆fG`˚(I=0) is zero by default and ionic strength term is zero as well
+        if self.td_metabolite != CPD_PROTON:
+            # deprotonation steps from TD metabolite in standard state up to MAX_PH
+            pka_levels_below_max_ph = sum([1 for pka in self.td_m.pkas if pka < MAX_PH])
+            target_deprot_steps = pka_levels_below_max_ph - self.get_std_pka_level()
 
-        # std formation energy of least protonated species, charge and number of H atoms in structure
-        # Note: deprotonation may be incomplete due to insufficient protons or pKa values
-        dfg0_lp, charge_lp, nh_lp = self.get_dfg0_at_charge(self.td_m.charge_std - target_deprot_steps)
-        deprot_steps = self.td_m.charge_std - charge_lp
-        # protons have a transformed Gibbs energy of formation at IS 0.0M of 0.0 kJ/mol
-        if self.td_metabolite == CPD_PROTON:
+            # std formation energy of least protonated species, charge and number of H atoms in structure
+            # Note: deprotonation may be incomplete due to insufficient protons or pKa values
+            dfg0_lp, charge_lp, nh_lp = self.get_dfg0_at_charge(self.td_m.charge_std - target_deprot_steps)
+        else:
             dfg0_lp = 0.0
+            charge_lp = 1.0
+            nh_lp = 1.0
+
+        deprot_steps = self.td_m.charge_std - charge_lp
 
         # transform Gibbs formation energy of species wrt compartment pH and ionic strength
         dfg0_lp_tr = self.transform_std_gibbs_energy(dfg0_lp, nh_lp, charge_lp)
@@ -171,6 +179,7 @@ class TdReactant:
         # average el. charge and average H atoms in the structures
         self.avg_h_atoms_tr = nh_lp + avg_h_binding
         self.avg_charge_tr = charge_lp + avg_h_binding
+        return self.dfg0_tr
 
     def _transform_pkas_rev(self, deprot_steps):
         """Transform pKa values in pysiological range to given ionic strength
@@ -201,7 +210,8 @@ class TdReactant:
         :rtype: list[float]
         """
         least_prot_charge = self.td_m.charge_std - deprot_steps
-        ext_dh_factor = DEBYE_HUCKEL_A * np.sqrt(self.ionic_str) / (1.0 + DEBYE_HUCKEL_B * np.sqrt(self.ionic_str))
+        ext_dh_factor = (DEBYE_HUCKEL_A * np.sqrt(self.td_c.ionic_str) /
+                         (1.0 + DEBYE_HUCKEL_B * np.sqrt(self.td_c.ionic_str)))
 
         pkas_tr_rev = []
         for i, pka in enumerate(sorted([pka for pka in self.td_m.pkas if pka < MAX_PH], reverse=True)):
@@ -237,7 +247,7 @@ class TdReactant:
         """
         pkas_tr_rev = self._transform_pkas_rev(deprot_steps)
 
-        proton_conc = 10.0 ** -self.ph
+        proton_conc = 10.0 ** -self.td_c.ph
         prod_eq_constants = 1.0
         factors = [1.0]
         polynomial = 1.0

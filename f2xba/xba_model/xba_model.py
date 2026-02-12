@@ -334,8 +334,8 @@ class XbaModel:
         self.update_gp_mappings()
 
         # check atom and charge imbalances of reactions
-        self.atom_imbalances = self.check_atom_imbalances()
-        self.charge_imbalances = self.check_charge_imbalances()
+        self.atom_imbalances = self._check_atom_imbalances()
+        self.charge_imbalances = self._check_charge_imbalances()
         if len(self.atom_imbalances) > 0:
             sample = [rid for rid in list(self.atom_imbalances)[:min(3, len(self.atom_imbalances))]]
             print(f'{len(self.atom_imbalances)} reactions with atom imbalances, '
@@ -561,7 +561,41 @@ class XbaModel:
               f'{size["n_gps"]} genes ({size["n_gps"] - self.gem_size["n_gps"]:+}); '
               f'{size["n_pids"]} parameters ({size["n_pids"] - self.gem_size["n_pids"]:+})')
 
-    def check_atom_imbalances(self):
+
+    def is_atom_balanced(self, r):
+        """Check that reaction r is atom balanced.
+
+        :param r: reaction object
+        :type r: :class:`SbmlReaction`
+        """
+        net_atoms_tmp = defaultdict(float)
+        for reactant_side, sign in {'reactants': -1.0, 'products': 1.0}.items():
+            for sid, stoic in getattr(r, reactant_side).items():
+                if re.match(pf.C_, sid) is None:
+                    for atom, count in extract_atoms(self.species[sid].formula):
+                        net_atoms_tmp[atom] += sign * stoic * count
+
+        net_atoms = {}
+        for atom, count in net_atoms_tmp.items():
+            if count != 0:
+                net_atoms[atom] = count
+
+        return len(net_atoms) == 0
+
+    def is_charge_balanced(self, r):
+        """Check that reaction r is charge balanced.
+
+        :param r: reaction object
+        :type r: :class:`SbmlReaction`
+        """
+        net_charge = 0.0
+        for reactant_side, sign in {'reactants': -1.0, 'products': 1.0}.items():
+            for sid, stoic in getattr(r, reactant_side).items():
+                if re.match(pf.C_, sid) is None:
+                    net_charge += sign * stoic * self.species[sid].charge
+        return net_charge == 0.0
+
+    def _check_atom_imbalances(self):
         """Check atom imbalances of reactions.
 
         Parse through reactions, excludings variables starting with 'V_' and excluding
@@ -579,12 +613,12 @@ class XbaModel:
                 ls_atoms = defaultdict(float)
                 rs_atoms = defaultdict(float)
                 for sid, stoic in r.reactants.items():
-                    if re.match('C_', sid) is None:
+                    if re.match(pf.C_, sid) is None:
                         s = self.species[sid]
                         for atom, count in extract_atoms(getattr(s, 'formula', None)):
                             ls_atoms[atom] += stoic * count
                 for sid, stoic in r.products.items():
-                    if re.match('C_', sid) is None:
+                    if re.match(pf.C_, sid) is None:
                         s = self.species[sid]
                         for atom, count in extract_atoms(getattr(s, 'formula', None)):
                             rs_atoms[atom] += stoic * count
@@ -597,7 +631,7 @@ class XbaModel:
                     atom_imbalances[rid] = delta_atoms
         return atom_imbalances
 
-    def check_charge_imbalances(self):
+    def _check_charge_imbalances(self):
         """Check charge imbalances of reactions.
 
         Parse through reactions, excludings variables starting with 'V_' and excluding
@@ -615,15 +649,16 @@ class XbaModel:
                 ls_charge = 0
                 rs_charge = 0
                 for sid, stoic in r.reactants.items():
-                    if re.match('C_', sid) is None:
+                    if re.match(pf.C_, sid) is None:
                         s = self.species[sid]
                         ls_charge += stoic * getattr(s, 'charge', 0)
                 for sid, stoic in r.products.items():
-                    if re.match('C_', sid) is None:
+                    if re.match(pf.C_, sid) is None:
                         s = self.species[sid]
                         rs_charge += stoic * getattr(s, 'charge', 0)
                 if ls_charge != rs_charge:
                     charge_imbalances[rid] = rs_charge - ls_charge
+
         return charge_imbalances
 
     def _get_used_cids(self):
@@ -975,7 +1010,7 @@ class XbaModel:
 
             xba_model = XbaModel('iML1515.xml')
             xba_model.configure('xba_parameters.xlsx')
-            xba_model.export_kcats(kcats.xlsx')
+            xba_model.export_kcats('kcats.xlsx')
 
         :param str fname: filename with extension '.xlsx'
         """

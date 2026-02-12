@@ -301,7 +301,7 @@ class Optimize:
 
         From XML annotation of compartments identify the compartent for media uptake
         Note: RBA allows other compartments than external compartment to
-        be used in Michaelis Menten saturation terms for medium uptake,
+        be used in Michaelis-Menten saturation terms for medium uptake,
         e.g. periplasm (however, this may block reactions in periplasm)
 
         replace compartment postfix of exchanged metabolited by medium cid of RBA model.
@@ -388,6 +388,45 @@ class Optimize:
             print(f'Thermodynamic constraints (C_F[FR]C_xxx, C_G[FR]C_xxx, C_SU_xxx) ≤ 0')
 
     # GUROBIPY MODEL CONSTRUCTION RELATED
+
+    def _gp_add_add_linear_constraints(self, gpm, constrs):
+        """Add linear constraints to the GurobiPy model.
+
+        Supporting thermodynamics modeling related inequality constraints.
+
+        :param gpm: GurobiPy Model instance
+        :type gpm: :class:`gurobipy.Model`
+        :param constrs:
+        :return:
+        """
+        td_constr_prefixes = f'({pf.C_FFC_}|{pf.C_FRC_}|{pf.C_GFC_}|{pf.C_GRC_}|{pf.C_SU_})'
+        self.constr_id2gpm = {}
+        for constr_id, constr in constrs.items():
+            if re.match(td_constr_prefixes, constr_id):
+                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '<', 0.0, constr_id)
+            else:
+                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '=', 0.0, constr_id)
+
+    def _gp_add_optimization_objective(self, gpm):
+        """Add optimization objective to GurobiPy model.
+
+        Using objective configured in the SBML model.
+
+        :param gpm: GurobiPy Model instance
+        :type gpm: :class:`gurobipy.Model`
+        """
+        # configure optimization objective
+        df_fbc_objs = self.m_dict['fbcObjectives']
+        active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
+        sense = gp.GRB.MAXIMIZE if 'max' in active_odata['type'].lower() else gp.GRB.MINIMIZE
+        vars_gpm = []
+        coeffs = []
+        for sref_str in sbmlxdf.record_generator(active_odata['fluxObjectives']):
+            params = sbmlxdf.extract_params(sref_str)
+            vars_gpm.append(self.var_id2gpm[params['reac']])
+            coeffs.append(float(params['coef']))
+        gpm.setObjective(gp.LinExpr(coeffs, vars_gpm), sense)
+
     def _gp_create_model_neg_vars(self):
         """Create and configure a gurobipy model with data from metabolic model.
 
@@ -413,7 +452,6 @@ class Optimize:
         # add variables to the gurobi model, with suppport of binary variables
         td_binary_var_prefixes = f'({pf.V_FU_}|{pf.V_RU_})'
         td_continuous_var_prefixes = f'({pf.V_DRG_}|{pf.V_DRG0_}|{pf.R_})'
-        #td_continuous_var_prefixes = f'xxxxx'
         self.var_id2gpm = {}
         for var_id, row in self.m_dict['reactions'].iterrows():
             # configure TD forward/reverse use variables as binary
@@ -446,30 +484,10 @@ class Optimize:
                 if re.match(td_continuous_var_prefixes, var_id):
                     constrs[constr_id] += self.var_id2gpm[f'{var_id}_reverse'] * -coeff
 
-        # adding linear constraints to the model, with support of Thermodynamic constraints
-        # Some TD modeling constraints are defined as LHS <= 0.0
-        td_constr_prefixes = f'({pf.C_FFC_}|{pf.C_FRC_}|{pf.C_GFC_}|{pf.C_GRC_}|{pf.C_SU_})'
-        self.constr_id2gpm = {}
-        for constr_id, constr in constrs.items():
-            if re.match(td_constr_prefixes, constr_id):
-                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '<', 0.0, constr_id)
-            else:
-                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '=', 0.0, constr_id)
-
-        # configure optimization objective
-        df_fbc_objs = self.m_dict['fbcObjectives']
-        active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
-        sense = gp.GRB.MAXIMIZE if 'max' in active_odata['type'].lower() else gp.GRB.MINIMIZE
-        vars_gpm = []
-        coeffs = []
-        for sref_str in sbmlxdf.record_generator(active_odata['fluxObjectives']):
-            params = sbmlxdf.extract_params(sref_str)
-            vars_gpm.append(self.var_id2gpm[params['reac']])
-            coeffs.append(float(params['coef']))
-        gpm.setObjective(gp.LinExpr(coeffs, vars_gpm), sense)
-
-        # update gpm with configuration data
+        self._gp_add_add_linear_constraints(gpm, constrs)
+        self._gp_add_optimization_objective(gpm)
         gpm.update()
+
         return gpm
 
     def _gp_create_model(self):
@@ -478,9 +496,11 @@ class Optimize:
         - create empty gp.model:
         - add variables (using reaction data from metabolic model)
         - construct and implement linear constraints based on reaction string
-        - construct and implement linear objective
-        - construct and implement linear objective
         - configure TD binary variables and TD related inequality constraints
+        - construct and implement linear objective
+
+        :return: initialized gurobipy model
+        :rtype: :class:`gurobipy.Model`
         """
         # create empty gurobipy model
         gpm = gp.Model(self.m_dict['modelAttrs'].id)
@@ -512,30 +532,11 @@ class Optimize:
                     constrs[constr_id] = self.var_id2gpm[var_id] * coeff
                 else:
                     constrs[constr_id] += self.var_id2gpm[var_id] * coeff
-        # adding linear constraints to the model, with support of Thermodynamic constraints
-        # Some TD modeling constraints are defined as LHS <= 0.0
-        td_constr_prefixes = f'({pf.C_FFC_}|{pf.C_FRC_}|{pf.C_GFC_}|{pf.C_GRC_}|{pf.C_SU_})'
-        self.constr_id2gpm = {}
-        for constr_id, constr in constrs.items():
-            if re.match(td_constr_prefixes, constr_id):
-                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '<', 0.0, constr_id)
-            else:
-                self.constr_id2gpm[constr_id] = gpm.addLConstr(constr, '=', 0.0, constr_id)
 
-        # configure optimization objective
-        df_fbc_objs = self.m_dict['fbcObjectives']
-        active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
-        sense = gp.GRB.MAXIMIZE if 'max' in active_odata['type'].lower() else gp.GRB.MINIMIZE
-        vars_gpm = []
-        coeffs = []
-        for sref_str in sbmlxdf.record_generator(active_odata['fluxObjectives']):
-            params = sbmlxdf.extract_params(sref_str)
-            vars_gpm.append(self.var_id2gpm[params['reac']])
-            coeffs.append(float(params['coef']))
-        gpm.setObjective(gp.LinExpr(coeffs, vars_gpm), sense)
-
-        # update gpm with configuration data
+        self._gp_add_add_linear_constraints(gpm, constrs)
+        self._gp_add_optimization_objective(gpm)
         gpm.update()
+
         return gpm
 
     def _get_biomass_rid(self):
@@ -962,7 +963,7 @@ class Optimize:
 
         Metabolomics data for a given condition can be used to further constrain models that
         contain thermodynamics constraints. Such models have optimization variables for
-        species concentrations. Minimum and maximum concentrations for selected species can be
+        species concentrations in log10. Minimum and maximum concentrations for selected species can be
         configured using this method. Concentration bounds will not be set for 'None' values.
 
         Example: Set minimum and maximum concentration values (mol/l) for selected metabolites.
@@ -980,17 +981,17 @@ class Optimize:
         for sid, (lb, ub) in metab_concs.items():
             sidx = re.sub('^M_', '', sid)
             var_id = f'{pf.V_LC_}{sidx}'
-            log_lb = np.log(lb) if lb else None
-            log_ub = np.log(ub) if ub else None
-            variable_bounds[var_id] = (log_lb, log_ub)
+            log10_lb = np.log10(lb) if lb else None
+            log10_ub = np.log10(ub) if ub else None
+            variable_bounds[var_id] = (log10_lb, log10_ub)
 
-        orig_log_bounds = self.set_variable_bounds(variable_bounds)
+        orig_log10_bounds = self.set_variable_bounds(variable_bounds)
 
         orig_bounds = {}
-        for var_id, (log_lb, log_ub) in orig_log_bounds.items():
+        for var_id, (log10_lb, log10_ub) in orig_log10_bounds.items():
             sidx = re.sub(pf.V_LC_, '', var_id)
-            lb = np.exp(log_lb) if log_lb else None
-            ub = np.exp(log_ub) if log_ub else None
+            lb = 10**log10_lb if log10_lb else None
+            ub = 10**log10_ub if log10_ub else None
             orig_bounds[sidx] = (lb, ub)
         return orig_bounds
 
