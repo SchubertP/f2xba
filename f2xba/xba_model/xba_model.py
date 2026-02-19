@@ -264,11 +264,12 @@ class XbaModel:
                     locus2rids[locus].append(rid)
         return locus2rids
 
-    def configure(self, fname=None):
+    def configure(self, xba_config_data=None):
         """Configure the XbaModel instance.
 
-        Configuration will use default values unless a XBA configuration file (.xlsx) is
-        provided with parameter `fname`.
+        Configuration will use default values unless a XBA configuration data is provided with
+        paramter `xba_config_data`. Configuration data can be a python dict with configuration data or
+        a file name referencing a spreadsheet file (.xlsx) containing data tables.
 
         The spreadsheet may contain the sheets: `general`, `modify_attributes`, `remove_gps`,
         `remove_reactions`, `add_gps`, `add_parameters`, `add_species`, `add_reactions`,
@@ -281,14 +282,16 @@ class XbaModel:
             xba_model = XbaModel('iML1515.xml')
             xba_model.configure('xba_parameters.xlsx')
 
-        :param str fname: (optional) filename of XBA configuration file (.xlsx)
+        :param str xba_config_data: (optional) filename of XBA configuration file (.xlsx) or dict with config data.
         """
-        if fname is None:
+        if xba_config_data is None:
             xba_params = {}
-        else:
+        elif type(xba_config_data) is str:
             sheet_names = ['general', 'modify_attributes', 'remove_gps', 'remove_reactions',
                            'add_gps', 'add_parameters', 'add_species', 'add_reactions', 'chebi2sid']
-            xba_params = load_parameter_file(fname, sheet_names)
+            xba_params = load_parameter_file(xba_config_data, sheet_names)
+        elif type(xba_config_data) is dict:
+            xba_params = xba_config_data
         general_params = xba_params['general']['value'].to_dict() if 'general' in xba_params.keys() else {}
         self.cofactor_flag = general_params.get('cofactor_flag', False)
 

@@ -35,7 +35,7 @@ Following parameters can be configured with this table:
    "biocyc_org_prefix", "BioCyc organism identifier", "ecoli"
    "kcats_fname", "reaction specific turnover numbers", "data/iML1515_predicted_fit_GECKO_kcats.xlsx"
    "enzyme_comp_fname", "enzyme composition", "data/iML1515_enzyme_composition_updated.xlsx"
-   "bulk_mappings_fname", " bulk mapping configuration", "data_configs/iJN678_bulk_mappings.xlsx"
+   "bulk_mappings_fname", "bulk mapping configuration", "data_configs/iJN678_bulk_mappings.xlsx"
    "cofactor_flag", "cofactor use in RBA enzymes (default: False)", True
 
 Notes: RBA models require "chromosome2accids" to reference all chromosomes and plasmids that contain genes used in the model, e.g. "Chr_I=BK006935.2, Chr_II=BK006936.2, Chr_III=BK006937.2, ...".
@@ -110,6 +110,17 @@ The table designated ``add_species`` facilitated the addition of species to the 
    "fbcChemicalFormula", "chemical formula (default: None)", "C14H3N2O8"
 
 Notes: Additional SBML parameters can be configured with this table, which include "xmlAnnotation", "metaid", "notes", "sboterm", "substanceUnits", and bool values for "constant", "boundaryCondition" and "hasOnlySubstanceUnits".
+
+
+Table ``remove_reactions``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The table designated ``remove_reactions`` contains a single column listing the reactions identifiers to be removed from the model.
+
+.. csv-table:: ``remove_reactions``: removal of reactions
+   :header: "Column", "Contents", "Example"
+
+   "id", "reaction identifier", "R_FTHFLi"
 
 Table ``add_reactions``
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -356,7 +367,7 @@ The TFA configuration file, used in configuration of the TfaModel instance, cont
 Table ``general``
 ^^^^^^^^^^^^^^^^^
 
-The table ``general`` is mandatory as the file name of the TD database must be specified in the ``thermo_data_fname`` parameter. The corresponding file must have the same structure as the file ‘thermo_data.thermodb’ used in the pyTFA package.
+The table ``general`` is mandatory. Either the file name to the TD database, having the same structure as the ‘thermo_data.thermodb’ used in the pyTFA Python package must be assigned to the parameter named ``thermo_data_fname``. Alternatively, the user can assign the file name of a table containing transformed Gibbs reaction energies and estimation errors to the parameter named ``drg0trs_fname``.
 
 .. csv-table:: ``general``: general configuration data
    :header: "Column", "Contents", "Example"
@@ -369,8 +380,10 @@ Following parameters can be configured with this table:
 .. csv-table:: 
    :header: "Parameter", "Description", "Example"
 
-   "thermo_data_fname", "parameter name", "data/thermo_data.thermodb"
+   "thermo_data_fname", "thermodynamics database (pyTFA) compliant", "data/thermo_data.thermodb"
+   "drg0trs_fname", "transformed Gibbs reaction energies and errors", "iML1515_drg0trs.xlsx"
    "mid_regex_pattern", "regular expression pattern to extract metabolite identifier from species identifier", "^M_(\w+)_\w+$"
+
 
 Table ``td_compartments``
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -385,19 +398,19 @@ The table designated ``td_compartments`` is mandatory and contains the thermodyn
    "ionic_strength_M", "ionic strength in mol/L", 0.25
    "c_min_M", "default minimal metabolite concentration in mol/L", 1.0e-8
    "c_max_M", "default maximal metabolite concentration in mol/L", 0.05
-   "<cid>_mV", "membrane potentials in mV (<cid> el. potential - own el. potential)", 150.0
+   "<cid>_mV or <cid>_V", "membrane potential difference in mV or V", 150.0
 
 
-Table ``modify_td_sids``
-^^^^^^^^^^^^^^^^^^^^^^^^
+Table ``mid2tdmid``
+^^^^^^^^^^^^^^^^^^^
 
-The optional table ``modify_td_sids`` facilitates the hard linking of selected metabolites to specific TD data records, thereby overruling the automated matching procedure. Use of this table requires the parameter “mid_regex_pattern” in the table “general” to be configured.
+The optional table ``mid2tdmid`` facilitates the hard linking of selected metabolites to specific TD data records, thereby overruling the automated matching procedure. Use of this table requires the parameter “mid_regex_pattern” in the table “general” to be configured.
 
-.. csv-table:: ``modify_td_sids``: link metabolite identifiers to TD database records
+.. csv-table:: ``mid2tdmid``: link metabolite identifiers to TD database records
    :header: "Column", "Contents", "Example"
 
    "mid", "metabolite identifier, without compartment prefix", "h2o"
-   "td_sid", " TD database record identifier", "cpd00001"
+   "tdmid", " TD database record identifier", "cpd00001"
 
 
 Table ``modify_thermo_data``
@@ -557,6 +570,19 @@ The thermodynamics database is required to generate models with thermodynamics c
    "units", "units ('kcal/mol' or 'kJ/mol')", "kcal/mol"
    "metabolites", "thermodynamics data related to metabolites", "Python dictionary, see below"
    "cues", "thermodynamics data related to cues", "Python dictionary, see below"
+
+
+Transformed Gibbs reaction energies
+-----------------------------------
+
+The user may wish to supply transformed Gibbs reaction energies calculated by an application of his preference, thereby replacing the calculations implemented in f2xba. f2xba can generate TD constrained models using transformed Gibbs energies of reaction and related estimation errors supplied by the user. A corresponsding template file can be generated with the TfaMethod ``export_drg0_tr(<fname>)``. The file name of the table (.xlsx) needs to be assigned to the parameter named ``drg0trs_fname`` in the 'general' table for the TFA configuration file.
+
+.. csv-table:: ``drg0trs``: configuration of transformed Gibbs reaction energies
+   :header: "Column", "Contents", "Example"
+
+   "rid", "reaction identifier", "R_FBA"
+   "drg0tr_kJ_per_mol", "transformed Gibbs reaction enegy in kJ/mol", 17.094
+   "error_kJ_per_mol", "estimated error in kJ/mol", 5.152
 
 
 Metabolites data

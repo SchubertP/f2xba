@@ -72,7 +72,7 @@ class TdReactant:
     def get_dfg0_at_charge(self, target_charge):
         """Determine ∆fG˚ for TD metabolite a given el. charge level
 
-        At zero ionic strenght, deprotonate or protonate to targe charge level using
+        At zero ionic strength deprotonate or protonate to targe charge level using
         pKa values.
         Process may be incomplete if pKa values or H-atoms get exhausted.
 

@@ -104,7 +104,7 @@ The generation of a thermodynamics constraint RBA model, designated TRBA, follow
 Extended model optimization
 ---------------------------
 
-This section presents Python code snippets for loading and optimizing extended metabolic models, which have been generated using the f2xba modeling framework. Two interfaces for model optimization are demonstrated: the well-known `cobrapy <https://cobrapy.readthedocs.io/en/latest/>`_ interface and the gurobipy interface, which directly accesses the Gurobi numerical solvers. It is imperative that users have already installed cobrapy and/or gurobipy, along with numerical solvers that support linear programming (LP) and mixed integer linear programming (MILP). It is assumed that models are available in SBML encoded files. The objective of optimization is to maximize the growth rate, based on the default media conditions configured in the model.
+This section presents Python code snippets for loading and optimizing extended metabolic models, which have been generated using the f2xba modeling framework. Two interfaces for model optimization are demonstrated: the well-known `cobrapy <https://cobrapy.readthedocs.io/en/latest/>`_ interface and the `gurobipy <https://www.gurobi.com>`_ interface, which directly accesses the Gurobi numerical solvers. It is imperative that users have already installed cobrapy and/or gurobipy, along with numerical solvers that support linear programming (LP) and mixed integer linear programming (MILP). It is assumed that models are available in SBML encoded files. The objective of optimization is to maximize the growth rate, based on the default media conditions configured in the model.
 
 While the processes of model loading and optimization are specific to the interface used, the extraction of optimization solutions and the presentation of results are independent of the interface. The capacity to process results for multiple optimization solutions in parallel is demonstrated in the tutorials section. Depending on the extended model type, different results can be accessed. It is assumed that the proteomics data is available in ``df_mpmf`` to produce correlation reports and plots for predicted to measured protein concentrations.
 
@@ -219,11 +219,43 @@ The ``RbaResults`` module furnishes access to supplementary optimization outcome
    rr.report_protein_levels('Glucose')
    rr.plot_proteins('Glucose')
 
+Optimize TFA model
+^^^^^^^^^^^^^^^^^^
+
+TFA models can be optimized similarly to FBA models. Optionally, concentration ranges of selected metabolites could be further constraint prior to the optimization. Reactant concentrations can be retrieved from the optimization results.
+
+.. code-block:: python
+
+   import numpy as np
+   import cobra
+   from f2xba import FbaOptimization, FbaResults
+
+   # Load TFA model
+   gem = cobra.io.read_sbml_model('iML1515_TFA.xml')
+
+   # Reconfigure variables and constraints
+   fo = FbaOptimization('iML1515_TFA.xml', gem)
+
+   # optional - fix metabolite concentrations to metabolomics
+   metabolomics = {'atp_c': 0.00356, 'adp_c': 0.000116, 'gtp_c': 0.001660, 'gdp_c': 0.000203}
+   molar_bounds = {sid: (mmol_per_l/1.5, mmol_per_l*1.5) for sid, mmol_per_l in  metabolomics.items()}
+   for sid, (lb, ub) in molar_bounds.items():
+       fo.reactions.get_by_id('V_LC_' + sid).bounds = (np.log10(lb), np.log10(ub))
+
+   # optimize TFA model
+   solution = fo.optimize()
+   print(f'predicted growth rate: {solution.objective_value:.3f} h-1 ({solution.status})')
+
+   # TFA optimization results analysis
+   fr = FbaResults(fo, {'Glucose': solution})
+   df_fluxes = fr.collect_fluxes()
+   df_net_fluxes = fr.collect_fluxes(net=True)
+   df_species_conc = fr.collect_species_conc()
 
 Optimize TGECKO model
 ^^^^^^^^^^^^^^^^^^^^^
 
-The optimization results, are a combination of GECKO and TFA optimization results.
+Optimization of a TD constraint enzyme constraint model is similar to optimizing enzyme constraint models. Optionally, concentration ranges of selected metabolites could be further constraint prior to the optimization. Reactant concentrations can be retrieved from the optimization results.
 
 .. code-block:: python
 
@@ -231,30 +263,25 @@ The optimization results, are a combination of GECKO and TFA optimization result
    import cobra
    from f2xba import EcmOptimization, EcmResults
 
-   # load TGECKO model
+   # Load TGECKO model
    ecm = cobra.io.read_sbml_model('iML1515_TGECKO.xml')
+
+   # Reconfigure variables and constraints
    eo = EcmOptimization('iML1515_TGECKO.xml', ecm)
 
-   # optional - fix metabolite concentrations to metabolomics
-   metabolomics = {'atp_c': 0.00356, 'adp_c': 0.000116, 'gtp_c': 0.001660, 'gdp_c': 0.000203}
-   molar_bounds = {sid: (mmol_per_l/1.5, mmol_per_l*1.5) for sid, mmol_per_l in  metabolomics.items()}
-   for sid, (lb, ub) in molar_bounds.items():
-       ecm.reactions.get_by_id('V_LC_' + sid).bounds = (np.log(lb), np.log(ub))
-
    # optimize TGECKO model
-   solution = ecm.optimize()
+   solution = eo.optimize()
    print(f'predicted growth rate: {solution.objective_value:.3f} h-1 ({solution.status})')
 
    # TGECKO optimization results analysis
    er = EcmResults(eo, {'Glucose': solution}, df_mpmf)
+
    df_fluxes = er.collect_fluxes()
    df_net_fluxes = er.collect_fluxes(net=True)
    df_proteins = er.collect_protein_results()
    df_species_conc = er.collect_species_conc()
-
    er.report_proteomics_correlation(scale='lin')
    er.report_protein_levels('Glucose')
-   er.plot_proteins('Glucose')  
 
 
 Optimize TRBA model
@@ -269,11 +296,6 @@ The optimization of the TRBA is demonstrated using the gurobipy interface, which
 
    # load TRBA model - using gurobipy interface
    ro = RbaOptimization('iML1515_TRBA.xml')
-
-   # optional - fix metabolite concentrations to metabolomics
-   metabolomics = {'atp_c': 0.00356, 'adp_c': 0.000116, 'gtp_c': 0.001660, 'gdp_c': 0.000203}
-   molar_bounds = {sid: (mmol_per_l/1.5, mmol_per_l*1.5) for sid, mmol_per_l in  metabolomics.items()}
-   orig_concs = ro.set_tfa_metab_concentrations(molar_bounds)
 
    # convert uptake fluxes to relative external medium concentrations
    sigma = ro.avg_enz_saturation

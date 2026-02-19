@@ -810,7 +810,6 @@ class TfaModel:
         # fbc_max_flux_pid = self.model.get_fbc_bnd_pid(fbc_max_flux_val, 'mmol_per_gDW', 'max_reverse_flux')
 
         count = 0
-        count_opened_rev_dir = 0
         modify_attrs = []
         for rid, td_r in self.td_reactions.items():
             ridx = re.sub(f'^{pf.R_}', '', rid)
@@ -820,7 +819,7 @@ class TfaModel:
                 rev_r = self.model.split_reversible_reaction(r)
                 modify_attrs.append([rev_r.id, 'reaction', 'product', f'{pf.C_FRC_}{ridx}=1.0'])
             count += 1
-        print(f'{count:4d} TD reactions split in forward/reverse, {count_opened_rev_dir} opened reverse direction')
+        print(f'{count:4d} TD reactions split in forward/reverse')
 
         cols = ['id', 'component', 'attribute', 'value']
         df_modify_attrs = pd.DataFrame(modify_attrs, columns=cols)

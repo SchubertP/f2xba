@@ -548,7 +548,7 @@ class Optimize:
         df_fbc_objs = self.m_dict['fbcObjectives']
         active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
         sref_str = active_odata['fluxObjectives'].split(';')[0]
-        return re.sub(pf.R_, '', sbmlxdf.extract_params(sref_str)['reac'])
+        return re.sub('^{pf.R_}', '', sbmlxdf.extract_params(sref_str)['reac'])
 
     # RETRIEVING DATA REQUIRED FOR RESULTS ANALYSIS
     @staticmethod
@@ -887,6 +887,7 @@ class Optimize:
                         var.lb = lb
                     if ub is not None:
                         var.ub = ub
+                self.gpm.update()
         else:
             for var_id, (lb, ub) in variable_bounds.items():
                 assert var_id in self.model.reactions, f'{var_id} not found'
@@ -917,7 +918,7 @@ class Optimize:
             objective = {}
             for idx in range(lin_expr.size()):
                 var_id = lin_expr.getVar(idx).VarName
-                objective[re.sub(pf.R_, '', var_id)] = lin_expr.getCoeff(idx)
+                objective[re.sub(f'^{pf.R_}', '', var_id)] = lin_expr.getCoeff(idx)
             direction = {gp.GRB.MINIMIZE: 'min', gp.GRB.MAXIMIZE: 'max'}[self.gpm.ModelSense]
         else:
             objective = {}
@@ -979,7 +980,7 @@ class Optimize:
         """
         variable_bounds = {}
         for sid, (lb, ub) in metab_concs.items():
-            sidx = re.sub('^M_', '', sid)
+            sidx = re.sub(f'^{pf.M_}', '', sid)
             var_id = f'{pf.V_LC_}{sidx}'
             log10_lb = np.log10(lb) if lb else None
             log10_ub = np.log10(ub) if ub else None
@@ -1129,7 +1130,7 @@ class Optimize:
         if self.is_gpm:
             update_bounds = {}
             for ex_rid in self.uptake_rids:
-                ex_ridx = re.sub('^R_', '', ex_rid)
+                ex_ridx = re.sub(f'^{pf.R_}', '', ex_rid)
                 if ex_ridx in medium:
                     update_bounds[ex_rid] = (-medium[ex_ridx], None)
                 else:
@@ -1237,6 +1238,7 @@ class Optimize:
         if np.isfinite(fba_gr):
 
             # create an pFBA model based on FBA model and make reactions irreversible
+            self.gpm.copy()
             pfba_gpm = self.gpm.copy()
 
             for var in pfba_gpm.getVars():
@@ -1250,7 +1252,7 @@ class Optimize:
 
             # create temporary constraint for FBA objective
             fba_objective = pfba_gpm.getObjective()
-            pfba_gpm.addLConstr(fba_objective, '=', fba_gr * fraction_of_optimum, 'FBA objective')
+            pfba_gpm.addLConstr(fba_objective, '>', fba_gr * fraction_of_optimum, 'FBA objective')
 
             # New Objective: minimize sum of all non-negative reactions
             pfba_gpm.update()
@@ -1291,22 +1293,21 @@ class Optimize:
             print('Method implemented for gurobipy interface only.')
             return None
 
-        ridx2rid = {re.sub('R_', '', rid): rid
-                    for rid in self.m_dict['reactions'].index if re.match('^R_', rid)}
+        ridx2rid = {re.sub(f'^{pf.R_}', '', rid): rid
+                    for rid in self.m_dict['reactions'].index if re.match(pf.R_, rid)}
         selected_rids = list(ridx2rid.values()) if rids is None else [ridx2rid[ridx] for ridx in rids]
 
-        # determine wildtype growth rate
         wt_gr = self.optimize().objective_value
-
         results = {}
         if np.isfinite(wt_gr):
 
             # create a temporary FVA model based on FBA model
+            self.gpm.update()
             fva_gpm = self.gpm.copy()
 
             # add wt objective as constraint
             wt_objective = fva_gpm.getObjective()
-            fva_gpm.addLConstr(wt_objective, '=', wt_gr * fraction_of_optimum, 'wild type objective')
+            fva_gpm.addLConstr(wt_objective, '>', wt_gr * fraction_of_optimum, 'wild type objective')
             fva_gpm.update()
 
             for rid in selected_rids:
@@ -1324,7 +1325,7 @@ class Optimize:
                     if abs(min_flux) < cutoff:
                         min_flux = 0.0
 
-                results[re.sub('^R_', '', rid)] = [min_flux, max_flux]
+                results[re.sub(f'^{pf.R_}', '', rid)] = [min_flux, max_flux]
             fva_gpm.close()
 
         net_rids = set()
@@ -1479,7 +1480,7 @@ class Optimize:
 
         tflux_vars = []
         for ridx, wt_flux in wt_fluxes.items():
-            flux_var = moma_gpm.getVarByName(f'R_{ridx}')
+            flux_var = moma_gpm.getVarByName(f'{pf.R_}{ridx}')
             if flux_var is None:
                 flux_var = moma_gpm.getVarByName(ridx)
 
@@ -1529,9 +1530,9 @@ class Optimize:
 
             s.t. S * v = 0; v_lb ≤ v ≤ v_ub
 
-            v - y * (v_ub - wt_u) <= wt_u; wt_u = wt + delta * abs(wt) + \epsilon
+            v - y * (v_ub - wt_u) <= wt_u; wt_u = wt + delta * abs(wt) + epsilon
 
-            v - y * (v_lb - wt_l) <= wt_l; wt_l = wt - delta * abs(wt) - \epsilon
+            v - y * (v_lb - wt_l) <= wt_l; wt_l = wt - delta * abs(wt) - epsilon
 
             v: disturbed flux distribution; wt: wild type flux distribution.
 
@@ -1572,7 +1573,7 @@ class Optimize:
 
         flux_ctrl_vars = []
         for ridx, wt_flux in wt_fluxes.items():
-            flux_var = room_gpm.getVarByName(f'R_{ridx}')
+            flux_var = room_gpm.getVarByName(f'{pf.R_}{ridx}')
             if flux_var is None:
                 flux_var = room_gpm.getVarByName(ridx)
             flux_lb = flux_var.LB

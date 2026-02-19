@@ -12,8 +12,8 @@ Welcome to f2xba's documentation
    :align: center
 
 
-f2xba modelling framework: from FBA to extended genome-scale modelling
-----------------------------------------------------------------------
+f2xba modeling framework: from FBA to extended genome-scale modeling
+--------------------------------------------------------------------
 
 In the domain of systems biology, the **f2xba** modeling framework has been developed for the purpose of generating a variety of extended genome-scale metabolic model types using simple and consistent workflows. This modeling framework was developed at the research group for `Computational Cell Biology (CCB) <https://www.cs.hhu.de/en/research-groups/computational-cell-biology>`_  at Heinrich-Heine-University Düsseldorf, Germany.
 
@@ -24,9 +24,9 @@ Extended model types
 
 f2xba support generation of enzyme constraint models, such as GECKO (`Sánchez et al., 2017 <https://doi.org/https://doi.org/10.15252/msb.20167411>`_), ccFBA [1]_, MOMENT (`Adadi et al., 2012 <https://doi.org/10.1371/journal.pcbi.1002575>`_) and MOMENTmr [1]_, resource balance constraint RBA models (`Bulović et al., 2019 <https://doi.org/https://doi.org/10.1016/j.ymben.2019.06.001>`_; `Goelzer et al., 2011 <https://doi.org/https://doi.org/10.1016/j.automatica.2011.02.038>`_), and thermodynamics constraint models, such as TFA (`Henry et al., 2007 <https://doi.org/10.1529/biophysj.106.093138>`_; `Salvy et al., 2019 <https://doi.org/10.1093/bioinformatics/bty499>`_) and TGECKO (thermodynamic GECKO) and TRBA (thermodynamic RBA). These advanced model types, which have been developed in recent years, are based on existing genome-scale metabolic models used for FBA (flux balance analysis), a methodology that has been utilized for decades (`Watson, 1986 <https://doi.org/10.1093/bioinformatics/2.1.23>`_). Genome-scale metabolic models can be obtained from databases such as the BiGG models database (`King, Lu, et al., 2015 <https://doi.org/10.1093/nar/gkv1049>`_), or retrieved from publications.
 
-Relevance of extended modelling
--------------------------------
-The advent of high-throughput data has led to a growing importance of these extended models. Fundamentally, FBA can be regarded as a predictor of the macroscopic behavior of metabolic networks, while extended models offer insights into the intricate functioning of these networks. Extended models contain considerably more parameters. While some of these additional parameters require definition, the majority are automatically retrieved from online databases and tools, including NCBI, UniProt, BioCyc, and TurNuP (`Kroll et al., 2023 <https://doi.org/10.1038/s41467-023-39840-4>`_). The development of these extended models and the enhancement of their parameters can be facilitated through simple and consistent workflows. Furthermore, the sharing of configuration data among different model types is encouraged. All extended models are exported in stand-alone SBML (Systems Biology Markup Language) coded files (`Hucka et al., 2019 <https://doi.org/10.1515/jib-2019-0021>`_) to facilitate model sharing and processing by downstream tools, such as cobrapy (`Ebrahim et al., 2013 <https://doi.org/10.1186/1752-0509-7-74>`_). Additionally, the f2xba modeling framework provides optimization support via cobrapy or gurobipy interfaces. Optimization results are structured and enriched with additional data. This includes tables for each variable type, correlation plots, and exports to `Esher <https://escher.github.io>`_ (`King, Dräger, et al., 2015 <https://doi.org/10.1371/journal.pcbi.1004321>`_). This facilitates interpretation of model predictions and supports workflows for model parameter adjustments.
+Relevance of extended modeling
+------------------------------
+The advent of high-throughput data has led to a growing importance of these extended models. Fundamentally, FBA can be regarded as a predictor of the macroscopic behavior of metabolic networks, while extended models offer insights into the intricate functioning of these networks. Extended models contain considerably more parameters. While some of these additional parameters require definition, the majority are automatically retrieved from online databases and tools, including NCBI, UniProt, BioCyc, and TurNuP (`Kroll et al., 2023 <https://doi.org/10.1038/s41467-023-39840-4>`_). The development of these extended models and the enhancement of their parameters can be facilitated through simple and consistent workflows. Furthermore, the sharing of configuration data among different model types is encouraged. All extended models are exported in stand-alone SBML (Systems Biology Markup Language) coded files (`Hucka et al., 2019 <https://doi.org/10.1515/jib-2019-0021>`_) to facilitate model sharing and processing by downstream tools, such as cobrapy (`Ebrahim et al., 2013 <https://doi.org/10.1186/1752-0509-7-74>`_). Additionally, the f2xba modeling framework provides optimization support via cobrapy and gurobipy interfaces. Optimization results are structured and enriched with additional data. This includes tables for each variable type, correlation plots, and exports to `Esher <https://escher.github.io>`_ (`King, Dräger, et al., 2015 <https://doi.org/10.1371/journal.pcbi.1004321>`_). This facilitates interpretation of model predictions and supports workflows for model parameter adjustments.
 
 Integrated solution
 -------------------
@@ -41,7 +41,7 @@ The documentation includes a set of tutorials with detailed descriptions, where 
 
 Outlook
 ----------
-Growth balance analysis (GBA) (`Dourado & Lercher, 2020 <https://doi.org/10.1038/s41467-020-14751-w>`_) modeling is an active research project in CCB. In GBA models, reaction fluxes are coupled with protein requirements using non-linear kinetic functions, where enzyme saturation depends on variable metabolite concentrations. We have previously demonstrated the generation of small, schematic GBA models in SBML, the loading of these models from SBML, and the optimization of them using non-linear solvers. However, the optimization of genome-scale GBA models remains challenging. Once this optimization problem is resolved, f2xba could be extended to support GBA model generation, e.g., by extending GECKO or RBA configuration data, and GBA model optimization, either using nonlinear optimization features available in gurobi 12 or using a dedicated nonlinear solver like IPOP.
+Growth balance analysis (GBA) (`Dourado & Lercher, 2020 <https://doi.org/10.1038/s41467-020-14751-w>`_) modeling is an active research project in CCB. In GBA models, reaction fluxes are coupled with protein requirements using non-linear kinetic functions, where enzyme saturation depends on variable metabolite concentrations. We have previously demonstrated the generation of small, schematic GBA models in SBML, the loading of these models from SBML, and the optimization of them using non-linear solvers. However, the optimization of genome-scale GBA models remains challenging. Once this optimization problem is resolved, f2xba could be extended to support GBA model generation, e.g., by extending GECKO or RBA configuration data, and GBA model optimization, either using nonlinear optimization features available in Gurobi or using a dedicated nonlinear solver like IPOP.
 
 
 .. toctree::
@@ -56,7 +56,7 @@ Growth balance analysis (GBA) (`Dourado & Lercher, 2020 <https://doi.org/10.1038
    api
 
 
-It should be noted that the text has been refined using the DeepL Pro Write tool.
+It should be noted that the text has been refined using DeepL Pro Write (https://www.deepl.com).
 
 
 References:

@@ -113,7 +113,7 @@ class TdReaction:
             dph = td_compartments[data['to']].ph - td_compartments[data['from']].ph
             self.sum_nh_adjust -= RT * np.log(10) * data['nh'] * dph
 
-        # + F ∆pot_sd ∑ charge_sd, net charge transorted from source to destination
+        # + F ∑ ∆pot_sd     charge_sd, net charge transorted from source to destination
         self.sum_el_work = 0.0
         for data in self.tx_charges:
             dpot = td_compartments[data['from']].membrane_pots[data['to']]
