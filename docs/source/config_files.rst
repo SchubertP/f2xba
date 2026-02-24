@@ -14,7 +14,7 @@ The XBA configuration file, used in configuration of the XbaModel instance, cont
 Table ``general``
 ^^^^^^^^^^^^^^^^^
 
-The table labeled ``general`` contains the primary parameters for extended model configuration. The default turnover numbers can be configured for metabolic and transport reactions. Furthermore, references to online databases, such as the UniProt protein database (``organism_id``), the NCBI genome database (``chromosome2accids``), and the Biocyc organism database (``biocyc_org_prefix``), can be defined as per requirement. Furthermore, the provision of file names to configure reaction specific turnover numbers (``kcats_fname``) and enzyme compositions  (``enzyme_comp_fname``) is permitted, with the objective of replacing default values. Setting the ``cofactor_flag`` to "True" enables the incorporation of cofactors extracted from UniProt entries into enzyme compositions. Finally, a bulk mapping configuration table (``bulk_mappings_fname``) can be used for large-scale model reconfigurations, e.g., for remapping of identifiers used in the model.
+The table labeled ``general`` contains the primary parameters for extended model configuration. The default turnover numbers can be configured for metabolic and transport reactions. Furthermore, references to online databases, such as the UniProt protein database (``organism_id``), the NCBI genome database (``chromosome2accids``), and the Biocyc organism database (``biocyc_org_prefix``), can be defined as per requirement. Furthermore, the provision of file names to configure reaction specific turnover numbers (``kcats_fname``) and enzyme compositions (``enzyme_comp_fname``) is permitted, with the objective of replacing default values. Setting the ``cofactor_flag`` to "True" enables the incorporation of cofactors extracted from UniProt entries into enzyme compositions. Finally, a bulk mapping configuration table (``bulk_mappings_fname``) can be used for large-scale model reconfigurations, e.g., for remapping of identifiers used in the model.
 
 .. csv-table:: ``general``: general configuration data
    :header: "Column", "Contents", "Example"
@@ -151,7 +151,7 @@ The table designated ``add_parameters`` facilitates the addition of SBML paramet
    "id", "parameter identifier", "R_ATPM_upper_bound"
    "name", "descriptive name", "ATPM upper - bound"
    "value", "numerical value", 13.5
-   "units", "reference to a SBML units definition (default: 'dimensionless')", "mmol_per_gDW_per_hr"
+   "units", "reference to a SBML unit definition (default: 'dimensionless')", "mmol_per_gDW_per_hr"
    "constant", "SBML constant flag (default: True)", None
 
 
@@ -443,7 +443,7 @@ The table entitled ``modify_drg0_bounds`` is optional. Typically, this table is 
 Bulk configuration
 ------------------
 
-This bulk mappings configuration file is used for large scale XbaModel modifications, which includes adding or updating MIRIAM annotations to species, reaction and gene product components. The bulk mappings configuration file can be referenced in the XBA configuration file (table “general”, parameter “bulk_mappings_fname”). The configuration data could be generated based on supplementary information of poorly annotated metabolic models or based on database research.
+This bulk mapping configuration file is used for large scale XbaModel modifications, which includes adding or updating MIRIAM annotations to species, reaction and gene product components. The bulk mappings configuration file can be referenced in the XBA configuration file (table “general”, parameter “bulk_mappings_fname”). The configuration data could be generated based on supplementary information of poorly annotated metabolic models or based on database research.
 
 
 Table ``species``

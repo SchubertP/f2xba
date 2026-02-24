@@ -887,12 +887,13 @@ class Optimize:
                         var.lb = lb
                     if ub is not None:
                         var.ub = ub
-                self.gpm.update()
+            self.gpm.update()
         else:
+            # Cobrapy interface
             for var_id, (lb, ub) in variable_bounds.items():
                 assert var_id in self.model.reactions, f'{var_id} not found'
                 rxn = self.model.reactions.get_by_id(var_id)
-                # orig_bounds[var_id] = rxn.bounds
+                orig_bounds[var_id] = rxn.bounds
                 if (lb is not None) and (ub is not None):
                     rxn.bounds = (lb, ub)
                 elif lb is not None:
@@ -1269,9 +1270,9 @@ class Optimize:
         return pfba_solution
 
     def fva(self, rids=None, fraction_of_optimum=1.0, net=False, cutoff=None):
-        """Perform a Flux Variability Analysis (FVA) on a FBA model using the gurobipy interface.
+        """Perform a Flux Variability Analysis (FVA) on a model using the gurobipy interface.
 
-        A list of reaction ids can be provided to limit the scope of the FVA analysis.
+        A list of reaction/variable ids can be provided to limit the scope of the FVA analysis.
         With the optional parameter 'net' set to True, fluxes of isoreactions and forward/reverse
         are combined. With optional parameter 'cutoff', absolute flux values below the cutoff, e.g. 1e-8,
         are considered to be zero.
@@ -1282,20 +1283,30 @@ class Optimize:
 
             eo.fva(['CS', 'ME1', 'POR5_iso1', 'POR5_iso1_REV'])
 
-        :param list(str) rids: reaction identifiers (without leading `R_`) (default: None)
+        :param list(str) rids: optional list of reaction/variable identifiers (with or witout prefix `R_`)
         :param float fraction_of_optimum: scaling of wild type objective value (default: 1.0)
         :param bool net: (optional) select if fluxes of isoreactions and rev/fwd should be aggregated
         :param float cutoff: (optional) cutoff value for fluxes to be considered to be zero, e.g. 1e-8
-        :return: table with minimum and maximum reaction fluxes
+        :return: table with minimum and maximum reaction fluxes / variable values
         :rtype: pandas.DataFrame
         """
         if self.is_gpm is None:
             print('Method implemented for gurobipy interface only.')
             return None
 
-        ridx2rid = {re.sub(f'^{pf.R_}', '', rid): rid
-                    for rid in self.m_dict['reactions'].index if re.match(pf.R_, rid)}
-        selected_rids = list(ridx2rid.values()) if rids is None else [ridx2rid[ridx] for ridx in rids]
+        model_var_ids = set(self.m_dict['reactions'].index)
+        selected_varids = []
+        if rids is None or len(rids) == 0:
+            # per default, select all reaction fluxes
+            selected_varids = [var_id for var_id in model_var_ids if re.match(pf.V_, var_id) is None]
+        else:
+            for var_id in rids:
+                if var_id in model_var_ids:
+                    selected_varids.append(var_id)
+                else:
+                    # support reaction fluxes without prefix 'R_' (cobrapy format)
+                    if f'{pf.R_}{var_id}' in model_var_ids:
+                        selected_varids.append(f'{pf.R_}{var_id}')
 
         wt_gr = self.optimize().objective_value
         results = {}
@@ -1310,8 +1321,8 @@ class Optimize:
             fva_gpm.addLConstr(wt_objective, '>', wt_gr * fraction_of_optimum, 'wild type objective')
             fva_gpm.update()
 
-            for rid in selected_rids:
-                var = fva_gpm.getVarByName(rid)
+            for varid in sorted(selected_varids):
+                var = fva_gpm.getVarByName(varid)
 
                 fva_gpm.setObjective(var, gp.GRB.MINIMIZE)
                 min_flux = self.optimize(fva_gpm).objective_value
@@ -1325,37 +1336,46 @@ class Optimize:
                     if abs(min_flux) < cutoff:
                         min_flux = 0.0
 
-                results[re.sub(f'^{pf.R_}', '', rid)] = [min_flux, max_flux]
+                results[re.sub(f'^{pf.R_}', '', varid)] = [min_flux, max_flux]
             fva_gpm.close()
 
-        net_rids = set()
+        df_fva_results = pd.DataFrame()
         if not net:
             df_fva_results = pd.DataFrame(results.values(), list(results.keys()), columns=['minimum', 'maximum'])
         else:
-            net_flux_ranges = {}
-            for rid, (flux_min, flux_max) in results.items():
-                if re.match(pf.V_, rid) is None and re.search(r'_arm(_REV)?$', rid) is None:
-                    fwd_rid = re.sub('_REV$', '', rid)
-                    net_rid = re.sub(r'_iso\d*', '', fwd_rid)
-                    net_rids.add(net_rid)
-                    if flux_max > 0.0:
-                        if re.search('_REV$', rid):
-                            net_flux_min = -flux_max
-                            net_flux_max = -flux_min
-                        else:
-                            net_flux_min = flux_min
-                            net_flux_max = flux_max
-                        if net_rid in net_flux_ranges:
-                            net_flux_min = min(net_flux_ranges[net_rid][0], net_flux_min)
-                            net_flux_max = max(net_flux_ranges[net_rid][1], net_flux_max)
-                        net_flux_ranges[net_rid] = [net_flux_min, net_flux_max]
-            # add ranges for blocked net reactions
-            for net_rid in net_rids:
-                if net_rid not in net_flux_ranges:
-                    net_flux_ranges[net_rid] = [0.0, 0.0]
+            net_varids = set()
+            net_val_ranges = {}
+            for var_id, (val_min, val_max) in results.items():
+                # exclude ARM reactions, that are optionally used in GECKO models
+                if re.search(r'_arm(_REV)?$', var_id) is None:
+                    # determine net reaction id
+                    fwd_id = re.sub('_REV$', '', var_id)
+                    net_varid = re.sub(r'_iso\d*', '', fwd_id)
+                    net_varids.add(net_varid)
 
-            df_fva_results = pd.DataFrame(net_flux_ranges.values(), list(net_flux_ranges.keys()),
-                                          columns=['minimum', 'maximum'])
+                    if re.search('_REV$', var_id) is None:
+                        net_val_min = val_min
+                        net_val_max = val_max
+                    else:
+                        net_val_min = -val_max
+                        net_val_max = -val_min
+
+                    # aggregate min/max variable values (exluding blocked reactions)
+                    if abs(val_max) > 1e-10 or abs(val_min) > 1e-10:
+                        if net_varid not in net_val_ranges:
+                            net_val_ranges[net_varid] = [net_val_min, net_val_max]
+                        else:
+                            net_val_min = min(net_val_ranges[net_varid][0], net_val_min)
+                            net_val_max = max(net_val_ranges[net_varid][1], net_val_max)
+                            net_val_ranges[net_varid] = [net_val_min, net_val_max]
+
+                # add ranges for blocked net reactions
+                for net_varid in net_varids:
+                    if net_varid not in net_val_ranges:
+                        net_val_ranges[net_varid] = [0.0, 0.0]
+
+                df_fva_results = pd.DataFrame(net_val_ranges.values(), list(net_val_ranges.keys()),
+                                              columns=['minimum', 'maximum'])
 
         return df_fva_results
 
