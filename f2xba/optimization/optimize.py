@@ -548,7 +548,7 @@ class Optimize:
         df_fbc_objs = self.m_dict['fbcObjectives']
         active_odata = df_fbc_objs[df_fbc_objs['active'] == bool(True)].iloc[0]
         sref_str = active_odata['fluxObjectives'].split(';')[0]
-        return re.sub('^{pf.R_}', '', sbmlxdf.extract_params(sref_str)['reac'])
+        return re.sub(f'^{pf.R_}', '', sbmlxdf.extract_params(sref_str)['reac'])
 
     # RETRIEVING DATA REQUIRED FOR RESULTS ANALYSIS
     @staticmethod

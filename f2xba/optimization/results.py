@@ -61,6 +61,10 @@ class Results(ABC):
             self.gene2mpmf = df_mpmf['avg_mpmf'] if 'avg_mpmf' in df_mpmf.columns else {}
             self.gene2rank = df_mpmf['rank'] if 'rank' in df_mpmf.columns else {}
 
+    @property
+    def objective_values(self):
+        return {condition: solution.objective_value for condition, solution in self.results.items()}
+
     @abstractmethod
     def get_fluxes(self, solution):
         pass
