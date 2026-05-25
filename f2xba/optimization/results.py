@@ -63,6 +63,11 @@ class Results(ABC):
 
     @property
     def objective_values(self):
+        """Query objective values related to results.
+
+        :return: conditions with values for optimization objective
+        :rtype: dict
+        """
         return {condition: solution.objective_value for condition, solution in self.results.items()}
 
     @abstractmethod

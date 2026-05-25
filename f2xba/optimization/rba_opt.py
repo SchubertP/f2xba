@@ -641,11 +641,14 @@ class RbaOptimization(Optimize):
                 # simulate a single gene deletion
                 orig_rid_bounds = self.gene_knock_outs(gene)
                 solution = self.solve(**kwargs)
-                if (solution is not None) and solution.status == 'infeasible':
-                    print(f'first solution infeasible - reset model {gene}')
-                    self.gpm.reset()
-                    solution = self.solve(**alt_kwargs)
-                    print(f'solution status second attempt for {gene}: {solution.status}')
+                #if (solution is not None) and solution.status == 'infeasible':
+                #    print(f'first solution infeasible - reset model {gene}')
+                #    self.gpm.reset()
+                #    solution = self.solve(**alt_kwargs)
+                #    if solution is None:
+                #        print(f'second solution infeasible {gene}')
+                #    else:
+                #        print(f'solution status second attempt for {gene}: {solution.status}')
                 self.set_variable_bounds(orig_rid_bounds)
 
                 # process simulation result

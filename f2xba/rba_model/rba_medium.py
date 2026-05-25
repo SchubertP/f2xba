@@ -37,7 +37,7 @@ class RbaMedium:
         Import of a specific metabolite is allowed when the corresponding
         exchange reaction is unblocked in the updake direction (usually a negative lower flux bound).
 
-        RBA modelling does not use exchange reactions, instead if defines positive
+        RBA modeling does not use exchange reactions, instead if defines positive
         metabolite concentrations for the selected environment.
         These concentrations are configured in the RBA medium component.
 
@@ -56,7 +56,7 @@ class RbaMedium:
         protein cost linear with the total import rate.
 
         In E. coli metabolite concentration in external medium and periplasm are close to identical.
-        RBA then implement Michaelis Menten kinetics for importing species from periplasm to cytosol,
+        RBA then implement Michaelis-Menten kinetics for importing species from periplasm to cytosol,
         using as species concentration the respective concentration of the medium metabolite.
 
         Maximum medium concentration from rba_params['general']['medium_max_conc']['value']
@@ -78,10 +78,11 @@ class RbaMedium:
                     sid = list(r.products)[0]
                     flux_bnd = xba_model.parameters[r.fbc_upper_bound].value
                 mid, cid = sid.rsplit('_', 1)
-                assert (cid == xba_model.external_compartment)
-                if abs(flux_bnd) > 0.0:
-                    nutrients += 1
-                self.concentrations[mid] = min(abs(flux_bnd), medium_max_conc)
+                if cid == xba_model.external_compartment:
+                # assert (cid == xba_model.external_compartment)
+                    if abs(flux_bnd) > 0.0:
+                        nutrients += 1
+                    self.concentrations[mid] = min(abs(flux_bnd), medium_max_conc)
         print(f'{len(self.concentrations):4d} medium metabolites ({nutrients} > 0.0 mmol/l)')
 
     def export_xml(self, model_dir):

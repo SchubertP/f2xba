@@ -221,7 +221,7 @@ class SbmlReaction(SbmlSBase):
         """Remove gene products from Gene Product Rules.
 
         Used to remove dummy protein gene product and
-        gene products related to coezymes that already
+        gene products related to coenzymes that already
         appear in reaction reactants/products
 
         :param del_gps: coenzyme gene products
@@ -229,16 +229,17 @@ class SbmlReaction(SbmlSBase):
         """
         if self.gene_product_assoc:
             gpa = self.gene_product_assoc
-            for gp in del_gps:
-                if gp in self.gene_product_assoc:
-                    gpa = re.sub(gp + ' and ', '', gpa)
-                    gpa = re.sub(' and ' + gp, '', gpa)
-                    gpa = re.sub(gp + ' or ', '', gpa)
-                    gpa = re.sub(' or ' + gp, '', gpa)
-                    gpa = re.sub(gp, '', gpa)
-            # if all gene_products have been removed, set gpa to None
-            if len(set(re.findall(r"\w+", gpa)).difference({'or', 'and'})) > 0:
-                self.gene_product_assoc = gpa
+            enzymes = {re.sub(r'[()]', '', item.strip()) for item in re.split(r'\bor\b', gpa)}
+            upd_iso_enzymes = set()
+            for iso_enzyme in enzymes:
+                upd_gps = {item.strip() for item in re.split(r'\band\b', iso_enzyme)}.difference(set(del_gps))
+                if len(upd_gps) > 0:
+                    upd_iso_enzyme = ' and '.join(sorted(upd_gps))
+                    if len(upd_gps) > 1:
+                        upd_iso_enzyme = '(' + upd_iso_enzyme + ')'
+                    upd_iso_enzymes.add(upd_iso_enzyme)
+            if len(upd_iso_enzymes) > 0:
+                self.gene_product_assoc = ' or '.join(sorted(upd_iso_enzymes))
             else:
                 self.gene_product_assoc = None
 

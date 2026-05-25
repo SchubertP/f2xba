@@ -15,8 +15,8 @@ class SbmlGroup(SbmlSBase):
         super().__init__(s_group)
         self.id = s_group['id']
         self.kind = s_group.get('kind', 'partonomy')
-        self.list_of_members = s_group.get('listMembers')
-        self.id_refs = self.get_id_refs(s_group['members'])
+        self.list_of_members = s_group.get('listMembers', '')
+        self.id_refs = self.get_id_refs(s_group.get('members'))
 
     @staticmethod
     def get_id_refs(members):

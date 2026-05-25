@@ -122,7 +122,7 @@ class XbaModel:
         """SBML FBC gene products configuration data."""
 
         self.groups = {gid: SbmlGroup(row)
-                       for gid, row in model_dict['groups'].iterrows()} if 'groups' in model_dict else None
+                       for gid, row in model_dict['groups'].iterrows()} if 'groups' in model_dict else {}
         """SBML GROUPS groups configuration data."""
 
         self.func_defs = {fd_id: SbmlFunctionDef(row)
@@ -746,7 +746,7 @@ class XbaModel:
 
         # update reactions in groups component
         orig2rids = defaultdict(set)
-        if self.groups:
+        if len(self.groups) > 0:
             for rid in self.reactions:
                 rid_fwd = re.sub(r'_REV$', '', rid)
                 orig_rid = re.sub(r'_iso\d+$', '', rid_fwd)
@@ -763,9 +763,9 @@ class XbaModel:
         if len(del_components['sids']) > 0:
             print(f"{len(del_components['sids']):4d} species removed following cleanup: {del_components['sids']}")
         if len(del_components['gpids']) > 0:
-            print(f"{len(del_components['gpids']):4d} parameters removed following cleanup: {del_components['gpids']}")
+            print(f"{len(del_components['gpids']):4d} gene products removed following cleanup: {del_components['gpids']}")
         if len(del_components['cids']) > 0:
-            print(f"{len(del_components['pids']):4d} compartments removed following cleanup: {del_components['cids']}")
+            print(f"{len(del_components['cids']):4d} compartments removed following cleanup: {del_components['cids']}")
 
     def _create_sbml_model(self):
         """Generate in-memory SBML model."""
@@ -781,7 +781,7 @@ class XbaModel:
             'fbcObjectives': pd.DataFrame([data.to_dict() for data in self.objectives.values()]).set_index('id'),
             'fbcGeneProducts': pd.DataFrame([data.to_dict() for data in self.gps.values()]).set_index('id'),
         }
-        if self.groups:
+        if len(self.groups) > 0:
             m_dict['groups'] = pd.DataFrame([data.to_dict() for data in self.groups.values()])
         if self.func_defs:
             m_dict['funcDefs'] = pd.DataFrame([data.to_dict() for data in self.func_defs.values()]).set_index('id')
@@ -1386,10 +1386,12 @@ class XbaModel:
           if provided, this will overwrite the unit used as reaction flux
         - instead of providing 'reactants', 'products' and 'reversible', a 'reactionString'
           can be provided to determine 'reactants', 'products' and 'reversible'
+        - optional 'subsystem' attribute may contain an assignment to an existing or new subsytem defined in Groups
 
         :meta private:
         :param pandas.DataFrame df_reactions: reaction records
         """
+
         n_count = 0
         for rid, r_data in df_reactions.iterrows():
             n_count += 1
@@ -1411,6 +1413,22 @@ class XbaModel:
                 r_data['fbcUpperFluxBound'] = self.get_fbc_bnd_pid(r_data.loc['fbcUb'], unit_id, f'fbc_{rid}_ub')
             self.reactions[rid] = SbmlReaction(r_data, self.species)
         print(f'{n_count:4d} variable ids added to the model ({len(self.reactions)} total variables)')
+
+        if 'subsystem' in df_reactions.columns and 'groups' in self.sbml_container['packages']:
+            grp_name2gid = {grp.name: idx for idx, grp in self.groups.items()}
+            n_count = 0
+            for rid, r_data in df_reactions.iterrows():
+                grp_name = r_data['subsystem']
+                if type(grp_name) is str and len(grp_name) > 0:
+                    if grp_name not in grp_name2gid:
+                        gid = len(self.groups)
+                        grp_dict = {'id': f'group{gid + 1}', 'name': grp_name, 'sboterm': 'SBO:0000633'}
+                        self.groups[gid] = SbmlGroup(pd.Series(grp_dict, name=gid))
+                        grp_name2gid[grp_name] = gid
+                    gid = grp_name2gid[grp_name]
+                    self.groups[gid].id_refs.add(rid)
+                    n_count += 1
+            print(f'{n_count:4d} reactions assigned to subsystems (SBML Groups)')
 
     def add_compartments(self, compartments_config):
         """Add compartments to the model according to compartments configuration

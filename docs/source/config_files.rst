@@ -136,6 +136,7 @@ The table designated ``add_reactions`` facilitates the addition of reactions to 
    "reactionString", "reaction string (default: None)", "M_gly_c + M_trnagly_c + M_atp_c => M_glytrna_c + M_amp_c + M_ppi_c"
    "fbcLb", " lower flux bound (default: None)", 0
    "fbcUb", "upper flux bound (default: None)", 1000
+   "subsystem", "assignment to a new or existing subsystem (default: None)", "Oxidative Phosphorylation"
 
 Note: : Additional SBML parameters can be configured with this table. As an alternative to the provision of a "reactionString", the parameters "reactants", "products" and "reversible" can be configured. In lieu of configuring numerical values for "fbcLb" and "fbcUb", model parameter identifiers can be utilized in "fbcLowerFluxBound" and "fbcUpperFluxBound." Additionally, "miriamAnnotation", "xmlAnnotation", "metaid", "sboterm" and "notes" can be configured.
 
