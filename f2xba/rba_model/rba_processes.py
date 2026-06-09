@@ -13,7 +13,6 @@ from .rba_target_value import RbaTargetValue
 from ..utils.rba_utils import get_species_refs_from_xml, get_species_refs_from_str, \
                               extract_params, translate_reaction_string
 
-
 class RbaProcesses:
 
     def __init__(self):
@@ -53,10 +52,15 @@ class RbaProcesses:
             - e.g. 'trna, b' to select only tRNAs and gene loci starting with 'b' (used for rRNA)
 
         'input_filter' for set 'protein':
-        - 'signal_peptide': select proteins having a signal peptide as per UniProt data
-          plus dummy_proteins not located in the cytoplasm.
-        - comma-separated list of valid RBA compartment ids (select proteins accordingly)
-        - comma-separated list of regular expression patterns that will be checked against protein id
+        - input_filter = None / not supplied: all proteins selected from RBA macromolecules
+        - input_filter = '<patterns>', with '<patterns>' a comma separated list of regular expression patterns
+          matching aginst RBA macromolecule id and chromosome identifiers.
+          pattern may include the value 'signal_peptide' in which case protein is selected if corresponding
+          UniProt entry indicates a signal peptide.
+          E.g. 'Chr_I, Chr_V, Chr_X', or 'Y, dummy_protein' or 'signal_peptide'
+        - input_filter = '<patterns> -> <cids>': with <cids> being a comma-separated list of compartment ids.
+          additional check against protein compartment id
+          E.g. 'Chr_I, Chr_V, Chr_X -> m, mm'
 
         :param rba_params: RBA model specific parametrization
         :type rba_params: dict of pandas DataFrames
@@ -66,7 +70,6 @@ class RbaProcesses:
         df_pmaps_data = rba_params['processing_maps']
         df_proc_data = rba_params['processes']
         df_mach_data = rba_params['machineries']
-        cytoplasm_cid = rba_model.cid_mappings['cytoplasm_cid']
 
         # Process data
         pmap2set = {}
@@ -96,11 +99,11 @@ class RbaProcesses:
             # determine process inputs
             inputs = []
             if proc_set == 'dna':
-                inputs = list(rba_model.dna.macromolecules)
+                inputs = sorted(rba_model.dna.macromolecules)
 
             elif proc_set == 'rna':
                 if type(row['input_filter']) is not str:
-                    inputs = list(rba_model.rnas.macromolecules)
+                    inputs = sorted(rba_model.rnas.macromolecules)
                 else:
                     patterns = [pattern.strip() for pattern in row['input_filter'].split(',')]
                     input_set = set()
@@ -109,40 +112,60 @@ class RbaProcesses:
                             if re.match(pattern, rnaid):
                                 input_set.add(rnaid)
                                 break
-                    inputs = list(input_set)
+                    inputs = sorted(input_set)
 
             elif proc_set == 'protein':
-                if type(row['input_filter']) is not str:
-                    inputs = list(rba_model.proteins.macromolecules)
-                elif row['input_filter'] == 'signal_peptide':
-                    inputs = []
-                    for locus in rba_model.proteins.macromolecules:
-                        # add those proteins to the input, that have a signal_peptide in their UniProt data
-                        if locus in rba_model.model.locus2uid:
-                            p = rba_model.model.proteins[rba_model.model.locus2uid[locus]]
-                            if p.has_signal_peptide is True:
-                                inputs.append(locus)
-                        # dummy proteins have no UniProt entries.
-                        # We add them to input if they are not located in the cytoplasm
-                        else:
-                            if rba_model.proteins.macromolecules[locus].compartment != cytoplasm_cid:
-                                inputs.append(locus)
-                else:
-                    items = {item.strip() for item in row['input_filter'].split(',')}
-                    input_set = set()
-                    # check if items are valid compartment ids:
-                    if len(items.intersection(set(rba_model.metabolism.compartments))) == len(items):
-                        for mm_id, mm in rba_model.proteins.macromolecules.items():
-                            if mm.compartment in items:
-                                input_set.add(mm_id)
+
+                # exctract patterns from input_filter
+                cids = set()
+                patterns = set()
+                if type(row['input_filter']) is str:
+                    if '->' in row['input_filter']:
+                        raw_patterns, raw_cids = row['input_filter'].split('->')
+                        patterns = {item.strip() for item in raw_patterns.split(',')}
+                        cids = {item.strip() for item in raw_cids.split(',')}
                     else:
-                        # consider items as patterns or names of macromolecules
-                        for mm_id in rba_model.proteins.macromolecules:
-                            for pattern in items:
-                                if re.match(pattern, mm_id):
-                                    input_set.add(mm_id)
+                        patterns = {item.strip() for item in row['input_filter'].split(',')}
+
+                # determine proteins to be added to the input list
+                input_set = set()
+                for locus in rba_model.proteins.macromolecules:
+                    if type(row['input_filter']) is not str:
+                        input_set.add(locus)
+                    else:
+                        # check for eligible locus based on pattern matching
+                        locus_eligible = False
+                        if 'signal_peptide' in patterns:
+                            # check if corresponding UniProt annotation contains a signal peptide entry
+                            if locus in rba_model.model.locus2uid:
+                                p = rba_model.model.proteins[rba_model.model.locus2uid[locus]]
+                                if p.has_signal_peptide is True:
+                                    locus_eligible = True
+                        if not locus_eligible:
+                            for locus_pattern in patterns:
+                                # pattern match wrt to locus ids
+                                if re.match(locus_pattern, locus):
+                                    locus_eligible = True
                                     break
-                    inputs = list(input_set)
+                        if not locus_eligible:
+                            # pattern match wrt to chromosome ids
+                            ncbi_locus = re.sub(r'\W', '_', locus)
+                            mapped_ncbi_locus = rba_model.model.ncbi_data.label2locus.get(ncbi_locus)
+                            if mapped_ncbi_locus:
+                                chrom_id = rba_model.model.ncbi_data.locus2chrom_id[mapped_ncbi_locus]
+                                for chrom_pattern in patterns:
+                                    if re.match(chrom_pattern, chrom_id):
+                                        locus_eligible = True
+                                        break
+                        if locus_eligible:
+                            # check against protein compartment id if required in the input filter
+                            if len(cids) == 0:
+                                input_set.add(locus)
+                            else:
+                                dest_cid = rba_model.proteins.macromolecules[locus].compartment
+                                if dest_cid in cids:
+                                    input_set.add(locus)
+                inputs = sorted(input_set)
 
             proc_data = {'processingMap': proc_map, 'set': proc_set, 'inputs': inputs}
             if proc_type == 'production':

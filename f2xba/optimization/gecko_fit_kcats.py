@@ -82,17 +82,17 @@ class GeckoFitKcats:
         self.fitted_kcats = {}
 
     @staticmethod
-    def _get_predicted_enzyme_mpmf(flux, protein_coupling):
-        """Determine mass fraction for enzyme based on reaction flux and protein coupling
+    def _get_predicted_enzyme_mpmf(net_abs_flux, protein_coupling):
+        """Determine the mass fraction for the enzyme based on reaction flux and protein coupling
 
-        :param float flux: reaction flux through iso-reaction in mmol/gDWh
+        :param float net_abs_flux: reaction flux through (iso-)reaction in mmol/gDWh
         :param dict(str, float) protein_coupling: genes with related coupling coefficient
         :return: predicted enzyme mass fraction mg/gP
         :rtype: float >= 0.0
         """
         pred_enz_mpmf = 0.0
         for locus, mpmf_coupling in protein_coupling.items():
-            pred_enz_mpmf += mpmf_coupling * abs(flux)
+            pred_enz_mpmf += mpmf_coupling * net_abs_flux
         return pred_enz_mpmf
 
     def process_data(self, fluxes, measured_mpmfs):
@@ -122,20 +122,25 @@ class GeckoFitKcats:
         # 'iso_rid_pred_mpmf' maps the predicted protein cost for each iso-reaction, assuming it carries the flux.
         tot_pred_mpmf = 0.0
         for net_rid, iso_rids in self.net2iso_rids.items():
-            net_flux = max([fluxes[iso_rid] for iso_rid in iso_rids])
-            if net_flux > 0.0:
+            # Note: we expect not more than one iso_rid of a net_rid to carry flux. Flux in GECKO models would be > 0.
+            abs_flux_iso_rids = [(float(abs(fluxes[iso_rid])), iso_rid) for iso_rid in iso_rids]
+            net_abs_flux, active_iso_rid = sorted(abs_flux_iso_rids, reverse=True)[0]
+            # we can only process reactions that carry flux based on model prediction
+            if net_abs_flux > 0.0:
+                direction = 'rev' if re.match('.*_REV$', active_iso_rid) else 'fwd'
+                self.pred_net_rid_data[net_rid] = {'iso_rid': active_iso_rid, 'flux': net_abs_flux, 'dir': direction}
+                tot_pred_mpmf += self._get_predicted_enzyme_mpmf(net_abs_flux,
+                                                                 self.optim.rdata[active_iso_rid]['mpmf_coupling'])
                 for iso_rid in iso_rids:
-                    pred_enz_mpmf = self._get_predicted_enzyme_mpmf(net_flux, self.optim.rdata[iso_rid]['mpmf_coupling'])
-                    self.iso_rid_pred_mpmf[iso_rid] = pred_enz_mpmf
-                    if fluxes[iso_rid] > 0.0:
-                        direction = 'rev' if re.match('.*_REV$', iso_rid) else 'fwd'
-                        self.pred_net_rid_data[net_rid] = {'iso_rid': iso_rid, 'flux': net_flux, 'dir': direction}
-                        tot_pred_mpmf += pred_enz_mpmf
+                    #  calculate the predicted protein mass fraction for each iso-reaction,
+                    #   assuming it carries the net reaction flux
+                    self.iso_rid_pred_mpmf[iso_rid] = self._get_predicted_enzyme_mpmf(net_abs_flux,
+                                                                   self.optim.rdata[iso_rid]['mpmf_coupling'])
         print(f'{len(self.pred_net_rid_data):4d} active catalyzed reactions with '
               f'total protein of {tot_pred_mpmf:.1f} mg/gP (based on GECKO simulation)')
 
-        # 'protein_flux' maps the total flux that could be routed through a given gene product
-        protein_flux = {}
+        # 'protein_max_flux': total flux that could be routed through a given gene product
+        protein_max_flux = {}
         for locus, iso_rids in self.locus2iso_rids.items():
             net_rids = {self.optim.rdata[iso_rid]['net_rid'] for iso_rid in iso_rids}
             tot_flux = 0.0
@@ -143,32 +148,59 @@ class GeckoFitKcats:
                 if net_rid in self.pred_net_rid_data:
                     tot_flux += self.pred_net_rid_data[net_rid]['flux']
             if tot_flux > 0.0:
-                protein_flux[locus] = tot_flux
-        print(f'{len(protein_flux):4d} proteins potentially involved in active reactions')
+                protein_max_flux[locus] = tot_flux
+        print(f'{len(protein_max_flux):4d} proteins potentially involved in active reactions')
 
-        # `meas_net_rid_data` maps the iso-reaction that should carry the reaction flux based on proteomics
+        # identify selected iso-reactions that should carry the net-reaction fluxes based on proteomics
+        selected_iso_rids = set()
         for net_rid, data in self.pred_net_rid_data.items():
             direction = data['dir']
             max_enz_mpmf = 0.0
             selected_iso_rid = None
             for iso_rid in self.net2iso_rids[net_rid]:
-                if ((direction == 'fwd' and (re.match('.*_REV$', iso_rid)) is None) or
-                        (direction == 'rev' and re.match('.*_REV$', iso_rid))):
+                # determine the iso-reaction with the highest measured protein mass fraction
+                #   (in direction of the active iso-reaction)
+                if ((direction == 'fwd' and re.match('.*_REV$', iso_rid) is None) or
+                        (direction == 'rev' and re.match('.*_REV$', iso_rid) is not None)):
+                    # add up measured protein mass fraction,
+                    #   scaled by relative net-reaction flux wrt max flux through iso-enzyme
                     meas_enz_mpmf = 0.0
                     for locus in self.optim.rdata[iso_rid]['mpmf_coupling']:
-                        if locus in measured_mpmfs:
-                            meas_enz_mpmf += measured_mpmfs[locus] * data['flux'] / protein_flux[locus]
+                        meas_enz_mpmf += measured_mpmfs.get(locus, 0.0) * data['flux'] / protein_max_flux[locus]
+                    # select the iso-reaction that would result in the highest measured flux
                     if meas_enz_mpmf > max_enz_mpmf:
                         max_enz_mpmf = meas_enz_mpmf
                         selected_iso_rid = iso_rid
             if max_enz_mpmf > 0.0:
-                self.meas_net_rid_data[net_rid] = {'iso_rid': selected_iso_rid, 'meas_mpmf': max_enz_mpmf}
+                selected_iso_rids.add(selected_iso_rid)
             else:
                 self.not_meas_rids.append(net_rid)
+        print(f'{len(self.meas_net_rid_data):4d} active catalyzed reactions with proteomics data')
+        print(f'{len(self.not_meas_rids):4d} active catalyzed reactions without proteomics data')
+
+        # 'protein_flux': total flux that could be routed through a given gene product based on selected iso-reactions
+        protein_flux = {}
+        for locus, iso_rids in self.locus2iso_rids.items():
+            tot_flux = 0.0
+            for iso_rid in self.locus2iso_rids[locus]:
+                if iso_rid in selected_iso_rids:
+                    net_rid = self.optim.rdata[iso_rid]['net_rid']
+                    tot_flux += self.pred_net_rid_data[net_rid]['flux']
+            if tot_flux > 0.0:
+                protein_flux[locus] = tot_flux
+        print(f'{len(protein_flux):4d} proteins involved in active reactions')
+
+        # calculate relative measured protein mass fraction for selected iso-isoreactions
+        for selected_iso_rid in selected_iso_rids:
+            net_rid = self.optim.rdata[selected_iso_rid]['net_rid']
+            flux = self.pred_net_rid_data[net_rid]['flux']
+            meas_enz_mpmf = 0.0
+            for locus in self.optim.rdata[selected_iso_rid]['mpmf_coupling']:
+                meas_enz_mpmf += measured_mpmfs.get(locus, 0.0) * flux / protein_flux[locus]
+            self.meas_net_rid_data[net_rid] = {'iso_rid': selected_iso_rid, 'meas_mpmf': meas_enz_mpmf}
+
         tot_fitted_mpmf = sum([data['meas_mpmf'] for data in self.meas_net_rid_data.values()])
-        print(f'{len(self.meas_net_rid_data):4d} active catalyzed reactions using '
-              f'total protein of {tot_fitted_mpmf:.1f} mg/gP (based on proteomics)')
-        print(f'{len(self.not_meas_rids):4d} active catalyzed reactions have no measured proteins provided')
+        print(f'{tot_fitted_mpmf:.1f} mg/gP total protein, required by selected iso-reactions (based on proteomics)')
 
         return tot_fitted_mpmf
 
@@ -188,7 +220,7 @@ class GeckoFitKcats:
         scaling factor is predicted/measured protein concentrations.
 
         If there are iso-reactions, we need to scale the kcat values of the iso-reactions as well, to avoid that
-        any of the iso-reactions becomes 'cheaper'.
+        any of the iso-reactions become 'cheaper'.
 
         More complex cases can appear with iso-reactions, when the model uses another iso-reaction than
         proteomics suggests. In this case we first have to increase the kcat value of the iso-reaction suggested
@@ -217,15 +249,15 @@ class GeckoFitKcats:
         exceed_max_scale = {}
         for net_rid, meas_data in self.meas_net_rid_data.items():
             pred_iso_rid = self.pred_net_rid_data[net_rid]['iso_rid']
-            meas_iso_rid = meas_data['iso_rid']
+            selected_iso_rid = meas_data['iso_rid']
 
             # make proteomics suggested iso-reaction more favorable, if it is not already predicted
-            if meas_iso_rid == pred_iso_rid:
+            if selected_iso_rid == pred_iso_rid:
                 scale_favorable = 1.0
-                pred_mpmf_ref = self.iso_rid_pred_mpmf[meas_iso_rid]
+                pred_mpmf_ref = self.iso_rid_pred_mpmf[selected_iso_rid]
             else:
-                scale_favorable = 1.02 * self.iso_rid_pred_mpmf[meas_iso_rid] / self.iso_rid_pred_mpmf[pred_iso_rid]
-                pred_mpmf_ref = self.iso_rid_pred_mpmf[meas_iso_rid] / scale_favorable
+                scale_favorable = 1.02 * self.iso_rid_pred_mpmf[selected_iso_rid] / self.iso_rid_pred_mpmf[pred_iso_rid]
+                pred_mpmf_ref = self.iso_rid_pred_mpmf[selected_iso_rid] / scale_favorable
 
             # fit kcat value to proteomics and rescale to selected target enzyme saturation level
             scale_factor = pred_mpmf_ref / meas_data['meas_mpmf'] * target_saturation_scale
@@ -233,14 +265,14 @@ class GeckoFitKcats:
             # do not fit when max_scale_factor is exceeded
             if max_scale_factor is not None:
                 if (scale_factor > max_scale_factor) or (scale_factor < 1.0 / max_scale_factor):
-                    key = meas_iso_rid if meas_iso_rid in df_kcats.index else f'{pf.R_}{meas_iso_rid}'
-                    exceed_max_scale[net_rid] = {'iso_rid': meas_iso_rid, 'orig_kcat': df_kcats.at[key, 'kcat_per_s'],
+                    key = selected_iso_rid if selected_iso_rid in df_kcats.index else f'{pf.R_}{selected_iso_rid}'
+                    exceed_max_scale[net_rid] = {'iso_rid': selected_iso_rid, 'orig_kcat': df_kcats.at[key, 'kcat_per_s'],
                                                  'factor': scale_factor}
                     continue
 
             # scale kcat values of all iso reactions, that none becomes more favorable
             for iso_rid in self.net2iso_rids[net_rid]:
-                if iso_rid == meas_iso_rid:
+                if iso_rid == selected_iso_rid:
                     factor = scale_favorable * scale_factor
                 else:
                     factor = 0.9 * scale_factor

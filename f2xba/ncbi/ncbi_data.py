@@ -57,6 +57,13 @@ class NcbiData:
         for chrom_id, accession_id in chromosome2accids.items():
             self.chromosomes[chrom_id] = NcbiChromosome(chrom_id, accession_id, organism_dir)
 
+        self.locus2chrom_id = {}
+        """Map gene identifier to user supplied chromosome identifier."""
+
+        for chrom_id, data in self.chromosomes.items():
+            for locus in data.features:
+                self.locus2chrom_id[locus] = chrom_id
+
         # mapping of NCBI record loci to feature records and proteins across chromosomes
         self.locus2record = {}
         """Map gene identifier to NCBI feature record."""
