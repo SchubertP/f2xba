@@ -43,11 +43,14 @@ class RbaEnzymes:
 
         - Efficiencies have units of h-1. Reaction kcats are in s-1, therefore we multiply with 3600 s/h
           Number of active sites in the enzyme are considered.
-        - For transporters taking up medium, automatically Michaelis Menten saturation functions are added
-          with a default KM in mmol/l value as specified
-        - For all other enzymes, assume an average enzyme saturation. Define 'avg_enz_sat' in 'general' sheet.
-        Note: as import reactions all use same default Michaelis Menten Constant Km (here 1.0 mmol/l)
-          external medium should be set with respect to this Km value to allow for required transporter saturation.
+        - Efficiencies for enzyme catalyzed reactions, except for importers of nutrients, are configured
+          with the respective turnover number and an average enzyme saturation, using the value defined in
+          parameter 'avg_enz_sat' in the 'general' sheet.
+        - Efficiencies for importers (tranpsorter taken up nutrients from the external medium), are configured
+          with the respective turnover number and Michaelis-Menten terms for each individual nutrient,
+          except for protons. The Km values a configured with a default value of 1.0 mmol/l.
+        - External nutrient concentrations should be provided with respect to the default Km values of 1.0 mmol/l
+          to accordingly tune the transporter saturation values.
 
         E.g. Average enzyme saturation of a metabolic enzyme.
           eff = kcat * avg_enz_sat * 3600 * active_sites
@@ -95,7 +98,7 @@ class RbaEnzymes:
             fid = None
             # e.g. self.uptake_rcids = {'c-e'}
             if r.compartment in self.uptake_rcids and kcat is not None:
-                # for importers, the enzyme saturation is based on Michaelis Menten kinetics
+                # for importers, the enzyme saturation is based on Michaelis-Menten kinetics
                 agg_fids = []
                 for sid in srefs[r_dir]:
                     # e.g. self.saturation_sids = {'M_5fthf_e', 'M_ac_e', 'M_acald_e', ...} all external metabolite ids
@@ -133,7 +136,7 @@ class RbaEnzymes:
         """Configure Enzymes based on RBA sepecific parameters.
 
         iso-reaction kcats (s-1) are converted to enzyme efficiencies (h-1) considering and
-        average enzyme saturation, and michaelis menten saturation terms for transporters
+        average enzyme saturation, and Michaelis-Menten saturation terms for transporters
 
         RBA and TRBA (Thermodynamic RBA) support:
           RBA: reactions are already split in reversible isoreactions catalzyed by single enzymes.
@@ -163,11 +166,14 @@ class RbaEnzymes:
         self.uptake_rcids = cid_mappings['uptake_rcids']
         medium_cid = cid_mappings['medium_cid']
 
-        # identify medium related species for saturation terms (once medium is set)
+        # identify medium related species for saturation terms (once medium is set), excluding protons
         self.saturation_sids = set()
         for mid in medium.concentrations:
-            if f'{mid}_{medium_cid}' in xba_model.species:
-                self.saturation_sids.add(f'{mid}_{medium_cid}')
+            sid = f'{mid}_{medium_cid}'
+            if sid in xba_model.species:
+                s = xba_model.species[sid]
+                if (getattr(s, 'formula', '') != 'H') or (getattr(s, 'charge', 0.0) != 1.0):
+                    self.saturation_sids.add(sid)
 
         # get list of reactions, excluding split reverse reactions '_REV', used in TRBA
         rids = {rid for rid, r in xba_model.reactions.items() if r.kind in ['metabolic', 'transporter']}
