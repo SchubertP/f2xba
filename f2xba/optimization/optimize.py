@@ -241,6 +241,9 @@ class Optimize:
         self.rids_catalyzed = self.get_rids_catalyzed()
         """Map reaction identifier to related genes identifiers."""
 
+        self.orig_coupling = {}
+        """Original protein-reaction coupling to support scaling_kcats."""
+
         # self.uid2locus = {uid: locus for locus, uid in self.locus2uid.items()}
 
     def _get_id2groups(self):
@@ -901,6 +904,66 @@ class Optimize:
                 elif ub is not None:
                     rxn.upper_bound = ub
         return orig_bounds
+
+    def scale_kcats(self, scale_kcats):
+        """Scale turnover numbers in GECKO models to support manual parameter tuning.
+
+        Use unscale_kcats() to return to original values.
+
+        .. code-block:: python
+
+            eo = EcmOptimization('iML1515_GECKO.xml)
+            scale_kcats= {'BPNT': 0.2, 'TMPK': 0.2, 'TMPK_REV': 0.2, 'CLPNS': 0.25}
+            eo.scale_kcats(scale_kcats)
+            solution = eo.optimize()
+            eo.unscale_kcats()
+
+        :param dict(str, float) scale_kcats: reaction ids with scaling factor.
+        """
+        if self.is_gpm:
+            self._gp_scale_kcats(scale_kcats)
+        else:
+            self._cp_scale_kcats(scale_kcats)
+
+    def unscale_kcats(self):
+        """Reset previously scaled turnover numbers.
+
+        see scale_kcats().
+        """
+        if self.is_gpm:
+            self._gp_unscale_kcats()
+        else:
+            self._cp_unscale_kcats()
+
+    def _cp_scale_kcats(self, scale_kcats):
+        """Scale kcat values for ECM and RBA model optimizations (COBRApy interface).
+
+        Scale related coupling coefficients.
+
+        :param dict(str, float) scale_kcats: selected reaction ids with kcat scaling factor
+        """
+        print('Method not supported for FBA models!')
+
+    def _cp_unscale_kcats(self):
+        """Unscale kcat values ECM and RBA model optimizations (COBRApy interface)
+
+        Restore original coupling coefficients
+        """
+        pass
+
+    def _gp_scale_kcats(self, scale_kcats):
+        """Scale kcat values for ECM and RBA model optimizations (gurobipy interface).
+
+        Scale related coupling coefficients.
+
+        :param dict(str, float) scale_kcats: selected reaction ids with kcat scaling factor
+        """
+        print('Method not supported for FBA models!')
+
+    def _gp_unscale_kcats(self):
+        """Unscale kcat values for gurobipy interface.
+        """
+        pass
 
     def get_objective(self):
         """Retrieve model optimization objective.

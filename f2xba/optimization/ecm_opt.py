@@ -76,7 +76,6 @@ class EcmOptimization(Optimize):
         :type cobra_model: :class:`cobra.Model`
         """
         super().__init__('ECM', fname, cobra_model)
-        self.orig_coupling = {}
 
         self.ecm_type = self.m_dict['modelAttrs'].get('id', '_GECKO').rsplit('_', 1)[1]
         if self.ecm_type.endswith('MOMENT'):
@@ -120,62 +119,32 @@ class EcmOptimization(Optimize):
                     constr.ub = 1000.0
         print(f'MOMENT protein constraints configured ≥ 0')
 
-    def scale_kcats(self, scale_kcats):
-        """Scale turnover numbers in GECKO models to support manual parameter tuning.
-
-        Use unscale_kcats() to return to original values.
-
-        .. code-block:: python
-
-            eo = EcmOptimization('iML1515_GECKO.xml)
-            scale_kcats= {'BPNT': 0.2, 'TMPK': 0.2, 'TMPK_REV': 0.2, 'CLPNS': 0.25}
-            eo.scale_kcats(scale_kcats)
-            solution = eo.optimize()
-            eo.unscale_kcats()
-
-        :param dict(str, float) scale_kcats: reaction ids (without prefix `R_`) with scaling factor
-        """
-        if self.is_gpm:
-            self._gp_scale_kcats(scale_kcats)
-        else:
-            self._cp_scale_kcats(scale_kcats)
-
-    def unscale_kcats(self):
-        """Reset previously scaled turnover numbers.
-
-        see scale_kcats().
-        """
-        if self.is_gpm:
-            self._gp_unscale_kcats()
-        else:
-            self._cp_unscale_kcats()
-
     def _cp_scale_kcats(self, scale_kcats):
         """Scale kcat values for COBRApy interface, by updating coupling coefficients.
 
         Reaction id without 'R_' prefix and kcat scaling factors.
 
-        :param dict(str, float) scale_kcats: selected reaction ids (without 'R_' prefix) with kcat scaling factor
+        :param dict(str, float) scale_kcats: selected reaction ids with kcat scaling factor
         """
-        assert self.is_gpm is False, 'applicable to COBRApy interface only'
         orig_coupling = defaultdict(dict)
-        for ridx, scale in scale_kcats.items():
-            if ridx in self.model.reactions:
-                r = self.model.reactions.get_by_id(ridx)
+        for iso_rid, scale in scale_kcats.items():
+            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
+            if iso_ridx in self.model.reactions:
+                r = self.model.reactions.get_by_id(iso_ridx)
                 for m, coeff in r.metabolites.items():
                     if re.match(f'{pf.C_prot_}', m.id):
                         r.add_metabolites({m: coeff / scale}, combine=False)
-                        orig_coupling[ridx][m.id] = coeff
+                        orig_coupling[iso_rid][m.id] = coeff
             else:
-                print(f'Enzyme constraint variable not found for reaction {ridx}')
+                print(f'Enzyme constraint variable not found for reaction {iso_rid}')
         self.orig_coupling = dict(orig_coupling)
 
     def _cp_unscale_kcats(self):
         """Unscale kcat values for COBRApy interface, by resetting original coupling coefficients
         """
-        assert self.is_gpm is False, 'applicable to COBRApy interface only'
-        for ridx, couplings in self.orig_coupling.items():
-            r = self.model.reactions.get_by_id(ridx)
+        for iso_rid, couplings in self.orig_coupling.items():
+            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
+            r = self.model.reactions.get_by_id(iso_ridx)
             for constr_id, coeff in couplings.items():
                 r.add_metabolites({constr_id: coeff}, combine=False)
         self.orig_coupling = {}
@@ -183,13 +152,13 @@ class EcmOptimization(Optimize):
     def _gp_scale_kcats(self, scale_kcats):
         """Scale kcat values for gurobipy interface, by updating coupling coefficients.
 
-        :param dict(str,float) scale_kcats: selected reaction ids (without 'R_' prefix) with kcat scaling factor
+        :param dict(str,float) scale_kcats: selected reaction ids with kcat scaling factor
         """
-        assert self.is_gpm is True, 'applicable to gurobipy interface only'
         orig_coupling = defaultdict(dict)
         self.gpm.update()
-        for ridx, scale in scale_kcats.items():
-            var = self.gpm.getVarByName(f'{pf.R_}{ridx}')
+        for iso_rid, scale in scale_kcats.items():
+            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
+            var = self.gpm.getVarByName(pf.R_ + iso_ridx)
             if var:
                 col = self.gpm.getCol(var)
                 for idx in range(col.size()):
@@ -197,9 +166,9 @@ class EcmOptimization(Optimize):
                     if re.match(f'{pf.C_prot_}', constr.getAttr('ConstrName')):
                         coeff = col.getCoeff(idx)
                         self.gpm.chgCoeff(constr, var, coeff / scale)
-                        orig_coupling[ridx][constr.getAttr('ConstrName')] = coeff
+                        orig_coupling[iso_rid][constr.getAttr('ConstrName')] = coeff
             else:
-                print(f'Enzyme constraint variable not found for reaction {ridx}')
+                print(f'Enzyme constraint variable not found for reaction {iso_rid}')
 
         self.gpm.update()
         self.orig_coupling = dict(orig_coupling)
@@ -211,14 +180,14 @@ class EcmOptimization(Optimize):
         - call scale_kcats(scale_kcats) prior to optmization
         - call unscale_kcats() after optimization to reset old kcat values
         """
-        assert self.is_gpm is True, 'applicable to gurobipy interface only'
-        for ridx, couplings in self.orig_coupling.items():
-            var = self.gpm.getVarByName(f'{pf.R_}{ridx}')
+        for iso_rid, couplings in self.orig_coupling.items():
+            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
+            var = self.gpm.getVarByName(pf.R_ + iso_ridx)
             for constr_id, coeff in couplings.items():
                 constr = self.gpm.getConstrByName(constr_id)
                 self.gpm.chgCoeff(constr, var, coeff)
         self.gpm.update()
-        self.orig_coeffs = {}
+        self.orig_coupling = {}
 
     def single_gene_deletion(self, genes=None, method='ecm', solution=None, **kwargs):
         """Perform a single gene deletion analysis for enzyme constraint models using gurobipy interface.
