@@ -283,7 +283,7 @@ The table designated ``compartments`` is mandatory and contains RBA compartment 
    "density_constraint_function", "density, RBA function (default: None)", None
    "density_constraint_aggregate", "density, RBA aggregate (default: None)", "aa_conc, frac_protein_om"
 
-Notes: Assign value to either “xxx_constant“, “xxx_functionv or “xxx_aggregate“. “xxx_function“ must comply with the function definitions, see :ref:`function_definitions`. “xxx_aggregate“ must reference function names defined in table 'functions'.  
+Notes: Assign value to either “xxx_constant“, “xxx_function" or “xxx_aggregate“. “xxx_function“ must comply with the function definitions, see :ref:`function_definitions`. “xxx_aggregate“ must reference function names defined in table 'functions'.
 
 Table ``targets``
 ^^^^^^^^^^^^^^^^^
@@ -321,7 +321,7 @@ The table ``processes`` is mandatory and contains the configuration of the proce
    "set", "macromolecule set: 'dna', 'rna', 'protein'", "protein"
    "input_filter", "filter for specific macromolecules (default: None)", None
 
-Notes: The "input_filter" can be utilized to select specific macromolecules as inputs to the process machine. The "input_filter" for set 'rna' can be configured with '<patterns>', being a comma-separated list of regular expression patterns matching against RNA macromolecule identifiers, e.g. 'trna, rRNA'. The "input_filter" for set 'proteins' can be configured with '<patterns>' or '<patterns> -> <cids>'. '<patterns>' being a comma-separated list of regular expression patterns matching against protein macromolecule identifiers (locus ids) and chromosome identifiers. If 'signal_peptide' is included in the list, proteins are selected based on the signal-peptide information in the corresponding UniProt entry. E.g. 'Chr_I, Chr_V, Chr_X', or 'Y, dummy_protein' or 'signal_peptide'. '<cids>' is a list of RBA compartment identifiers to select proteins targeted for respective compartments, e.g. 'Chr_I, Chr_V, Chr_X -> m, mm'. Assign value to either “xxx_constant“, “xxx_functionv or “xxx_aggregate“. “xxx_function“ must comply with the function definitions, see :ref:`function_definitions`. “xxx_aggregate“ must reference function names defined in table 'functions'.
+Notes: The "input_filter" can be utilized to select specific macromolecules as inputs to the process machine. The "input_filter" for set 'rna' can be configured with '<patterns>', being a comma-separated list of regular expression patterns matching against RNA macromolecule identifiers, e.g. 'trna, rRNA'. The "input_filter" for set 'proteins' can be configured with '<patterns>' or '<patterns> -> <cids>'. '<patterns>' being a comma-separated list of regular expression patterns matching against protein macromolecule identifiers (locus ids) and chromosome identifiers. If 'signal_peptide' is included in the list, proteins are selected based on the signal-peptide information in the corresponding UniProt entry. E.g. 'Chr_I, Chr_V, Chr_X', or 'Y, dummy_protein' or 'signal_peptide'. '<cids>' is a list of RBA compartment identifiers to select proteins targeted for respective compartments, e.g. 'Chr_I, Chr_V, Chr_X -> m, mm'. Assign value to either “xxx_constant“, “xxx_function" or “xxx_aggregate“. “xxx_function“ must comply with the function definitions, see :ref:`function_definitions`. “xxx_aggregate“ must reference function names defined in table 'functions'.
 
 Table ``machineries``
 ^^^^^^^^^^^^^^^^^^^^^

@@ -172,7 +172,7 @@ The retrieval of tables can be performed, and these tables can contain variable 
 Optimize RBA model
 ^^^^^^^^^^^^^^^^^^
 
-RBA optimization employing the cobrapy interface necessitates support from ``RbaOptimization``, which implements the RBAs bisection algorithm and reconfigures the parameters of the optimization problem during the optimization run. RBA employs external metabolite concentrations as opposed to constraints on the uptake fluxes; consequently, medium conditions are established through the utilization of ``ro.set_medium_conc()``. The bisection optimization is activated using ro.solve(). The utilization of the gurobipy interface is subsequently shown for the optimization of the TRBA model.
+RBA optimization employing the cobrapy interface necessitates support from ``RbaOptimization``, which implements the RBAs bisection algorithm and reconfigures the parameters of the optimization problem during the optimization run. RBA employs external metabolite concentrations, which could be derived from external flux constraints used in FBA or ECM models, as shown below. The bisection optimization is activated using ro.solve(). The utilization of the gurobipy interface is subsequently shown for the optimization of the TRBA model.
 
 The ``RbaResults`` module furnishes access to supplementary optimization outcomes, including enzyme concentrations, RNA concentrations, and compartment occupancy levels.
 
@@ -190,9 +190,7 @@ The ``RbaResults`` module furnishes access to supplementary optimization outcome
    sigma = ro.avg_enz_saturation
    importer_km = ro.importer_km
    rel_mmol_per_l =  (sigma / (1.0-min(sigma, .99))) * importer_km
-   ex_sidx2mmol_per_l = {ex_ridx[3:]: rel_mmol_per_l for ex_ridx in rbam.medium}
-   ex_sidx2mmol_per_l['h_e'] = 100.0 * sigma   # H-symport reactions not to be constraint by proton concentration
-   ro.set_medium_conc(ex_sidx2mmol_per_l)
+   ro.medium = {re.sub('EX_', '', ex_ridx): rel_mmol_per_l for ex_ridx in medium}
 
    # optimize RBA model
    solution = ro.solve(gr_min=0.01, gr_max=1.2, bisection_tol=1e-3)
@@ -297,14 +295,16 @@ The optimization of the TRBA is demonstrated using the gurobipy interface, which
    # load TRBA model - using gurobipy interface
    ro = RbaOptimization('iML1515_TRBA.xml')
 
+   # Set nucleotide concentrations (optional)
+   for sid, (lb, ub) in metabolite_molar_concs.items():
+       rbam.reactions.get_by_id('V_LC_' + sid).bounds = (np.log10(lb), np.log10(ub))
+
    # convert uptake fluxes to relative external medium concentrations
    sigma = ro.avg_enz_saturation
    importer_km = ro.importer_km
    uptake_rids = ro.m_dict['reactions'].loc[ro.uptake_rids]['fbcLb']
    rel_mmol_per_l =  (sigma / (1.0-min(sigma, .99))) * importer_km
-   ex_sidx2mmol_per_l = {ex_ridx[5:]: rel_mmol_per_l for ex_ridx in uptake_rids[uptake_rids < 0.0].index}
-   ex_sidx2mmol_per_l['h_e'] = 100.0 * sigma   # H-symport reactions not to be constraint by proton concentration
-   ro.set_medium_conc(ex_sidx2mmol_per_l)
+   ro.medium = {re.sub('EX_', '', ex_ridx): rel_mmol_per_l for ex_ridx in medium}
 
    # optimize TRBA model
    solution = ro.solve(gr_min=0.01, gr_max=1.2, bisection_tol=1e-3)
