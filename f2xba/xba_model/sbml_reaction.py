@@ -133,12 +133,14 @@ class SbmlReaction(SbmlSBase):
             val = float(_val)
             if attribute == 'reactant':
                 if val == 0.0:
-                    del self.reactants[sid]
+                    if sid in self.reactants:
+                        del self.reactants[sid]
                 else:
                     self.reactants[sid] = val
             else:
                 if val == 0.0:
-                    del self.products[sid]
+                    if sid in self.products:
+                        del self.products[sid]
                 else:
                     self.products[sid] = val
         else:

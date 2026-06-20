@@ -7,6 +7,7 @@ Note: for handling of wildcard EC numbers, see f2xba package
 Peter Schubert, HHU Duesseldorf, June 2023
 """
 
+from ..utils.mapping_utils import parse_srefs_string
 
 class Protein:
 
@@ -22,7 +23,7 @@ class Protein:
         self.compartment = compartment
         self.linked_sids = set()
         self.up_cofactors = uniprot.cofactors
-        self.cofactors = {}
+        self.cofactors = None
         self.aa_sequence = uniprot.aa_sequence
         self.has_signal_peptide = True if type(uniprot.signal_peptide) is str else False
 
@@ -44,4 +45,6 @@ class Protein:
         :param value: value to be configured
         :type value: str
         """
+        if attribute in {'cofactors'}:
+            value = parse_srefs_string(value)
         setattr(self, attribute, value)

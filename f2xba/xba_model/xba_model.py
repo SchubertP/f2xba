@@ -383,6 +383,8 @@ class XbaModel:
         if self.uniprot_data or self.ncbi_data:
             count = self.create_proteins()
             print(f'{count:4d} proteins created')
+            if 'modify_attributes' in xba_params:
+                self.modify_attributes(xba_params['modify_attributes'], 'protein')
 
         #################
         # map cofactors #
@@ -1420,6 +1422,7 @@ class XbaModel:
             for rid, r_data in df_reactions.iterrows():
                 grp_name = r_data['subsystem']
                 if type(grp_name) is str and len(grp_name) > 0:
+                    grp_name = str(grp_name)  # to avoid PyCharm warning
                     if grp_name not in grp_name2gid:
                         gid = len(self.groups)
                         grp_dict = {'id': f'group{gid + 1}', 'name': grp_name, 'sboterm': 'SBO:0000633'}
@@ -1652,6 +1655,7 @@ class XbaModel:
         """Map cofactors to species ids and add to protein data.
 
         Cofactors are retrieved from UniProt.
+        if cofactors have already been mapped using modify_attributes, cofactors are not further updated
         CHEBI ids are used for mapping to model species.
            - UniProt cofactor names already have mapping to one CHEBI ids.
            - model species have map to zero, one or several CHEBI ids
@@ -1679,36 +1683,38 @@ class XbaModel:
         n_cof_not_mapped = 0
         n_cof_mapped = 0
         for pid, p in self.proteins.items():
-            if len(p.up_cofactors) > 0:
-                # UniProt cofactors with stoichiometry
-                for up_cf_name, cf_data in p.up_cofactors.items():
-                    stoic = cf_data['stoic']
-                    chebi = cf_data['chebi']
-                    selected_sid = None
-                    if chebi is not None:
-                        if chebi in self.user_chebi2sid:
-                            # selected species is based on data provided by user in XBA parameters file
-                            selected_sid = self.user_chebi2sid[chebi]
-                        elif chebi in chebi2sid:
-                            sids = chebi2sid[chebi]
-                            cid2sids = {self.species[sid].compartment: sid for sid in sids}
-                            # preferrably use a cofactor from cytosol (compartment with most species, assumed)
-                            if main_cid in cid2sids:
-                                selected_sid = cid2sids[main_cid]
-                            else:
-                                # 00 use a cofactor that overlaps with any of the compartments of protein
-                                pcids = {pcid for pcid in p.compartment.split('-')}
-                                cids_intersect = list(pcids.intersection(cid2sids))
-                                if len(cids_intersect) > 0:
-                                    selected_sid = cid2sids[cids_intersect[0]]
+            if not p.cofactors:
+                p.cofactors = {}
+                if len(p.up_cofactors) > 0:
+                    # UniProt cofactors with stoichiometry
+                    for up_cf_name, cf_data in p.up_cofactors.items():
+                        stoic = cf_data['stoic']
+                        chebi = cf_data['chebi']
+                        selected_sid = None
+                        if chebi is not None:
+                            if chebi in self.user_chebi2sid:
+                                # selected species is based on data provided by user in XBA parameters file
+                                selected_sid = self.user_chebi2sid[chebi]
+                            elif chebi in chebi2sid:
+                                sids = chebi2sid[chebi]
+                                cid2sids = {self.species[sid].compartment: sid for sid in sids}
+                                # preferrably use a cofactor from cytosol (compartment with most species, assumed)
+                                if main_cid in cid2sids:
+                                    selected_sid = cid2sids[main_cid]
                                 else:
-                                    selected_sid = sids[0]
-                    if selected_sid is not None:
-                        p.cofactors[selected_sid] = stoic
-                        n_cof_mapped += 1
-                    else:
-                        cof_not_mapped[chebi] = up_cf_name
-                        n_cof_not_mapped += 1
+                                    # 00 use a cofactor that overlaps with any of the compartments of protein
+                                    pcids = {pcid for pcid in p.compartment.split('-')}
+                                    cids_intersect = list(pcids.intersection(cid2sids))
+                                    if len(cids_intersect) > 0:
+                                        selected_sid = cid2sids[cids_intersect[0]]
+                                    else:
+                                        selected_sid = sids[0]
+                        if selected_sid is not None:
+                            p.cofactors[selected_sid] = stoic
+                            n_cof_mapped += 1
+                        else:
+                            cof_not_mapped[chebi] = up_cf_name
+                            n_cof_not_mapped += 1
 
         if n_cof_not_mapped > 0:
             print(f'{n_cof_not_mapped} cofactors used in proteins could not be mapped (are not considered). ' 

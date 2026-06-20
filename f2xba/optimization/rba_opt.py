@@ -623,21 +623,24 @@ class RbaOptimization(Optimize):
             if gene in genes:
                 # simulate a single gene deletion
                 orig_rid_bounds = self.gene_knock_outs(gene)
-                solution = self.solve(**kwargs)
+                mut_solution = self.solve(**kwargs)
                 # second attempt if initial attempt not optimal
-                if not solution or solution.status != 'optimal':
+                if not mut_solution or mut_solution.status != 'optimal':
+                    mut_solution = self.solve(**alt_kwargs)
+                # third attempt, after gpm.reset()
+                if not mut_solution or mut_solution.status != 'optimal':
                     self.gpm.reset()
-                    solution = self.solve(**alt_kwargs)
+                    mut_solution = self.solve(**alt_kwargs)
                 self.set_variable_bounds(orig_rid_bounds)
 
                 # process simulation result
-                if not solution:
+                if not mut_solution:
                     sgko_results[gene] = [0.0, 'infeasible', 0.0]
-                elif solution.status in {'optimal'}:
-                    mutant_gr = solution.objective_value
-                    sgko_results[gene] = [mutant_gr, solution.status, mutant_gr / wt_gr]
+                elif mut_solution.status in {'optimal'}:
+                    mutant_gr = mut_solution.objective_value
+                    sgko_results[gene] = [mutant_gr, mut_solution.status, mutant_gr / wt_gr]
                 else:
-                    sgko_results[gene] = [0.0, solution.status, 0.0]
+                    sgko_results[gene] = [0.0, mut_solution.status, 0.0]
             elif gene in pm_genes:
                 sgko_results[gene] = [0.0, 'process_machine']
             else:

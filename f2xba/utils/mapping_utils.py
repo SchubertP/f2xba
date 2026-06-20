@@ -132,7 +132,7 @@ def generate_srefs_str(stoichometric_str):
     for sref in stoichometric_str.split('+'):
         sref = sref.strip()
         parts = sref.split(' ')
-        stoic = float(parts[0]) if len(parts) == 2 else '1.0'
+        stoic = float(parts[0]) if len(parts) == 2 else 1.0
         sid = parts[-1]
         if len(sid) > 0:
             d_srefs[sid] = stoic
@@ -163,6 +163,26 @@ def parse_reaction_string(reaction_str):
         srefs['reversible'] = ('->' in reaction_str)
         srefs['reactants'] = generate_srefs_str(components[0])
         srefs['products'] = generate_srefs_str(components[1])
+    return srefs
+
+def parse_srefs_string(srefs_string):
+    """Extract values species references string (e.g. one side of reaction string).
+
+    e.g. 'M_fum_c + 2 M_h2o_c' ->  {'M_fum_c': 1.0, 'M_h2o_c': 2.0}
+
+    :param str srefs_string: species references string
+    :returns: dict of species ids with corresponding stoichiometry
+    :rtype: dict
+    """
+    srefs = {}
+    if type(srefs_string) is str:
+        for sref in srefs_string.split('+'):
+            sref = sref.strip()
+            parts = sref.split(' ')
+            stoic = float(parts[0]) if len(parts) == 2 else 1.0
+            sid = parts[-1]
+            if len(sid) > 0:
+                srefs[sid] = stoic
     return srefs
 
 def construct_metabolic_reactions_string(r):
