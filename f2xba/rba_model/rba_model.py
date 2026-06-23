@@ -589,7 +589,7 @@ class RbaModel:
         mm_species = {}
         # create protein species and configure scale
         for mm_id, mm in self.proteins.macromolecules.items():
-            mm.sid = pf.MM_ + valid_sbml_sid(mm_id)
+            mm.sid = valid_sbml_sid(pf.MM_ + mm_id)
             mm.scale = 1000.0 if mm.weight > 10 else 1.0
             # for indiviually modeled proteins (UniProt data is collected)
             if mm_id in self.model.locus2uid:
@@ -608,7 +608,7 @@ class RbaModel:
                                   f'meta_{mm.sid}', miriam_annot, xml_annot]
 
         for mm_id, mm in self.rnas.macromolecules.items():
-            mm.sid = pf.MM_ + valid_sbml_sid(mm_id)
+            mm.sid = valid_sbml_sid(pf.MM_ + mm_id)
             mm.scale = 1000.0 if mm.weight > 10 else 1.0
             mw_kda = rna_mw_from_nt_comp(mm.composition) / 1000.0
             name = f'macromolecule {mm_id}'
@@ -617,7 +617,7 @@ class RbaModel:
             mm_species[mm.sid] = [name, mm.compartment, False, False, False, f'meta_{mm.sid}', None, xml_annot]
 
         for mm_id, mm in self.dna.macromolecules.items():
-            mm.sid = pf.MM_ + valid_sbml_sid(mm_id)
+            mm.sid = valid_sbml_sid(pf.MM_ + mm_id)
             mm.scale = 1000.0 if mm.weight > 10 else 1.0
             mw_kda = ssdna_mw_from_dnt_comp(mm.composition) / 1000.0
             name = f'macromolecule {mm_id}'
@@ -643,7 +643,7 @@ class RbaModel:
         constraints = {}
         for proc_id, proc in self.processes.processes.items():
             if 'capacity' in proc.machinery:
-                constr_id = pf.C_PMC_ + valid_sbml_sid(proc_id)
+                constr_id = valid_sbml_sid(pf.C_PMC_ + proc_id)
                 constraints[constr_id] = [f'capacity {proc_id}', self.cid_mappings['cytoplasm_cid'],
                                           False, False, False]
                 proc.constr_id = constr_id
@@ -653,18 +653,18 @@ class RbaModel:
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
                 eidx = re.sub(r'_enzyme$', '', eid)
                 if e.forward_eff != self.parameters.f_name_zero:
-                    constr_id = pf.C_EF_ + valid_sbml_sid(eidx)
+                    constr_id = valid_sbml_sid(pf.C_EF_ + eidx)
                     constraints[constr_id] = [f'fwd efficiency {eid}', self.cid_mappings['cytoplasm_cid'],
                                               False, False, False]
                     e.constr_id_fwd = constr_id
                 if e.backward_eff != self.parameters.f_name_zero:
-                    constr_id = pf.C_ER_ + valid_sbml_sid(eidx)
+                    constr_id = valid_sbml_sid(pf.C_ER_ + eidx)
                     constraints[constr_id] = [f'rev efficiency {eid}', self.cid_mappings['cytoplasm_cid'],
                                               False, False, False]
                     e.constr_id_rev = constr_id
 
         for cid, d in self.densities.densities.items():
-            constr_id = pf.C_D_ + valid_sbml_sid(cid)
+            constr_id = valid_sbml_sid(pf.C_D_ + cid)
             constraints[constr_id] = [f'compartment density for {cid}', cid, False, False, False]
             d.constr_id = constr_id
 
@@ -782,7 +782,7 @@ class RbaModel:
                             products[pm.constr_id] = round(pm_costs / mm.scale, 8)
 
                     if proc_type == 'PROD':
-                        rid = pf.R_PROD_ + valid_sbml_sid(mm_id)
+                        rid = valid_sbml_sid(pf.R_PROD_ + mm_id)
                         products[mm.sid] += 1.0
                         if mm.scale == 1.0:
                             prod_reactions[rid] = [f'production reaction for {mm_id} (mmol)', False,
@@ -795,7 +795,7 @@ class RbaModel:
                                                    lb_pid_umol, ub_pid_umol,
                                                    'RBA_pm_reaction', 'RBA macromolecule processing']
                     else:
-                        rid = pf.R_DEGR_ + valid_sbml_sid(mm_id)
+                        rid = valid_sbml_sid(pf.R_DEGR_ + mm_id)
                         reactants[mm.sid] += 1.0
                         if mm.scale == 1.0:
                             degr_reactions[rid] = [f'degradation reaction for {mm_id} (mmol)', False,
@@ -919,8 +919,8 @@ class RbaModel:
         conc_vars = {}
         for eid, e in self.enzymes.enzymes.items():
             if len(e.mach_reactants) > 0 or len(e.mach_products) > 0:
-                eidx = re.sub(r'_enzyme$', '', valid_sbml_sid(eid))
-                var_id = pf.V_EC_ + eidx
+                eidx = re.sub(r'_enzyme$', '', eid)
+                var_id = valid_sbml_sid(pf.V_EC_ + eidx)
                 name = f'{eid} concentration (µmol)'
 
                 # Determine reactants/products and sref ids for enzyme concentration variable
@@ -986,7 +986,7 @@ class RbaModel:
         conc_vars = {}
         for pm_id, pm in self.processes.processes.items():
             if 'capacity' in pm.machinery:
-                var_id = pf.V_PMC_ + valid_sbml_sid(pm_id)
+                var_id = valid_sbml_sid(pf.V_PMC_ + pm_id)
                 name = f'{pm_id} concentration'
 
                 # Determine reactants/products and sref ids for PM concentration variable
@@ -1046,7 +1046,7 @@ class RbaModel:
         for tg_id, tg in self.targets.target_groups.items():
             for tid, t in tg.concentrations.items():
                 if tid in self.mmid2mm:
-                    var_id = pf.V_TMMC_ + valid_sbml_sid(tid)
+                    var_id = valid_sbml_sid(pf.V_TMMC_ + tid)
                     mm = self.mmid2mm[tid]
 
                     # macromolecule dilution with growth rate

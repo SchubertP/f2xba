@@ -90,12 +90,12 @@ class RbaMacromolecules:
                 if cmp_id != 'cofactor':
                     name = row['name'] if type(row['name']) is str else None
                     self.components[cmp_id] = RbaComponent(cmp_id, name=name, c_type='amino_acid', weight=row['weight'])
-            # TODO: move cofactor to enzyme level for SBML model
             for p in xba_model.proteins.values():
-                for sid in p.cofactors:
-                    if sid not in self.components:
-                        name = xba_model.species[sid].name
-                        self.components[sid] = RbaComponent(sid, name=name, c_type='cofactor', weight=0.0)
+                if p.cofactors:
+                    for sid in p.cofactors:
+                        if sid not in self.components:
+                            name = xba_model.species[sid].name
+                            self.components[sid] = RbaComponent(sid, name=name, c_type='cofactor', weight=0.0)
 
         # configure macromolecules
         if self.type == 'dna':
@@ -126,7 +126,9 @@ class RbaMacromolecules:
             for p in xba_model.proteins.values():
                 locus = p.locus
                 cid = rcid2cid[p.compartment]
-                composition = get_seq_composition(p.aa_sequence) | p.cofactors
+                composition = get_seq_composition(p.aa_sequence)
+                if p.cofactors:
+                    composition.update(p.cofactors)
                 self.macromolecules[locus] = RbaMacromolecule(locus, compartment=cid, composition=composition)
 
         # calulate macromolecular weight
