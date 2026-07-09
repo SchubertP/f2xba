@@ -264,6 +264,28 @@ class RbaOptimization(Optimize):
         """
         self.initial_assignments.set_growth_rate(growth_rate)
 
+    def _get_coupling_var_constr_ids(self, iso_rid):
+        """Determine coupling data for iso reaction with enzyme efficiency.
+
+        E.g. R_PGM_iso1 -> var_id: R_PGM_iso1, constr_id: C_EF_PGM_iso1
+        E.g. R_PGM_iso1_REV -> var_id: R_PGM_iso1, constr_id: C_ER_PGM_iso1
+
+        :param str iso_rid: reaction identifier
+        :return: variable and constraint identifiers
+        :rtype: str, str
+        """
+        iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
+        if re.match(r'.*_REV$', iso_ridx):
+            iso_fwd_ridx = re.sub('_REV$', '', iso_ridx)
+            constr_id = pf.C_ER_ + iso_fwd_ridx
+        else:
+            iso_fwd_ridx = iso_ridx
+            constr_id = pf.C_EF_ + iso_fwd_ridx
+
+        # in RBA models, directions are implemented reversible
+        var_id = pf.R_ + iso_fwd_ridx
+        return var_id, constr_id
+
     def _cp_scale_kcats(self, scale_kcats):
         """Scale kcat values / enzume efficiences for COBRApy interface.
 
@@ -273,22 +295,14 @@ class RbaOptimization(Optimize):
         """
         self.orig_coupling = {}
         for iso_rid, scale in scale_kcats.items():
-            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
-
-            if re.match(r'.*_REV$', iso_ridx):
-                iso_ridx = re.sub('_REV$', '', iso_ridx)
-                constr_id = pf.C_ER_ + iso_ridx
-            else:
-                constr_id = pf.C_EF_ + iso_ridx
-            var_id = pf.V_EC_ + iso_ridx
-
+            var_id, constr_id = self._get_coupling_var_constr_ids(iso_rid)
             if (var_id in self.model.reactions) and (constr_id in self.model.metabolites):
                 var = self.model.reactions.get_by_id(var_id)
                 constr = self.model.metabolites.get_by_id(constr_id)
                 if constr in var.metabolites:
                     orig_coupling = var.metabolites[constr]
                     self.orig_coupling[iso_rid] = orig_coupling
-                    var.add_metabolites({constr: orig_coupling * scale}, combine=False)
+                    var.add_metabolites({constr: orig_coupling / scale}, combine=False)
                 else:
                     print(f'scale_kcats for {iso_rid}: constraint {constr_id} not part variable {var_id}!')
             else:
@@ -301,13 +315,7 @@ class RbaOptimization(Optimize):
         Restore original coupling coefficients
         """
         for iso_rid, coupling in self.orig_coupling.items():
-            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
-            if re.match(r'.*_REV$', iso_ridx):
-                iso_ridx = re.sub('_REV$', '', iso_ridx)
-                constr_id = pf.C_ER_ + re.sub('_REV$', '', iso_ridx)
-            else:
-                constr_id = pf.C_EF_ + iso_ridx
-            var_id = pf.V_EC_ + iso_ridx
+            var_id, constr_id = self._get_coupling_var_constr_ids(iso_rid)
             if (var_id in self.model.reactions) and (constr_id in self.model.metabolites):
                 var = self.model.reactions.get_by_id(var_id)
                 constr = self.model.metabolites.get_by_id(constr_id)
@@ -322,20 +330,15 @@ class RbaOptimization(Optimize):
         :param dict(str, float) scale_kcats: selected reaction ids with kcat scaling factor
         """
         self.orig_coupling = {}
+
         for iso_rid, scale in scale_kcats.items():
-            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
-            if re.match(r'.*_REV$', iso_ridx):
-                iso_ridx = re.sub('_REV$', '', iso_ridx)
-                constr_id = pf.C_ER_ + iso_ridx
-            else:
-                constr_id = pf.C_EF_ + iso_ridx
-            var_id = pf.V_EC_ + iso_ridx
+            var_id, constr_id = self._get_coupling_var_constr_ids(iso_rid)
             var = self.gpm.getVarByName(var_id)
             constr = self.gpm.getConstrByName(constr_id)
             if var and constr:
                 orig_coupling = self.gpm.getCoeff(constr, var)
                 self.orig_coupling[iso_rid] = orig_coupling
-                self.gpm.chgCoeff(constr, var, orig_coupling * scale)
+                self.gpm.chgCoeff(constr, var, orig_coupling / scale)
             else:
                 print(f'scale_kcats for {iso_rid}: variable {var_id} and/or constraint {constr_id} not found!')
         self.gpm.update()
@@ -344,13 +347,8 @@ class RbaOptimization(Optimize):
         """Unscale kcat values for gurobipy interface, by resetting original coupling coefficients
         """
         for iso_rid, coupling in self.orig_coupling.items():
-            iso_ridx = re.sub('^' + pf.R_, '', iso_rid)
-            if re.match(r'.*_REV$', iso_ridx):
-                iso_ridx = re.sub('_REV$', '', iso_ridx)
-                constr_id = pf.C_ER_ + re.sub('_REV$', '', iso_ridx)
-            else:
-                constr_id = pf.C_EF_ + iso_ridx
-            var = self.gpm.getVarByName(pf.V_EC_ + iso_ridx)
+            var_id, constr_id = self._get_coupling_var_constr_ids(iso_rid)
+            var = self.gpm.getVarByName(var_id)
             constr = self.gpm.getConstrByName(constr_id)
             if var and constr:
                 self.gpm.chgCoeff(constr, var, coupling)
