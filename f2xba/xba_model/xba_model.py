@@ -370,12 +370,16 @@ class XbaModel:
         ####################################
         # create proteins based on UniProt #
         ####################################
+
+
         if 'organism_id' in general_params and 'organism_dir' in general_params:
             organism_dir = general_params['organism_dir']
             if not os.path.exists(organism_dir):
                 os.makedirs(organism_dir)
                 print(f'{organism_dir} created')
             self.uniprot_data = UniprotData(general_params['organism_id'], organism_dir)
+            if 'vector_proteins_fname' in general_params:
+                self.uniprot_data.add_vector_protein_data(general_params['vector_proteins_fname'])
             if 'modify_attributes' in xba_params:
                 self.modify_attributes(xba_params['modify_attributes'], 'uniprot')
 

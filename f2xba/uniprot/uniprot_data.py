@@ -123,6 +123,25 @@ class UniprotData:
 
         self.update_locus2uid()
 
+    def add_vector_protein_data(self, vector_proteins_fname):
+        """Add protein data for genes implemented on the vector (uniprot export format in .tsv)
+
+        :param str vector_proteins_fname: file name (.tsv) with protein records related to vector
+        """
+
+        if not os.path.exists(vector_proteins_fname):
+            print(f'Table with vector protein data not found {vector_proteins_fname}')
+            return
+
+        df_uniprot = pd.read_csv(vector_proteins_fname, sep='\t', index_col=0)
+
+        for uid, row in df_uniprot.iterrows():
+            self.proteins[uid] = UniprotProtein(row)
+        print(f'{len(df_uniprot)} protein records added from {vector_proteins_fname}')
+
+        self.locus2uid = {}
+        self.update_locus2uid()
+
     def update_locus2uid(self):
         self.locus2uid = {}
         for uid, p in self.proteins.items():
