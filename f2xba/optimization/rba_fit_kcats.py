@@ -69,38 +69,44 @@ class RbaFitKcats:
         self.var_values = var_values
         self.measured_mpmfs = measured_mpmfs
 
+        gene2mmid = {}
         pred_protein_mmol_per_gdw = defaultdict(float)
         for var_id, conc in self.var_values.items():
             if re.match(pf.V_EC_, var_id) or re.match(pf.V_PMC_, var_id):
                 scale = self.optim.df_enz_data.at[var_id, 'scale']
-                for gp_id, stoic in self.optim.enz_mm_composition[var_id].items():
+                for mm_id, stoic in self.optim.enz_mm_composition[var_id].items():
                     # exclude any RNAs (e.g. in ribosome)
-                    if self.optim.df_mm_data.at[gp_id, 'uniprot']:
-                        pred_protein_mmol_per_gdw[gp_id] += stoic * conc / scale
+                    gene = self.optim.df_mm_data.at[mm_id, 'label']
+                    if gene:
+                        pred_protein_mmol_per_gdw[gene] += stoic * conc / scale
+                        gene2mmid[gene] = mm_id
+            # include protein concentrations from concentration targets (proteins not included in enzymes)
             elif re.match(pf.V_TMMC_, var_id):
-                gp_id = re.sub(pf.V_TMMC_, '', var_id)
-                if self.optim.df_mm_data.at[gp_id, 'type'] == 'protein':
-                    scale = self.optim.df_mm_data.at[gp_id, 'scale']
-                    pred_protein_mmol_per_gdw[gp_id] += conc / scale
+                mm_id = re.sub(pf.V_TMMC_, pf.MM_, var_id)
+                gene = self.optim.df_mm_data.at[mm_id, 'label']
+                if gene:
+                    scale = self.optim.df_mm_data.at[mm_id, 'scale']
+                    pred_protein_mmol_per_gdw[gene] += conc / scale
+                    gene2mmid[gene] = mm_id
 
         # convert the units from mmol/gDW to mpmf (mg protein / g total protein)
         pred_protein_mg_per_gdw = {}
         total_mgp_per_gdw = 0.0
-        for gp_id, mmol_per_gdw in pred_protein_mmol_per_gdw.items():
-            mw_kda = self.optim.df_mm_data.at[gp_id, 'mw_kDa']
+        for gene, mmol_per_gdw in pred_protein_mmol_per_gdw.items():
+            mw_kda = self.optim.df_mm_data.at[gene2mmid[gene], 'mw_kDa']
             mg_per_gdw = mmol_per_gdw * mw_kda * 1000.0
-            pred_protein_mg_per_gdw[gp_id] = mg_per_gdw
+            pred_protein_mg_per_gdw[gene] = mg_per_gdw
             total_mgp_per_gdw += mg_per_gdw
         self.pred_protein_mpmf = {gene: 1000.0 * mg_per_gdw / total_mgp_per_gdw for gene, mg_per_gdw in
                                   pred_protein_mg_per_gdw.items()}
-
         # some information
         actgenes = set()
         self.actrid2genes = {}
         for iso_rid, enzymes in self.optim.rids_catalyzed.items():
-            if abs(self.var_values[re.sub(f'^{pf.R_}', '', iso_rid)]) > 0.0:
-                actgenes |= enzymes[0]
-                self.actrid2genes[iso_rid] = list(enzymes[0])
+            if not re.match(pf.V_PMC_, iso_rid):
+                if abs(self.var_values[re.sub(f'^{pf.R_}', '', iso_rid)]) > 0.0:
+                    actgenes |= enzymes[0]
+                    self.actrid2genes[iso_rid] = list(enzymes[0])
         tot_fitted_mpmf = sum([mpmf for gene, mpmf in self.measured_mpmfs.items() if gene in actgenes])
         print(f'{len(actgenes):4d} proteins involved in active reactions')
         print(f'{len(self.actrid2genes):4d} active catalyzed reactions using '
@@ -140,8 +146,9 @@ class RbaFitKcats:
         # get a mapping from net reaction id to iso reaction ids
         net2isorids = defaultdict(list)
         for iso_rid, enzymes in self.optim.rids_catalyzed.items():
-            net_rid = self.optim.rdata_model[iso_rid]['net_rid']
-            net2isorids[net_rid].append(iso_rid)
+            if not re.match(pf.V_PMC_, iso_rid):
+                net_rid = self.optim.rdata_model[iso_rid]['net_rid']
+                net2isorids[net_rid].append(iso_rid)
 
         # load baseline kcat values
         df_kcats = load_parameter_file(self.orig_kcats_fname)['kcats']

@@ -1,7 +1,7 @@
 """Implementation of EcmOptimization class.
 
 Support functions for COBRApy and gurobipy optimization of EC (enzyme constraint) models
-that have been created using the f2xba modelling package.
+that have been created using the f2xba modeling package.
 
 Support of GECKO, ccFBA, MOMENTmr and MOMENT optimization, as well
 support for thermodynamic enhance models (TGECKO, TccFBA, TMOMENTmr, TMOMENT)
@@ -10,9 +10,8 @@ Peter Schubert, HHU Duesseldorf, CCB, April 2024
 """
 
 import re
-import pandas as pd
-import tqdm
 from collections import defaultdict
+from f2xba.utils.mapping_utils import valid_sbml_sid
 # gurobipy should not be a hard requirement, unless used in this context
 try:
     import gurobipy as gp
@@ -22,7 +21,6 @@ except ImportError:
 
 import f2xba.prefixes as pf
 from .optimize import Optimize
-from .ecm_results import EcmResults
 
 
 class EcmOptimization(Optimize):
@@ -79,7 +77,7 @@ class EcmOptimization(Optimize):
 
         self.ecm_type = self.m_dict['modelAttrs'].get('id', '_GECKO').rsplit('_', 1)[1]
         if self.ecm_type.endswith('MOMENT'):
-            self._configure_moment_model_constraints()
+            self.configure_min_protein_conc_constraints()
 
     @property
     def medium(self):
@@ -102,22 +100,31 @@ class EcmOptimization(Optimize):
         """
         self.set_medium(ex_medium)
 
-    def _configure_moment_model_constraints(self):
-        """Configure constraints related to MOMENT model optimization.
+    def configure_min_protein_conc_constraints(self):
+        """Configure minimum protein concentration constraints (required for MOMENT).
 
-        Must be invoked after loading a MOMENT type model (not MOMENTmr). MOMENT implements promiscuous
-        enzymes, that can catalyze alternative reactions without additional costs. The most costly
-        reaction flux needs to be supported and all alternative reaction fluxes come for free.
+        Changes the sign of protein concentration constraints 'C_prot_xxx' from '=' to '≥'.
+
+        This will support optimization problems that require availability of sufficient protein to catalzye
+        the reactions, i.e. protein concentration could exceed protein requirement.
+        Examples are overexpressing of specific proteins or optimization of MOMENT type models.
+
+        Protein overexpression can be implemented to configure lower bounds on protein concentration variables
+        'V_PC_xxx'. MOMENT implements promiscuous enzymes that catalyze alternative reactions without
+        additional costs. The most costly reaction flux needs to be supported and all alternative reaction
+        fluxes are catalyzed for free.
         """
         if self.is_gpm:
             for constr in self.gpm.getConstrs():
-                if re.match(pf.C_prot_, constr.ConstrName) and re.match(pf.C_prot_pool, constr.ConstrName) is None:
-                    constr.sense = '>'
+                # if re.match(pf.C_prot_, constr.ConstrName) and re.match(pf.C_prot_pool, constr.ConstrName) is None:
+                if re.match(pf.C_prot_, constr.ConstrName):
+                        constr.sense = '>'
         else:
             for constr in self.model.constraints:
-                if re.match(pf.C_prot_, constr.name) and re.match(pf.C_prot_pool, constr.name) is None:
-                    constr.ub = 1000.0
-        print(f'MOMENT protein constraints configured ≥ 0')
+                # if re.match(pf.C_prot_, constr.name) and re.match(pf.C_prot_pool, constr.name) is None:
+                if re.match(pf.C_prot_, constr.name):
+                        constr.ub = 1000.0
+        print(f'minimum protein constraints configured.')
 
     def _cp_scale_kcats(self, scale_kcats):
         """Scale kcat values for COBRApy interface, by updating coupling coefficients.
@@ -189,98 +196,35 @@ class EcmOptimization(Optimize):
         self.gpm.update()
         self.orig_coupling = {}
 
-    def single_gene_deletion(self, genes=None, method='ecm', solution=None, **kwargs):
-        """Perform a single gene deletion analysis for enzyme constraint models using gurobipy interface.
+    def gene_knock_outs(self, genes):
+        """Simulate gene deletion for ECM type models like GECKO.
 
-        Interface aligned to COBRApy single_gene_deletion() method.
-        Perform single gene deletion simulations for provided list of gene in `genes`.
-        If `genes` is not provided, perform gene deletion for all genes that may be
-        active in the wild type solution. In case a gene is not required in the wild type solution, a knockout
-        simulation is not performed for this gene. Its growth rate value is set to the wild type value and
-        its optimization status is set to `wt_solution`.
-        A wild type solution can be provided with parameter `solution`, alternatively a wild type solution
-        is determined automatically.
-
-        When `method` is set to `room` or `linear room`, following keyword arguments can be added:
-        `delta`: relative tolerance range (default: 0.03),
-        `epsilon`: absolute tolerance range (default: 1e-3),
-        `time_limit`: in seconds for single gene deletion simulation, used for 'room' (default: 30.0).
+        Block protein concentration variables related to specified genes.
 
         .. code-block:: python
 
-            eo = EcmOptimization('iML1515_GECKO.xml')
-            eo.medium = {rid: 1000.0 for rid in lb_medium}
-            df_sgko = eo.single_gene_deletion()
+            orig_bounds = eo.gene_knock_outs('b0025')
+            solution = eo.optimize()
+            eo.set_variable_bounds(orig_bounds)
+            print(f'mutant gr: {solution.objective_value:.3f} h-1')
 
-        Example for MOMA based SGKO analysis for selected genes with wild type solution provided:
-
-        .. code-block:: python
-
-            wt_solution = eo.optimize()
-            eo.single_gene_deletion(genes = ['b0002', 'b0003', 'b0007', 'b0025'], method='moma', solution=wt_solution)
-
-        :param list or set genes: (optional) gene ids
-        :param str method: (optional) alternative methods 'moma', 'linear moma', 'room' or 'linear room'
-        :param solution: (optional) wild type ECM solution
-        :type solution: :class:`Solution`
-        :param kwargs: keyword arguments passed on to 'room' and 'linear room' methods
-        :return: table with SGKO results, containing growth rate in h-1, optimization status and fitness
-        :rtype: pandas.DataFrame
+        :param genes: gene identifiers
+        :type genes: str or list(str)
+        :return: original reaction bounds (lb, ub)
+        :rtype: dict(str, tuple)
         """
+        if type(genes) is str:
+            genes = [genes]
 
-        if self.is_gpm is None:
-            print('Method implemented for gurobipy interface only.')
-            return pd.DataFrame()
-
-        linear = True if 'linear' in method else False
-        biomass_rid = self._get_biomass_rid()
-
-        # determine wild type growth rate and fluxes, if solution not provided
-        # extract wt_gr from fluxes of biomass_rid (assume growth maximization of Biomass objective function)
-        if solution is None:
-            solution = self.optimize()
-        wt_gr = solution.fluxes[biomass_rid]
-        wt_fluxes = dict(EcmResults(self, {'wt': solution}).collect_fluxes()['wt'])
-
-        # determine gene list, if not provided
-        if genes is None:
-            genes = self.get_active_genes(wt_fluxes)
-            all_genes = self.m_dict['fbcGeneProducts'].label.values
+        if self.is_gpm:
+            update_bounds = {f'{pf.V_PC_}{self.locus2uid[valid_sbml_sid(gene)]}': (0.0, 0.0) for gene in genes}
+            orig_bounds = self.set_variable_bounds(update_bounds)
         else:
-            all_genes = genes
+            # COBRApy gene deletion impact
+            orig_bounds = {}
+            for gene in genes:
+                var_id = f'{pf.V_PC_}{self.locus2uid[valid_sbml_sid(gene)]}'
+                orig_bounds[var_id] = self.model.reactions.get_by_id(var_id).bounds
+                self.model.reactions.get_by_id(var_id).bounds = (0.0, 0.0)
 
-        # optimization loop for single gene deletions
-        cols = ['growth_rate', 'status', 'fitness']
-        sgko_results = {'wt': [wt_gr, 'wt_solution', 1.0]}
-        for gene in tqdm.tqdm(sorted(all_genes)):
-            if gene in genes:
-
-                # simulate a single gene deletion
-                orig_rid_bounds = self.gene_knock_outs(gene)
-                if 'moma' in method:
-                    solution = self.moma(wt_fluxes, linear=linear)
-                elif 'room' in method:
-                    solution = self.room(wt_fluxes, linear=linear, **kwargs)
-                else:
-                    solution = self.optimize()
-                self.set_variable_bounds(orig_rid_bounds)
-
-                # process simulation result
-                if solution is None:
-                    sgko_results[gene] = [0.0, 'infeasible', 0.0]
-                elif solution.status in {'optimal', 'time_limit', 'suboptimal'}:
-                    if 'moma' in method or 'room' in method:
-                        mutant_gr = solution.fluxes[biomass_rid]
-                    else:
-                        mutant_gr = solution.objective_value
-                    sgko_results[gene] = [mutant_gr, solution.status, mutant_gr / wt_gr]
-                else:
-                    sgko_results[gene] = [0.0, solution.status, 0.0]
-            else:
-                # genes not in gene_list are assumed to not impact the wild type solution
-                sgko_results[gene] = [wt_gr, 'wt_solution', 1.0]
-
-        df_sgko = pd.DataFrame(sgko_results.values(), index=list(sgko_results), columns=cols)
-        df_sgko.index.name = 'gene'
-
-        return df_sgko
+        return orig_bounds

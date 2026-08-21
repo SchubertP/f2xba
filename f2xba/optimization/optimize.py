@@ -15,10 +15,12 @@ Peter Schubert, HHU Duesseldorf, CCB, June 2024
 
 import re
 import os
+import sys
 import time
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+import tqdm
 import sbmlxdf
 import f2xba.prefixes as pf
 from f2xba.utils.mapping_utils import get_srefs, parse_reaction_string, valid_sbml_sid
@@ -98,6 +100,12 @@ class Solution:
 
         self.shadow_prices = shadow_prices
         """Shadow prices of constraints (pandas Series)."""
+
+        self.n_iter = None
+        """(RBA only) Number of iterations in RBA bisection algorithem"""
+
+        self.density_constraints = None
+        """(RBA only) Information appicable density constraints"""
 
     def __repr__(self):
         if self.status != 'optimal':
@@ -209,6 +217,13 @@ class Optimize:
         self.locus2uid = self._get_locus2uid()
         """Map gene identifier to UniProt protein identifier."""
 
+        self.gname2locus = {}
+        """Map gene name to gene identifier (locus)."""
+
+        for _, row in self.m_dict['fbcGeneProducts'].iterrows():
+            if type(row['name']) is str and len(row['name']) > 0:
+                self.gname2locus[row['name']] = row['label']
+
         self.mid2name = {re.sub(f'^{pf.M_}', '', sid): row['name']
                          for sid, row in self.m_dict['species'].iterrows()}
 
@@ -245,6 +260,7 @@ class Optimize:
         """Original protein-reaction coupling to support scaling_kcats."""
 
         # self.uid2locus = {uid: locus for locus, uid in self.locus2uid.items()}
+
 
     def _get_id2groups(self):
         """Extract Groups component information from SBML model to map ids to group names.
@@ -391,7 +407,6 @@ class Optimize:
             print(f'Thermodynamic constraints (C_F[FR]C_xxx, C_G[FR]C_xxx, C_SU_xxx) ≤ 0')
 
     # GUROBIPY MODEL CONSTRUCTION RELATED
-
     def _gp_add_add_linear_constraints(self, gpm, constrs):
         """Add linear constraints to the GurobiPy model.
 
@@ -570,12 +585,12 @@ class Optimize:
         lparts = []
         rparts = []
         for sid, stoic in get_srefs(rdata['reactants']).items():
-            if re.match(pf.C_, sid) is None:
+            if not re.match(pf.C_, sid):
                 # drop stoichiometric coefficients that are 1.0
                 stoic_str = f'{round(stoic, 4)} ' if stoic != 1.0 else ''
                 lparts.append(f'{stoic_str}{sid}')
         for sid, stoic in get_srefs(rdata['products']).items():
-            if re.match(pf.C_, sid) is None:
+            if not re.match(pf.C_, sid):
                 stoic_str = f'{round(stoic, 4)} ' if stoic != 1.0 else ''
                 rparts.append(f'{stoic_str}{sid}')
         dirxn = ' -> ' if rdata['reversible'] else ' => '
@@ -635,13 +650,13 @@ class Optimize:
         gpid2label = self.m_dict['fbcGeneProducts']['label'].to_dict()
         rdatas = {}
         for rid, row in self.m_dict['reactions'].iterrows():
-            if re.match(pf.V_, rid) is None and re.search('_arm', rid) is None:
+            if not re.match(pf.V_, rid) and not re.search('_arm', rid):
                 drxn = 'rev' if re.search('_REV$', rid) else 'fwd'
                 fwd_rid = re.sub('_REV$', '', rid)
                 net_rid = re.sub(r'_iso\d+', '', fwd_rid)
                 groups = '; '.join(self.id2groups.get(rid, ''))
                 reaction_str = self._get_reaction_str(row)
-                if re.search(r'pmet_\w+', reaction_str) is not None:
+                if re.search(r'pmet_\w+', reaction_str):
                     reaction_str = self._expand_pseudo_metabolite(rid, reaction_str)
                 # translate gene product ids to gene labels
                 parts = []
@@ -737,6 +752,7 @@ class Optimize:
     def get_rids_catalyzed(self):
         """Get reactions that are catalyzed with enzyme composition (gene labels).
 
+        Including RBA process machine variables.
         Data can be used to assess impact of gene deletions
         Data can be used to identify reactions catalyzed by a specific gene
 
@@ -750,7 +766,7 @@ class Optimize:
         gpid2label = self.m_dict['fbcGeneProducts']['label'].to_dict()
         rids_catalyzed = {}
         for rid, rdata in self.m_dict['reactions'].iterrows():
-            if re.match(pf.V_, rid) is None:
+            if not re.match(pf.V_, rid) or re.match(pf.V_PMC_, rid):
                 enzymes = []
                 if type(rdata['fbcGeneProdAssoc']) is str:
                     assoc = re.sub('assoc=', '', rdata['fbcGeneProdAssoc'])
@@ -790,6 +806,7 @@ class Optimize:
         for rid, enzymes in self.rids_catalyzed.items():
             impacted = True
             for enzyme in enzymes:
+                # for given reaction find any isoenzyme that is not impacted by specified gene deletions
                 if len(genes.intersection(enzyme)) == 0:
                     impacted = False
                     break
@@ -897,7 +914,7 @@ class Optimize:
                 assert var_id in self.model.reactions, f'{var_id} not found'
                 rxn = self.model.reactions.get_by_id(var_id)
                 orig_bounds[var_id] = rxn.bounds
-                if (lb is not None) and (ub is not None):
+                if lb is not None and ub is not None:
                     rxn.bounds = (lb, ub)
                 elif lb is not None:
                     rxn.lower_bound = lb
@@ -965,6 +982,27 @@ class Optimize:
         """
         pass
 
+    def gp_scale_variable(self, var_id, scale):
+        """Scale a variable in a gurobipy model instance
+
+            variable bounds are multiplied with scale
+            coeffients are divided by scale
+
+        :param str var_id: variable id
+        :param float scale: scaling factor
+        :return:
+        """
+        if self.is_gpm:
+            var = self.gpm.getVarByName(var_id)
+            if var:
+                var.LB = scale * var.LB
+                var.UB = scale * var.UB
+                col = self.gpm.getCol(var)
+                for idx in range(col.size()):
+                    self.gpm.chgCoeff(col.getConstr(idx), var, col.getCoeff(idx) / scale)
+        else:
+            print('gp_scale_variable() only supported for gurobipy interface')
+
     def get_objective(self):
         """Retrieve model optimization objective.
 
@@ -979,10 +1017,10 @@ class Optimize:
         """
         if self.is_gpm:
             lin_expr = self.gpm.getObjective()
-            objective = {}
-            for idx in range(lin_expr.size()):
-                var_id = lin_expr.getVar(idx).VarName
-                objective[re.sub(f'^{pf.R_}', '', var_id)] = lin_expr.getCoeff(idx)
+            objective = {lin_expr.getVar(idx).VarName: lin_expr.getCoeff(idx) for idx in range(lin_expr.size())}
+            #for idx in range(lin_expr.size()):
+            #    var_id = lin_expr.getVar(idx).VarName
+            #    objective[var_id] = lin_expr.getCoeff(idx)
             direction = {gp.GRB.MINIMIZE: 'min', gp.GRB.MAXIMIZE: 'max'}[self.gpm.ModelSense]
         else:
             objective = {}
@@ -1162,10 +1200,10 @@ class Optimize:
         if self.is_gpm:
             constr = self.gpm.getConstrByName(constr_id)
             var = self.gpm.getVarByName(var_id)
-            if constr is None:
+            if not constr:
                 print(f'Constraint with identifier "{constr_id}" not found!')
                 return None
-            if var is None:
+            if not var:
                 print(f'Variable with identifier "{var_id}" not found!')
                 return None
             old_val = self.gpm.getCoeff(constr, var)
@@ -1219,7 +1257,7 @@ class Optimize:
         :return: optimization solution
         :rtype: :class:`Solution`
         """
-        model = self.gpm if alt_model is None else alt_model
+        model = self.gpm if not alt_model else alt_model
 
         model.optimize()
         solution = self._gp_get_solution(model)
@@ -1259,7 +1297,7 @@ class Optimize:
         :return: optimization solution
         :rtype: class:`Solution`
         """
-        model = self.gpm if alt_model is None else alt_model
+        model = self.gpm if not alt_model else alt_model
 
         results_dict = {'status': status2text[model.status].lower(), 'tmp': pd.Series()}
         if hasattr(model, 'objval'):
@@ -1290,7 +1328,7 @@ class Optimize:
         :return: optimization solution
         :return: :class:`Solution`
         """
-        if self.is_gpm is None:
+        if not self.is_gpm:
             print('Method implemented for gurobipy interface only.')
             return None
 
@@ -1353,15 +1391,15 @@ class Optimize:
         :return: table with minimum and maximum reaction fluxes / variable values
         :rtype: pandas.DataFrame
         """
-        if self.is_gpm is None:
+        if not self.is_gpm:
             print('Method implemented for gurobipy interface only.')
             return None
 
         model_var_ids = set(self.m_dict['reactions'].index)
         selected_varids = []
-        if rids is None or len(rids) == 0:
+        if not rids or len(rids) == 0:
             # per default, select all reaction fluxes
-            selected_varids = [var_id for var_id in model_var_ids if re.match(pf.V_, var_id) is None]
+            selected_varids = [var_id for var_id in model_var_ids if not re.match(pf.V_, var_id)]
         else:
             for var_id in rids:
                 if var_id in model_var_ids:
@@ -1410,13 +1448,13 @@ class Optimize:
             net_val_ranges = {}
             for var_id, (val_min, val_max) in results.items():
                 # exclude ARM reactions, that are optionally used in GECKO models
-                if re.search(r'_arm(_REV)?$', var_id) is None:
+                if not re.search(r'_arm(_REV)?$', var_id):
                     # determine net reaction id
                     fwd_id = re.sub('_REV$', '', var_id)
                     net_varid = re.sub(r'_iso\d*', '', fwd_id)
                     net_varids.add(net_varid)
 
-                    if re.search('_REV$', var_id) is None:
+                    if not re.search('_REV$', var_id):
                         net_val_min = val_min
                         net_val_max = val_max
                     else:
@@ -1472,44 +1510,111 @@ class Optimize:
         print(f'{len(gene_list)} genes potentially active given flux distribution.')
         return gene_list
 
-    def gene_knock_outs(self, genes):
-        """Block reactions that are catalyzed by specified gene/genes.
+    def single_gene_deletion(self, genes=None, method='', wt_solution=None, **kwargs):
+        """Perform a single gene deletion analysis for enzyme constraint models using gurobipy interface.
 
-        Example: Block reactions that depend on the specified gene and perform a model optimization.
+        Support both FBA and ECM models.
+
+        Interface aligned to COBRApy single_gene_deletion() method.
+        Perform single gene deletion simulations for provided list of gene in `genes`.
+        If `genes` is not provided, perform gene deletion for all genes that may be
+        active in the wild type solution. In case a gene is not required in the wild type solution, a knockout
+        simulation is not performed for this gene. Its growth rate value is set to the wild type value and
+        its optimization status is set to `wt_solution`.
+        A wild type solution can be provided with parameter `wt_solution`, alternatively a wild type solution
+        is determined automatically.
+
+        When `method` is set to `room` or `linear room`, following keyword arguments can be added:
+        `delta`: relative tolerance range (default: 0.03),
+        `epsilon`: absolute tolerance range (default: 1e-3),
+        `time_limit`: in seconds for single gene deletion simulation, used for 'room' (default: 30.0).
 
         .. code-block:: python
 
-            orig_bounds = eo.gene_knock_outs('b0025')
-            solution = eo.optimize()
-            eo.set_variable_bounds(orig_bounds)
-            print(f'mutant gr: {solution.objective_value:.3f} h-1')
+            eo = EcmOptimization('iML1515_GECKO.xml')
+            eo.medium = {rid: 1000.0 for rid in lb_medium}
+            df_sgko = eo.single_gene_deletion()
 
-        :param genes: gene identifiers
-        :type genes: str or list(str)
-        :return: original reaction bounds (lb, ub)
-        :rtype: dict(str, tuple)
+        Example for MOMA based SGKO analysis for selected genes with wild type solution provided:
+
+        .. code-block:: python
+
+            wt_solution = eo.optimize()
+            eo.single_gene_deletion(genes = ['b0002', 'b0003', 'b0007', 'b0025'], method='moma', solution=wt_solution)
+
+        :param list or set genes: (optional) gene ids
+        :param str method: (optional) alternative methods 'moma', 'linear moma', 'room' or 'linear room'
+        :param :class:`Solution` wt_solution: (optional) wild type solution
+        :param kwargs: keyword arguments passed on to 'room' and 'linear room' methods
+        :return: table with SGKO results, containing growth rate in h-1, optimization status and fitness
+        :rtype: pandas.DataFrame
         """
-        if type(genes) is str:
-            genes = [genes]
 
-        if self.is_gpm:
-            update_bounds = {var_id: (0.0, 0.0) for var_id in self.get_rids_blocked_by(genes)}
-            orig_rid_bounds = self.set_variable_bounds(update_bounds)
+        if not self.is_gpm:
+            print('Method implemented for gurobipy interface only.')
+            return pd.DataFrame()
+
+        linear = True if 'linear' in method else False
+        biomass_rid = self._get_biomass_rid()
+
+        # determine wild type growth rate and fluxes, if solution not provided
+        # extract wt_gr from fluxes of biomass_rid (assume growth maximization of Biomass objective function)
+        if not wt_solution:
+            wt_solution = self.optimize()
+        wt_gr = wt_solution.fluxes[biomass_rid]
+
+        # determine gene list, if not provided
+        if not genes:
+            genes = self.get_active_genes(wt_solution.fluxes)
+            all_genes = self.m_dict['fbcGeneProducts'].label.values
         else:
-            orig_rid_bounds = {}
-            for gene in genes:
-                assert gene in self.model.genes, f'{gene} not found'
-                for react in self.model.genes.get_by_id(gene).reactions:
-                    orig_rid_bounds[react.id] = (react.lower_bound, react.upper_bound)
-            for gene in genes:
-                self.model.genes.get_by_id(gene).knock_out()
+            all_genes = genes
 
-        return orig_rid_bounds
+        # optimization loop for single gene deletions
+        cols = ['growth_rate', 'status', 'fitness']
+        sgko_results = {'wt': [wt_gr, 'wt_solution', 1.0]}
+        for gene in tqdm.tqdm(sorted(all_genes)):
+            if gene in genes:
 
-    def moma(self, wt_fluxes, linear=False):
-        """Perform a MOMA based optimization using the gurobipy interface.
+                # simulate a single gene deletion
+                orig_rid_bounds = self.gene_knock_outs(gene)
+                if 'moma' in method:
+                    solution = self.moma(wt_solution, linear=linear)
+                elif 'room' in method:
+                    solution = self.room(wt_solution, linear=linear, **kwargs)
+                else:
+                    solution = self.optimize()
+                self.set_variable_bounds(orig_rid_bounds)
 
-        Supported for FBA and ECM models.
+                # process simulation result
+                if not solution:
+                    sgko_results[gene] = [0.0, 'infeasible', 0.0]
+                elif solution.status in {'optimal', 'time_limit', 'suboptimal'}:
+                    if 'moma' in method or 'room' in method:
+                        mutant_gr = solution.fluxes[biomass_rid]
+                    else:
+                        mutant_gr = solution.objective_value
+                    sgko_results[gene] = [mutant_gr, solution.status, mutant_gr / wt_gr]
+                else:
+                    sgko_results[gene] = [0.0, solution.status, 0.0]
+            else:
+                # genes not in gene_list are assumed to not impact the wild type solution
+                sgko_results[gene] = [wt_gr, 'wt_solution', 1.0]
+
+        df_sgko = pd.DataFrame(sgko_results.values(), index=list(sgko_results), columns=cols)
+        df_sgko.index.name = 'gene'
+
+        return df_sgko
+
+    def moma(self, wt_solution, linear=False, **kwargs):
+        """MOMA implementation for FBA and ECM models (support of gurobipy implementation).
+
+        For CobraPy implementation redirect to cobra.flux_analysis.moma()
+
+        Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
+        metabolic networks.
+
+        Supported for FBA and ECM models
 
         Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
         metabolic networks.
@@ -1545,54 +1650,93 @@ class Optimize:
             wt_solution = fo.pfba()
 
             orig_bounds = fo.gene_knock_outs('b0003')
-            moma_solution = fo.moma(wt_solution.fluxes)
+            moma_solution = fo.moma(wt_solution)
             fo.set_variable_bounds(orig_bounds)
             print(f'{moma_solution.fluxes['BIOMASS_Ec_iML1515_core_75p37M']:.3f} h-1')
 
-        :param dict(str, float) wt_fluxes: wild type flux distribution, e.g. pFBA fluxes
+        :param :class:`Solution` wt_solution: wild type solution
         :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
+        :param kwargs: keyword arguments as supplied during RbaOptimization.solve()
         :return: MOMA determined solution
         :rtype: :class:`Solution`
         """
-        if self.is_gpm is None:
-            print('Method implemented for gurobipy interface only.')
-            return pd.DataFrame()
+        if self.is_gpm:
+            return self._gp_moma(wt_solution, linear, **kwargs)
+        else:
+            # import cobra to be used for moma and room
+            if 'cobra' not in sys.modules:
+                import cobra
+            return cobra.flux_analysis.moma(self.model, wt_solution, linear=linear)
 
-        self.gpm.update()
-        moma_gpm = self.gpm.copy()
+    @staticmethod
+    def _gp_add_moma(moma_gpm, wt_solution, linear, exclude_var_idxs=None):
+        """Add MOMA constraints for the gurobipy interface.
+
+        Supported for FBA, ECM, and RBA models.
+
+        Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
+        metabolic networks.
+
+        :param :class: `gurobipy.Model` moma_gpm: gurobipy model instance
+        :param :class:`Solution` wt_solution: wild type solution
+        :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan)
+        :param None or set exclude_var_idxs: variable ids for which MOMA constraints shall not be implemented
+        """
+        if not exclude_var_idxs:
+            exclude_var_idxs = set()
 
         tflux_vars = []
-        for ridx, wt_flux in wt_fluxes.items():
-            flux_var = moma_gpm.getVarByName(f'{pf.R_}{ridx}')
-            if flux_var is None:
-                flux_var = moma_gpm.getVarByName(ridx)
+        for var_idx, wt_flux in wt_solution.fluxes.items():
+            if var_idx not in exclude_var_idxs:
+                flux_var = moma_gpm.getVarByName(f'{pf.R_}{var_idx}')
+                if flux_var is None:
+                    flux_var = moma_gpm.getVarByName(var_idx)
 
-            if not linear:
-                tflux_lb = flux_var.LB - wt_flux
-                tflux_ub = flux_var.UB - wt_flux
-                tflux_var = moma_gpm.addVar(lb=tflux_lb, ub=tflux_ub, vtype=gp.GRB.CONTINUOUS,
-                                            name=f'V_MOMA_transformed_flux_{ridx}')
-                tflux_vars.append(tflux_var)
-                moma_gpm.addLConstr(flux_var - tflux_var, sense=gp.GRB.EQUAL, rhs=wt_flux)
-            else:
-                tfluxp_ub = flux_var.UB - wt_flux
-                # if wild type flux already at the upper boundary we do not require fluxp variable/constraint
-                if tfluxp_ub > 0:
-                    tfluxp_var = moma_gpm.addVar(lb=0, ub=tfluxp_ub, vtype=gp.GRB.CONTINUOUS,
-                                                 name=f'V_MOMA_transformed_fluxp_{ridx}')
-                    tflux_vars.append(tfluxp_var)
-                    moma_gpm.addLConstr(flux_var - tfluxp_var, sense=gp.GRB.LESS_EQUAL, rhs=wt_flux)
-                tfluxn_ub = wt_flux - flux_var.LB
-                if tfluxn_ub > 0:
-                    tfluxn_var = moma_gpm.addVar(lb=0, ub=tfluxn_ub, vtype=gp.GRB.CONTINUOUS,
-                                                 name=f'V_MOMA_transformed_fluxn_{ridx}')
-                    tflux_vars.append(tfluxn_var)
-                    moma_gpm.addLConstr(flux_var + tfluxn_var, sense=gp.GRB.GREATER_EQUAL, rhs=wt_flux)
+                if not linear:
+                    tflux_lb = flux_var.LB - wt_flux
+                    tflux_ub = flux_var.UB - wt_flux
+                    tflux_var = moma_gpm.addVar(lb=tflux_lb, ub=tflux_ub, vtype=gp.GRB.CONTINUOUS,
+                                                name=f'V_MOMA_transformed_flux_{var_idx}')
+                    tflux_vars.append(tflux_var)
+                    moma_gpm.addLConstr(flux_var - tflux_var, sense=gp.GRB.EQUAL, rhs=wt_flux)
+                else:
+                    tfluxp_ub = flux_var.UB - wt_flux
+                    # if wild type flux already at the upper boundary we do not require fluxp variable/constraint
+                    if tfluxp_ub > 0:
+                        tfluxp_var = moma_gpm.addVar(lb=0, ub=tfluxp_ub, vtype=gp.GRB.CONTINUOUS,
+                                                     name=f'V_MOMA_transformed_fluxp_{var_idx}')
+                        tflux_vars.append(tfluxp_var)
+                        moma_gpm.addLConstr(flux_var - tfluxp_var, sense=gp.GRB.LESS_EQUAL, rhs=wt_flux)
+                    tfluxn_ub = wt_flux - flux_var.LB
+                    if tfluxn_ub > 0:
+                        tfluxn_var = moma_gpm.addVar(lb=0, ub=tfluxn_ub, vtype=gp.GRB.CONTINUOUS,
+                                                     name=f'V_MOMA_transformed_fluxn_{var_idx}')
+                        tflux_vars.append(tfluxn_var)
+                        moma_gpm.addLConstr(flux_var + tfluxn_var, sense=gp.GRB.GREATER_EQUAL, rhs=wt_flux)
 
         if not linear:
             moma_gpm.setObjective(gp.quicksum([v * v for v in tflux_vars]), gp.GRB.MINIMIZE)
         else:
             moma_gpm.setObjective(gp.quicksum(tflux_vars), gp.GRB.MINIMIZE)
+
+
+    def _gp_moma(self, wt_solution, linear=False):
+        """Perform a MOMA based optimization using the gurobipy interface.
+
+        Supported for FBA and ECM models.
+
+        Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
+        metabolic networks.
+
+        :param :class:`Solution` wt_solution: wild type solution
+        :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
+        :return: MOMA determined solution
+        :rtype: :class:`Solution`
+        """
+        self.gpm.update()
+        moma_gpm = self.gpm.copy()
+
+        self._gp_add_moma(moma_gpm, wt_solution, linear)
 
         moma_gpm.optimize()
         moma_solution = self._gp_get_solution(moma_gpm)
@@ -1600,10 +1744,15 @@ class Optimize:
 
         return moma_solution
 
-    def room(self, wt_fluxes, linear=False, delta=0.03, epsilon=1e-3, time_limit=30.0):
-        """Perform a ROOM based optimization using the gurobipy interface.
+    def room(self, wt_solution, linear=False, delta=0.03, epsilon=1e-3, time_limit=30.0, **kwargs):
+        """MOMA implementation for FBA and ECM models.
+
+        Support gurobipy interface only.
 
         Ref: Shlomi et al., 2005, Regulatory on off minimization of metabolic flux
+        changes after genetic perturbations
+
+       Ref: Shlomi et al., 2005, Regulatory on off minimization of metabolic flux
         changes after genetic perturbations
 
 
@@ -1633,11 +1782,34 @@ class Optimize:
             wt_solution = fo.pfba()
 
             orig_bounds = fo.gene_knock_outs('b0003')
-            room_solution = fo.room(wt_solution.fluxes)
+            room_solution = fo.room(wt_solution)
             fo.set_variable_bounds(orig_bounds)
             print(f'{room_solution.fluxes['BIOMASS_Ec_iML1515_core_75p37M']:.3f} h-1')
 
-        :param dict(str, float) wt_fluxes: wild type flux distribution, e.g. pFBA fluxes
+        :param :class:`Solution` wt_solution: wild type solution, e.g. pFBA solution for FBA models
+        :param bool linear: using MILP (False) or relaxed LP (True) formulation (default: False)
+        :param float delta: relative tolerance range (default: 0.03)
+        :param float epsilon: absolute tolerance range (default: 1e-3)
+        :param float time_limit: time limit in seconds (default: 30.0)
+        :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
+        :param kwargs: keyword arguments as supplied during RbaOptimization.solve()
+        :return: ROOM determined solution
+        :rtype: :class:`Solution`
+        """
+        if self.is_gpm:
+            return self._gp_room(wt_solution, linear, **kwargs)
+        else:
+            print('Method implemented for gurobipy interface only.')
+            return pd.DataFrame()
+            # return self._cp_room(wt_solution, linear, **kwargs)
+
+    def _gp_room(self, wt_solution, linear=False, delta=0.03, epsilon=1e-3, time_limit=30.0):
+        """Perform a ROOM based optimization using the gurobipy interface.
+
+        Ref: Shlomi et al., 2005, Regulatory on off minimization of metabolic flux
+        changes after genetic perturbations
+
+        :param :class:`Solution` wt_solution: wild type solution, e.g. pFBA solution
         :param bool linear: using MILP (False) or relaxed LP (True) formulation (default: False)
         :param float delta: relative tolerance range (default: 0.03)
         :param float epsilon: absolute tolerance range (default: 1e-3)
@@ -1645,7 +1817,7 @@ class Optimize:
         :return: ROOM determined solution
         :rtype: :class:`Solution`
         """
-        if self.is_gpm is None:
+        if not self.is_gpm:
             print('Method implemented for gurobipy interface only.')
             return None
 
@@ -1655,7 +1827,7 @@ class Optimize:
             room_gpm.params.timelimit = time_limit
 
         flux_ctrl_vars = []
-        for ridx, wt_flux in wt_fluxes.items():
+        for ridx, wt_flux in wt_solution.fluxes.items():
             flux_var = room_gpm.getVarByName(f'{pf.R_}{ridx}')
             if flux_var is None:
                 flux_var = room_gpm.getVarByName(ridx)

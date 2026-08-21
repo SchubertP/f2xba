@@ -60,7 +60,7 @@ class RbaModel:
     allocation models. Metabolic Engineering, 55, 12-22.
     https://doi.org/https://doi.org/10.1016/j.ymben.2019.06.001
 
-    Example: Create a RBA model by extending an existing genome scale metabolic model.
+    Example: Create an RBA model by extending an existing genome scale metabolic model.
     The spreadsheet files `xba_parameters.xlsx` and `rba_parameters.xlsx`
     contain configuration data. See tutorials.
 
@@ -311,7 +311,7 @@ class RbaModel:
         'general', 'trna2locus', 'compartments', 'targets', 'functions', 'processing_maps',
         'processes' and 'machineries'. The sheet 'coenzymes' is optional.
 
-        Example: Create a RBA model by extending an existing genome scale metabolic model.
+        Example: Create an RBA model by extending an existing genome scale metabolic model.
         The spreadsheet files `xba_parameters.xlsx` and `rba_parameters.xlsx`
         contain configuration data. See tutorials.
 
@@ -862,12 +862,12 @@ class RbaModel:
 
         These variables are in units of µmol/gDW. Coefficients need to be scaled
 
-        RBA macromolecule ids are converted to respective XbaModel species id
-        Reactants/products are based on stoichiometry of machinery composition
-        Reactants/products are diluted as per growth rate
-        Reactants/products are scaled to match units of concentration variable (µmol_per_gDW)
+        RBA macromolecule ids are converted to respective XbaModel species id.
+        Reactants/products are based on stoichiometry of machinery composition.
+        Reactants/products are diluted as per growth rate.
+        Reactants/products are scaled to match units of concentration variable (µmol_per_gDW).
         As stoichiometry is based on growth rate, data for initial assignment is collected
-        as well as species reference ids
+        as well as species reference ids.
 
         SBML Validation:
           When the value of the attribute variable in an InitialAssignment object refers to a SpeciesReference object,

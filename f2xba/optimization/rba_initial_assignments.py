@@ -60,6 +60,7 @@ class IaTargetRid:
 
     def __init__(self, rid):
         self.rid = rid
+        self.rescale = 1.0
         self.flux_bounds = {}
         self.reactants = {}
         self.products = {}
@@ -243,21 +244,21 @@ class InitialAssignments:
                 # configure variable bounds that depend on growth rate and medium
                 if len(tr.flux_bounds) > 0:
                     if 'lb' in tr.flux_bounds:
-                        new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env)
+                        new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env) * tr.rescale
                         if new_lb != var.lb:
                             var.lb = new_lb
                     if 'ub' in tr.flux_bounds:
-                        new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env)
+                        new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env) * tr.rescale
                         if new_ub != var.ub:
                             var.ub = new_ub
 
                 for sid, symbol_id in tr.reactants.items():
-                    new_val = -self.ia_functions[symbol_id].get_value(self.local_env)
+                    new_val = -self.ia_functions[symbol_id].get_value(self.local_env)/tr.rescale
                     constr = gpm.getConstrByName(sid)
                     if new_val != gpm.getCoeff(constr, var):
                         gpm.chgCoeff(constr, var, new_val)
                 for sid, symbol_id in tr.products.items():
-                    new_val = self.ia_functions[symbol_id].get_value(self.local_env)
+                    new_val = self.ia_functions[symbol_id].get_value(self.local_env)/tr.rescale
                     constr = gpm.getConstrByName(sid)
                     if new_val != gpm.getCoeff(constr, var):
                         gpm.chgCoeff(constr, var, new_val)
@@ -277,24 +278,26 @@ class InitialAssignments:
                 # configure variable bounds that deped on growth rate and medium
                 if len(tr.flux_bounds) > 0:
                     if 'lb' in tr.flux_bounds and 'ub' in tr.flux_bounds:
-                        new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env)
-                        new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env)
+                        new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env) * tr.rescale
+                        new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env) * tr.rescale
                         rxn.bounds = (new_lb, new_ub)
                     elif 'lb' in tr.flux_bounds:
-                        new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env)
+                        new_lb = self.ia_functions[tr.flux_bounds['lb']].get_value(self.local_env) * tr.rescale
                         rxn.lower_bound = new_lb
                     elif 'ub' in tr.flux_bounds:
-                        new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env)
+                        new_ub = self.ia_functions[tr.flux_bounds['ub']].get_value(self.local_env) * tr.rescale
                         rxn.lower_bound = new_ub
 
                 # configure stoichiometric coefficients that depend on growth rate or medium
                 old_mids = {met.id for met in rxn.metabolites}
                 new_coefs = {}
                 if len(tr.reactants) > 0:
-                    new_coefs = {re.sub(f'^{pf.M_}', '', sid): -self.ia_functions[symbol_id].get_value(self.local_env)
+                    new_coefs = {re.sub(f'^{pf.M_}', '', sid):
+                                     -self.ia_functions[symbol_id].get_value(self.local_env)/tr.rescale
                                  for sid, symbol_id in tr.reactants.items()}
                 if len(tr.products) > 0:
-                    new_coefs |= {re.sub(f'^{pf.M_}', '', sid): self.ia_functions[symbol_id].get_value(self.local_env)
+                    new_coefs |= {re.sub(f'^{pf.M_}', '', sid):
+                                      self.ia_functions[symbol_id].get_value(self.local_env)/tr.rescale
                                   for sid, symbol_id in tr.products.items()}
 
                 # in case of newly added metabolites (i.e. currently not existing in the reaction)

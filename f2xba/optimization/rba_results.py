@@ -58,25 +58,25 @@ class RbaResults(Results):
         :rtype: pandas.DataFrame
         """
         # remove 'R_' prefix to align with COBRApy reaction ids
-        pf_prod = re.sub(f'^{pf.R_}', '', pf.R_PROD_)
-        pf_degr = re.sub(f'^{pf.R_}', '', pf.R_DEGR_)
+        pf_prod_ = re.sub(f'^{pf.R_}', '', pf.R_PROD_)
+        pf_degr_ = re.sub(f'^{pf.R_}', '', pf.R_DEGR_)
 
         fluxes = {}
-        for rid, flux in solution.fluxes.items():
-            if re.match(pf.V_, rid) is None:
+        for ridx, flux in solution.fluxes.items():
+            if not re.match(pf.V_, ridx):
                 # check for macromolecule synthesis/degradation fluxes that might be scaled
-                if re.match(pf_prod, rid) or re.match(pf_degr, rid):
-                    if re.match(pf_prod, rid):
-                        mm_id = re.sub(pf_prod, '', rid)
+                if re.match(pf_prod_, ridx) or re.match(pf_degr_, ridx):
+                    if re.match(pf_prod_, ridx):
+                        mm_id = re.sub(pf_prod_, pf.MM_, ridx)
                     else:
-                        mm_id = re.sub(pf_degr, '', rid)
+                        mm_id = re.sub(pf_degr_, pf.MM_, ridx)
                     scale = self.optim.df_mm_data.at[mm_id, 'scale']
                     mmol_per_gdwh = flux / scale
                 else:
                     # metabolic reaction fluxes are considered to be in units of mmol/gDWh
                     mmol_per_gdwh = flux
-                rdata = self.optim.rdata[rid]
-                fluxes[rid] = [rdata['reaction_str'], rdata['net_rid'], rdata['gpr'],
+                rdata = self.optim.rdata[ridx]
+                fluxes[ridx] = [rdata['reaction_str'], rdata['net_rid'], rdata['gpr'],
                                rdata['groups'], mmol_per_gdwh, abs(mmol_per_gdwh)]
         cols = ['reaction_str', 'net_rid', 'gpr', 'groups', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_fluxes = pd.DataFrame(fluxes.values(), index=list(fluxes), columns=cols)
@@ -99,38 +99,38 @@ class RbaResults(Results):
         :rtype: pandas.DataFrame
         """
         # remove 'R_' prefix to align with COBRApy reaction ids
-        pf_prod = re.sub(f'^{pf.R_}', '', pf.R_PROD_)
-        pf_degr = re.sub(f'^{pf.R_}', '', pf.R_DEGR_)
+        pf_prod_ = re.sub(f'^{pf.R_}', '', pf.R_PROD_)
+        pf_degr_ = re.sub(f'^{pf.R_}', '', pf.R_DEGR_)
 
         net_fluxes = defaultdict(float)
-        for rid, val in solution.fluxes.items():
-            if re.match(pf.V_, rid) is None:
+        for ridx, val in solution.fluxes.items():
+            if re.match(pf.V_, ridx) is None:
                 # check for macromolecule synthesis/degradation fluxes that might be scaled
-                if re.match(pf_prod, rid) or re.match(pf_degr, rid):
-                    if re.match(pf_prod, rid):
-                        mm_id = re.sub(pf_prod, '', rid)
+                if re.match(pf_prod_, ridx) or re.match(pf_degr_, ridx):
+                    if re.match(pf_prod_, ridx):
+                        mm_id = re.sub(pf_prod_, pf.MM_, ridx)
                     else:
-                        mm_id = re.sub(pf_degr, '', rid)
+                        mm_id = re.sub(pf_degr_, pf.MM_, ridx)
                     scale = self.optim.df_mm_data.at[mm_id, 'scale']
-                    net_fluxes[rid] = val / scale
+                    net_fluxes[ridx] = val / scale
                 else:
                     # collapse any iso reactions, and combine forward/reverse reactions
-                    net_rid = re.sub(r'_iso\d*', '', rid)
+                    net_rid = re.sub(r'_iso\d*', '', ridx)
                     net_rid = re.sub('_REV$', '', net_rid)
-                    if re.search('_REV$', rid):
+                    if re.search('_REV$', ridx):
                         net_fluxes[net_rid] -= val
                     else:
                         net_fluxes[net_rid] += val
 
         # add reaction string and gene product relations
         net_flux_data = {}
-        for rid, mmol_per_gdwh in net_fluxes.items():
-            rdata = self.optim.net_rdata.get(rid)
+        for ridx, mmol_per_gdwh in net_fluxes.items():
+            rdata = self.optim.net_rdata.get(ridx)
             if rdata:
-                net_flux_data[rid] = [rdata['reaction_str'], rdata['gpr'],
+                net_flux_data[ridx] = [rdata['reaction_str'], rdata['gpr'],
                                       rdata['groups'], mmol_per_gdwh, abs(mmol_per_gdwh)]
             else:
-                net_flux_data[rid] = ['', '', '', mmol_per_gdwh, abs(mmol_per_gdwh)]
+                net_flux_data[ridx] = ['', '', '', mmol_per_gdwh, abs(mmol_per_gdwh)]
 
         cols = ['reaction_str', 'gpr', 'groups', 'mmol_per_gDWh', 'abs mmol_per_gDWh']
         df_net_fluxes = pd.DataFrame(net_flux_data.values(), index=list(net_flux_data), columns=cols)
@@ -152,26 +152,31 @@ class RbaResults(Results):
         :return: table with predicted protein concentrations in µmol/gDW, mg/gDW and mg/gP
         :rtype: pandas.DataFrame
         """
+        gene2mmid = {}
         protein_mmol_per_gdw = defaultdict(float)
         for var_id, conc in solution.fluxes.items():
             # iterate through all enzyme and process machine concentrations
             if re.match(pf.V_EC_, var_id) or re.match(pf.V_PMC_, var_id):
                 scale = self.optim.df_enz_data.at[var_id, 'scale']
-                for gp_id, stoic in self.optim.enz_mm_composition[var_id].items():
+                for mm_id, stoic in self.optim.enz_mm_composition[var_id].items():
                     # exclude any RNAs (e.g. in ribosome)
-                    if self.optim.df_mm_data.at[gp_id, 'uniprot']:
-                        protein_mmol_per_gdw[gp_id] += stoic * conc / scale
+                    gene = self.optim.df_mm_data.at[mm_id, 'label']
+                    if gene:
+                        protein_mmol_per_gdw[gene] += stoic * conc / scale
+                        gene2mmid[gene] = mm_id
             # include protein concentrations from concentration targets (proteins not included in enzymes)
             elif re.match(pf.V_TMMC_, var_id):
-                gp_id = re.sub(pf.V_TMMC_, '', var_id)
-                if self.optim.df_mm_data.at[gp_id, 'type'] == 'protein':
-                    scale = self.optim.df_mm_data.at[gp_id, 'scale']
-                    protein_mmol_per_gdw[gp_id] += conc / scale
+                mm_id = re.sub(pf.V_TMMC_, pf.MM_, var_id)
+                gene = self.optim.df_mm_data.at[mm_id, 'label']
+                if gene:
+                    scale = self.optim.df_mm_data.at[mm_id, 'scale']
+                    protein_mmol_per_gdw[gene] += conc / scale
+                    gene2mmid[gene] = mm_id
 
         prot_data = []
         for gene, mmol_per_gdw in protein_mmol_per_gdw.items():
-            uniprot = self.optim.df_mm_data.at[gene, 'uniprot']
-            mw_kda = self.optim.df_mm_data.at[gene, 'mw_kDa']
+            uniprot = self.optim.df_mm_data.at[gene2mmid[gene], 'uniprot']
+            mw_kda = self.optim.df_mm_data.at[gene2mmid[gene], 'mw_kDa']
             mg_per_gdw = mmol_per_gdw * mw_kda * 1000.0
             gene_name = self.gene2name.get(gene)
             prot_data.append([gene, uniprot, gene_name, mw_kda, mmol_per_gdw * 1000.0, mg_per_gdw])
@@ -268,24 +273,30 @@ class RbaResults(Results):
         return df_enzymes
 
     def _get_predicted_rna_usage(self, solution):
+        rna2mmid = {}
         rna_mmol_per_gdw = defaultdict(float)
         for var_id, conc in solution.fluxes.items():
             # get rRNAs from process machines concentrations
             if re.match(pf.V_PMC_, var_id):
                 scale = self.optim.df_enz_data.at[var_id, 'scale']
-                for rna_id, stoic in self.optim.enz_mm_composition[var_id].items():
+                for mm_id, stoic in self.optim.enz_mm_composition[var_id].items():
                     # exclude any proteins (which have uniprot)
-                    if self.optim.df_mm_data.at[rna_id, 'uniprot'] is None:
+                    if self.optim.df_mm_data.at[mm_id, 'type'] == 'rna':
+                        rna_id = re.sub(f'^{pf.MM_}', '', mm_id)
                         rna_mmol_per_gdw[rna_id] += stoic * conc / scale
+                        rna2mmid[rna_id] = mm_id
             # get tRNAs, mRNA from target macromolecule concentrations
-            elif re.match(pf.V_TMMC_, var_id) and 'rna' in var_id.lower():
-                rna_id = re.sub(f'^{pf.V_TMMC_}', '', var_id)
-                scale = self.optim.df_mm_data.at[rna_id, 'scale']
-                rna_mmol_per_gdw[rna_id] += conc / scale
+            elif re.match(pf.V_TMMC_, var_id):
+                mm_id = re.sub(f'^{pf.V_TMMC_}', pf.MM_, var_id)
+                if self.optim.df_mm_data.at[mm_id, 'type'] == 'rna':
+                    scale = self.optim.df_mm_data.at[mm_id, 'scale']
+                    rna_id = re.sub(f'^{pf.MM_}', '', mm_id)
+                    rna_mmol_per_gdw[rna_id] += conc / scale
+                    rna2mmid[rna_id] = mm_id
 
         rna_data = {}
         for rna_id, mmol_per_gdw in rna_mmol_per_gdw.items():
-            mw_kda = self.optim.df_mm_data.at[rna_id, 'mw_kDa']
+            mw_kda = self.optim.df_mm_data.at[rna2mmid[rna_id], 'mw_kDa']
             mg_per_gdw = mmol_per_gdw * mw_kda * 1000.0
             rna_data[rna_id] = [mw_kda, mmol_per_gdw * 1000.0, mg_per_gdw]
 

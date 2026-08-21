@@ -371,7 +371,6 @@ class XbaModel:
         # create proteins based on UniProt #
         ####################################
 
-
         if 'organism_id' in general_params and 'organism_dir' in general_params:
             organism_dir = general_params['organism_dir']
             if not os.path.exists(organism_dir):
@@ -1574,7 +1573,7 @@ class XbaModel:
             # add protein related to gene product to model proteins
             pid = gp.uid
             if pid not in self.proteins:
-                cid = None
+                cid = self.main_cid
 
                 # for gene products used in reaction gene product rules, use compartment of first reaction
                 if gp.label in self.locus2rids:
@@ -1584,22 +1583,21 @@ class XbaModel:
                     # gene products used in RBA process machines have compartment already configured
                     cid = gp.compartment
 
-                if cid is not None:
-                    p = None
-                    # try retrieving protein data from UniProt proteins (normal case)
-                    if pid in self.uniprot_data.proteins:
-                        p = Protein(self.uniprot_data.proteins[pid], gp.label, cid)
+                p = None
+                # try retrieving protein data from UniProt proteins (normal case)
+                if pid in self.uniprot_data.proteins:
+                    p = Protein(self.uniprot_data.proteins[pid], gp.label, cid)
 
-                    # as fallback, retrieve protein data from NCBI proteins
-                    elif (self.ncbi_data is not None) and (gp.label in self.ncbi_data.label2locus):
-                        ncbi_locus = self.ncbi_data.label2locus[gp.label]
-                        p = Protein(self.ncbi_data.locus2protein[ncbi_locus], gp.label, cid)
-                    else:
-                        proteins_not_found.append(gp.id)
-                    if p:
-                        self.proteins[pid] = p
-                        gp.add_notes(f'[{p.gene_name}], {p.name}')
-                        n_created += 1
+                # as fallback, retrieve protein data from NCBI proteins
+                elif (self.ncbi_data is not None) and (gp.label in self.ncbi_data.label2locus):
+                    ncbi_locus = self.ncbi_data.label2locus[gp.label]
+                    p = Protein(self.ncbi_data.locus2protein[ncbi_locus], gp.label, cid)
+                else:
+                    proteins_not_found.append(gp.id)
+                if p:
+                    self.proteins[pid] = p
+                    gp.add_notes(f'[{p.gene_name}], {p.name}')
+                    n_created += 1
 
         # update mapping, in case we modified UniProt information
         self.locus2uid = {gp.label: gp.uid for gp in self.gps.values()}

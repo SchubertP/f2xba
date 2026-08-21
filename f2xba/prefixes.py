@@ -8,6 +8,7 @@ Peter Schubert, CCB, HHU Duesseldorf, Mai 2024
 # general prefixes
 R_ = 'R_'         # reaction prefix
 M_ = 'M_'         # prefix for mass balance constraint (species)
+G_= 'G_'          # prefixe for gene product identifiers
 V_ = 'V_'         # general variable prefix, if not reaction
 C_ = 'C_'         # general constraint prefix
 

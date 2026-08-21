@@ -23,15 +23,22 @@ import re
 import math
 import pandas as pd
 from collections import defaultdict
+from scipy.optimize import minimize_scalar
 import tqdm
 
 
 import sbmlxdf
 import f2xba.prefixes as pf
+from f2xba.utils.mapping_utils import valid_sbml_sid
 from .rba_initial_assignments import InitialAssignments
 from .optimize import Optimize, extract_net_fluxes
-from .rba_results import RbaResults
 
+# gurobipy should not be a hard requirement, unless used in this context
+try:
+    import gurobipy as gp
+except ImportError:
+    gp = None
+    pass
 
 XML_SPECIES_NS = 'http://www.hhu.de/ccb/rba/species/ns'
 XML_COMPARTMENT_NS = 'http://www.hhu.de/ccb/rba/compartment/ns'
@@ -81,6 +88,7 @@ class RbaOptimization(Optimize):
         ro.medium = ex_sidx2mmol_per_l
 
         solution = ro.solve(gr_min=0.01, gr_max=1.2, bisection_tol=1e-3)
+
     """
 
     def __init__(self, fname, cobra_model=None):
@@ -169,23 +177,46 @@ class RbaOptimization(Optimize):
                     constr.lb, constr.ub = bounds
         print(f'RBA enzyme efficiency constraints configured (C_EF_xxx, C_ER_xxx) ≤ 0')
 
+    def configure_min_protein_conc_constraints(self):
+        """Configure minimum protein concentration constraints.
+
+        Changes the sign of protein concentration constraints 'MM_xxx' from '=' to '≥'.
+
+        This will support optimization problems that require availability of sufficient protein to catalzye
+        the reactions, i.e. protein concentration could exceed protein requirement.
+        Example: are overexpressing of specific proteins.
+
+        Protein overexpression can be implemented to configure lower bounds on protein synthesis reactioin
+        variables 'R_PROD_xxx'.
+        """
+        if self.is_gpm:
+            for constr in self.gpm.getConstrs():
+                if re.match(pf.MM_, constr.ConstrName):
+                    constr.sense = '>'
+        else:
+            for constr in self.model.constraints:
+                if re.match(pf.MM_, constr.name):
+                    constr.ub = 1000.0
+        print(f'minimum protein constraints configured.')
+
     # INITIAL DATA COLLECTION PART
     def _get_macromolecule_data(self):
-        mms = {}
-        for sid, row in self.m_dict['species'].iterrows():
-            if re.match(pf.MM_, sid):
-                mm_id = re.sub(f'^{pf.MM_}', '', sid)
+        data = {}
+        for mm_id, row in self.m_dict['species'].iterrows():
+            if re.match(pf.MM_, mm_id):
                 refs = sbmlxdf.misc.get_miriam_refs(row.get('miriamAnnotation'), 'uniprot', 'bqbiol:is')
                 uniprot = refs[0] if len(refs) > 0 else None
                 xml_attrs = sbmlxdf.misc.extract_xml_attrs(row.get('xmlAnnotation'), ns=XML_SPECIES_NS)
                 mw_aa = float(xml_attrs['weight_aa']) if 'weight_aa' in xml_attrs else None
                 mw_kda = float(xml_attrs['weight_kDa']) if 'weight_kDa' in xml_attrs else None
                 scale = float(xml_attrs['scale']) if 'scale' in xml_attrs else 1.0
-                mms[mm_id] = [xml_attrs['type'], uniprot, mw_kda, mw_aa, scale]
-        cols = ['type', 'uniprot', 'mw_kDa', 'mw_aa', 'scale']
-        df_mms = pd.DataFrame(mms.values(), index=list(mms), columns=cols)
-        df_mms.index.name = 'mm_id'
-        return df_mms
+                gp_id = re.sub(f'^{pf.MM_}', pf.G_, mm_id)
+                label = self.m_dict['fbcGeneProducts']['label'].get(gp_id)
+                data[mm_id] = [xml_attrs['type'], uniprot, mw_kda, mw_aa, scale, label]
+        cols = ['type', 'uniprot', 'mw_kDa', 'mw_aa', 'scale', 'label']
+        df = pd.DataFrame(data.values(), index=list(data), columns=cols)
+        df.index.name = 'mm_id'
+        return df
 
     def _get_enzyme_data(self):
         """Extract molecular weights of enzymes and process machines.
@@ -208,7 +239,7 @@ class RbaOptimization(Optimize):
         return df_enz_data
 
     def _get_enzyme_mm_composition(self):
-        """Determine Enzyme stoichiometry wrt gene products from model stoichiometry.
+        """Determine macromolecule composition of enzymes and process machines (proteins and RNA).
 
         Note: stoichiometry wrt enzyme and process machine concentrations
         are configured in initial model considering a given model growth rate (e.g. 1.0 h-1)
@@ -225,8 +256,7 @@ class RbaOptimization(Optimize):
                 for sref_str in sbmlxdf.record_generator(row['reactants']):
                     params = sbmlxdf.extract_params(sref_str)
                     if re.match(pf.MM_, params['species']):
-                        mm_id = re.sub(f'^{pf.MM_}', '', params['species'])
-                        enz_mm_composition[rid][mm_id] = float(params['stoic']) / model_gr
+                        enz_mm_composition[rid][params['species']] = float(params['stoic']) / model_gr
         return dict(enz_mm_composition)
 
     def set_medium_conc(self, ex_sids_mmol_per_l):
@@ -264,7 +294,8 @@ class RbaOptimization(Optimize):
         """
         self.initial_assignments.set_growth_rate(growth_rate)
 
-    def _get_coupling_var_constr_ids(self, iso_rid):
+    @ staticmethod
+    def _get_coupling_var_constr_ids(iso_rid):
         """Determine coupling data for iso reaction with enzyme efficiency.
 
         E.g. R_PGM_iso1 -> var_id: R_PGM_iso1, constr_id: C_EF_PGM_iso1
@@ -332,6 +363,7 @@ class RbaOptimization(Optimize):
         self.orig_coupling = {}
 
         for iso_rid, scale in scale_kcats.items():
+            # retrieve corresponding constr_id, considering forward and reverse directions
             var_id, constr_id = self._get_coupling_var_constr_ids(iso_rid)
             var = self.gpm.getVarByName(var_id)
             constr = self.gpm.getConstrByName(constr_id)
@@ -354,6 +386,22 @@ class RbaOptimization(Optimize):
                 self.gpm.chgCoeff(constr, var, coupling)
         self.gpm.update()
         self.orig_coupling = {}
+
+    def gp_scale_variable(self, var_id, scale):
+        """Scale a variable in a gurobipy model instance
+
+            variable bounds are multiplied with scale
+            coeffients are divided by scale
+            initial assignments are taken care of
+
+        :param str var_id: variable id
+        :param float scale: scaling factor
+        :return:
+        """
+        if self.is_gpm:
+            if var_id in self.initial_assignments.target_rids:
+                self.initial_assignments.target_rids[var_id].rescale = scale
+        super().gp_scale_variable(var_id, scale)
 
     def get_init_assign_math(self, ia_refs):
         """Get expanded math string used in initial assignments of RBA models.
@@ -471,15 +519,20 @@ class RbaOptimization(Optimize):
         :rtype: class:`Solution`
         """
         # bisection algorithm to narrow in on maximum growth rate
-        solution = None
         self._set_growth_rate(gr_min)
-        if self.optimize().status == 'optimal':
+        solution = self.optimize()
+        #if 'optimal' in solution.status:
+        if solution.status == 'optimal':
+            #print(f'initial gr {gr_min:.4f} h-1 obj_val: {solution.objective_value:.5f} {solution.status}')
             n_iter = 1
             while ((gr_max - gr_min) > bisection_tol) and (n_iter < max_iter):
                 gr_test = gr_min + 0.5 * (gr_max - gr_min)
                 self._set_growth_rate(gr_test)
                 # self.gpm.reset()
-                if self.optimize().status == 'optimal':
+                solution = self.optimize()
+                # if 'optimal' in solution.status:
+                if solution.status == 'optimal':
+                    #print(f'step {n_iter:2d} gr: {gr_test:.4f} h-1 obj_val: {solution.objective_value:.5f} {solution.status}')
                     gr_min = gr_test
                 else:
                     gr_max = gr_test
@@ -492,10 +545,12 @@ class RbaOptimization(Optimize):
                 solution = self.optimize()
 
                 # if solution with gr_min is no longer optimal, lower gr_opt slightly and try again
-                if solution.status != 'optimal':
+                # if 'optimal' not in solution.status:
+                if solution.status == 'optimal':
                     gr_opt = max(0.0, gr_opt - 0.5 * bisection_tol)
                     self._set_growth_rate(gr_opt)
                     solution = self.optimize()
+                #print(f'final r: {gr_opt:.4f} h-1  solution obj_val: {solution.objective_value:.5f} {solution.status}')
 
                 solution.fluxes = extract_net_fluxes(solution.fluxes)
                 solution.objective_value = gr_opt
@@ -563,7 +618,53 @@ class RbaOptimization(Optimize):
             print(f'Problem infeasible at minimum growth of {gr_min}')
             return None
 
-    def single_gene_deletion(self, genes=None, solution=None, **kwargs):
+    def gene_knock_outs(self, genes):
+        """Simulate gene deletion for RBA type models.
+
+        Block protein production reactions related to specified gene products.
+
+        .. code-block:: python
+
+            orig_bounds = ro.gene_knock_outs('b0025')
+            solution = ro.optimize()
+            ro.set_variable_bounds(orig_bounds)
+            print(f'mutant gr: {solution.objective_value:.3f} h-1')
+
+        :param genes: gene identifiers
+        :type genes: str or list(str)
+        :return: original reaction bounds (lb, ub)
+        :rtype: dict(str, tuple)
+        """
+
+        if type(genes) is str:
+            genes = [genes]
+
+        if self.is_gpm:
+            # block protein synthesis reactions of blocked genes
+            update_bounds = {f'{pf.R_PROD_}{valid_sbml_sid(gene)}': (0.0, 0.0) for gene in genes}
+            # block related metabolic reactions, unless an existing flux bound is violated
+            for var_id, (lb, ub) in self.get_variable_bounds(self.get_rids_blocked_by(genes)).items():
+                if lb <= 0.0 <= ub:
+                    update_bounds[var_id] = (0.0, 0.0)
+            orig_bounds = self.set_variable_bounds(update_bounds)
+        else:
+            # COBRApy gene deletion impact
+            orig_bounds = {}
+            for gene in genes:
+                var_id = f'{pf.R_PROD_}{valid_sbml_sid(gene)}'
+                var_idx = re.sub(f'^R_', '', var_id)
+                orig_bounds[var_idx] = self.model.reactions.get_by_id(var_idx).bounds
+                self.model.reactions.get_by_id(var_idx).bounds = (0.0, 0.0)
+            # block related metabolic reactions, unless an existing flux bound is violated
+            for rid in self.get_rids_blocked_by(genes):
+                ridx = re.sub('^R_', '', rid)
+                lb, ub = self.model.reactions.get_by_id(ridx).bounds
+                if lb <= 0.0 <= ub:
+                    orig_bounds[ridx] = (lb, ub)
+                    self.model.reactions.get_by_id(ridx).bounds = (0.0, 0.0)
+        return orig_bounds
+
+    def single_gene_deletion(self, genes=None, wt_solution=None, **kwargs):
         """Perform a single gene deletion analysis for RBA based models using gurobipy interface.
 
         Interface aligned to COBRApy single_gene_deletion() method.
@@ -572,7 +673,7 @@ class RbaOptimization(Optimize):
         active in the wild type solution. In case a gene is not required in the wild type solution, a knockout
         simulation is not performed for this gene. Its growth rate value is set to the wild type value and
         its optimization status is set to `wt_solution`.
-        A wild type solution can be provided with parameter `solution`, alternatively a wild type solution
+        A wild type solution can be provided with parameter `wt_solution`, alternatively a wild type solution
         is determined automatically.
 
         Following keyword arguments can be added to the list of parameters:
@@ -583,13 +684,12 @@ class RbaOptimization(Optimize):
         `max_iter`: (default 40) stop criteria based on number of iterations.
 
         :param list or set genes: (optional) gene ids,
-        :param solution: (optional) wild type RBA solution
-        :type solution: :class:`Solution`
+        :param :class:`Solution` wt_solution: (optional) wild type RBA solution
         :param kwargs: keyword arguments used for RBA bisectional optimization
         :return: single gene deletion results per gene with growth rate in h-1, optimization status and fitness value
         :rtype: pandas.DataFrame
         """
-        if self.is_gpm is None:
+        if not self.is_gpm:
             print('Method implemented for gurobipy interface only.')
             return pd.DataFrame()
 
@@ -599,18 +699,18 @@ class RbaOptimization(Optimize):
             del alt_kwargs['gr_min_alt']
 
         # determine wild type growth rate and fluxes, if solution not provided
-        if solution is None:
-            solution = self.solve(**kwargs)
-        wt_gr = solution.objective_value
-        wt_fluxes = dict(RbaResults(self, {'wt': solution}).collect_fluxes()['wt'])
+        if not wt_solution:
+            wt_solution = self.solve(**kwargs)
+        wt_gr = wt_solution.objective_value
+        #wt_fluxes = dict(RbaResults(self, {'wt': solution}).collect_fluxes()['wt'])
 
         all_genes = set(self.m_dict['fbcGeneProducts'].label.values)
-        tx_genes, metab_genes = self.get_tx_metab_genes()
-        pm_genes = all_genes.difference(tx_genes.union(metab_genes))
+        # tx_genes, metab_genes = self.get_tx_metab_genes()
+        # pm_genes = all_genes.difference(tx_genes.union(metab_genes))
 
         # determine gene list, if not provided
-        if genes is None:
-            genes = self.get_active_genes(wt_fluxes)
+        if not genes:
+            genes = self.get_active_genes(wt_solution.fluxes)
         else:
             all_genes = genes
 
@@ -620,6 +720,7 @@ class RbaOptimization(Optimize):
         for gene in tqdm.tqdm(sorted(all_genes)):
             if gene in genes:
                 # simulate a single gene deletion
+                self.gpm.reset()
                 orig_rid_bounds = self.gene_knock_outs(gene)
                 mut_solution = self.solve(**kwargs)
                 # second attempt if initial attempt not optimal
@@ -639,8 +740,8 @@ class RbaOptimization(Optimize):
                     sgko_results[gene] = [mutant_gr, mut_solution.status, mutant_gr / wt_gr]
                 else:
                     sgko_results[gene] = [0.0, mut_solution.status, 0.0]
-            elif gene in pm_genes:
-                sgko_results[gene] = [0.0, 'process_machine']
+            #elif gene in pm_genes:
+            #    sgko_results[gene] = [0.0, 'process_machine']
             else:
                 # genes not in gene_list are assumed to not impact the wild type solution
                 sgko_results[gene] = [wt_gr, 'wt_solution', 1.0]
@@ -649,3 +750,101 @@ class RbaOptimization(Optimize):
         df_sgko.index.name = 'gene'
 
         return df_sgko
+
+    def _minimize_moma_objective(self, gr):
+        """Method used in scipy.minimize_scalar, to minimize MOMA objective function"""
+        self._set_growth_rate(gr)
+        solution = self.optimize()
+        obj_val = solution.objective_value
+        return obj_val
+
+    def moma(self, wt_solution, linear=False, **kwargs):
+        """MOMA implementation for RBA models.
+
+        Support gurobipy interface only.
+
+        Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
+        metabolic networks.
+
+        :param :class:`Solution` wt_solution: wild type solution
+        :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
+        :param kwargs: keyword arguments as supplied during RbaOptimization.solve()
+        :return: MOMA determined solution
+        :rtype: :class:`Solution`
+        """
+        if self.is_gpm:
+            return self._gp_moma(wt_solution, linear, **kwargs)
+        else:
+            print('Method implemented for gurobipy interface only.')
+            return pd.DataFrame()
+            # return self._cp_moma(wt_solution, linear, **kwargs)
+
+    def _gp_moma(self, wt_solution, linear=False, **kwargs):
+        """MOMA implementaton for RBA models (gurobipy).
+
+        Assumed that genetic perturbation has been added to gurobipy model instance.
+        Move guropipy model instance aside, to be resored later. Create a new copy of the gurobipy model instance
+        on which the MOMA specific variables, constraints and objective functions are added. These steps
+        are required, as the model modifications during the RBA bisection algorithme are implemented on the
+        gurobipy model instance configured in the Class.
+        Determine maximal growth rate for MOMA constraint model RBA bisection algorithm. Note: RBA optimization
+        will determine the maximal growth rate for a feasible solution, which will not necessarily minimize
+        the MOMA objective function.
+        Using scipy.optimize.minimize_scalar(), we minimize the MOMA objective within the range of feasible
+        growth rates. Linear optimization (RbaOptimization.optimize()) is used instead of bisection
+        algorithm (RbaOptimization.solve()).
+        A MOMA solution is determined at the optimall growth rate as determined by MOMA objective minimization.
+        Finaly the original gurobipy model is restored.
+
+        :param :class:`Solution` wt_solution: wild type solution
+        :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
+        :param kwargs: keyword arguments as supplied during RbaOptimization.solve().
+        :return: MOMA determined solution
+        :rtype: :class:`Solution`
+        """
+        # copy original gurobi problem (note: RbaOptimization.solve() works on self.gpm model instance)
+        self.gpm.update()
+        orig_gpm = self.gpm
+        self.gpm = orig_gpm.copy()
+
+        # identify variables modified during RBA optimization via initial assignments
+        exclude_var_idxs = set()
+        for var_id, tr in self.initial_assignments.target_rids.items():
+            if tr.is_affected_by('growth_rate') and len(tr.flux_bounds) > 0:
+                exclude_var_idxs.add(re.sub(f'^{pf.R_}', '', var_id))
+
+        # implement MOMA constraints
+        self._gp_add_moma(self.gpm, wt_solution, linear, exclude_var_idxs)
+    
+        # determine maximal growth rate for mutant with MOMA constraints
+        mut_max_gr_solution = self.solve(**kwargs)
+        if not mut_max_gr_solution or mut_max_gr_solution.status != 'optimal':
+            self.gpm.reset()
+            mut_max_gr_solution = self.solve(**kwargs)
+            print('second attempt, after model reset')
+
+        # get minimum value for objective function
+        moma_solution = None
+        if mut_max_gr_solution and mut_max_gr_solution.status == 'optimal':
+            mut_max_gr = .99 * mut_max_gr_solution.objective_value
+            # print(f'mut_max_gr: {mut_max_gr:.4f}')
+            max_iter = kwargs.get('max_iter', 40)
+            res = minimize_scalar(self._minimize_moma_objective, bounds=(kwargs['gr_min'], mut_max_gr),
+                                  method='bounded', options={'maxiter': max_iter})
+            gr_opt = res.x
+            # print(f'minimum value for MOMA objective at {gr_opt:.4f} h-1 with objective value of {res.fun:.4f}')
+            # get final MOMA solution with minimum of MOMA objective function
+            self._set_growth_rate(gr_opt)
+            moma_solution = self.optimize()
+            moma_solution.fluxes = extract_net_fluxes(moma_solution.fluxes)
+            moma_solution.objective_value = gr_opt
+            moma_solution.n_iter = mut_max_gr_solution.n_iter
+            col = self.gpm.getCol(self.gpm.getVarByName('V_TCD'))
+            moma_solution.density_constraints = {col.getConstr(idx).constrname: -col.getCoeff(idx)
+                                                 for idx in range(col.size())}
+
+        # remove temporary model and revert to original gurobipy model
+        self.gpm.close()
+        self.gpm = orig_gpm
+
+        return moma_solution

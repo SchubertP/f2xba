@@ -111,11 +111,16 @@ def export_gene_predictions(pred_results, exp_fitness, pred_fitness, pred_status
     data = {}
     for pred_cat in ['fp', 'fn', 'tp', 'tn']:
         for gene in pred_results[pred_cat]:
-            uid = uniprot_data.locus2uid[gene]
-            prot = uniprot_data.proteins[uid]
-            data[gene] = [prot.gene_name, pred_cat, pred_fitness.get(gene), pred_status.get(gene),
-                          exp_fitness.get(gene),
-                          exp_mpmf.get(gene), uid, prot.length, prot.protein_name, '; '.join(prot.go_processes)]
+            if gene in uniprot_data.locus2uid:
+                uid = uniprot_data.locus2uid[gene]
+                prot = uniprot_data.proteins[uid]
+                data[gene] = [prot.gene_name, pred_cat, pred_fitness.get(gene), pred_status.get(gene),
+                              exp_fitness.get(gene),
+                              exp_mpmf.get(gene), uid, prot.length, prot.protein_name, '; '.join(prot.go_processes)]
+            else:
+                data[gene] = [None, pred_cat, pred_fitness.get(gene), pred_status.get(gene),
+                              exp_fitness.get(gene),
+                              exp_mpmf.get(gene), None, None, None, None]
     df_predictions = pd.DataFrame(data.values(), index=list(data), columns=cols)
     df_predictions.sort_index(inplace=True)
     df_predictions.index.name = 'gene'

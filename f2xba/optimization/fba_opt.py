@@ -6,8 +6,6 @@ Peter Schubert, HHU Duesseldorf, CCB, November 2024
 """
 
 import re
-import pandas as pd
-import tqdm
 
 # gurobipy should not be a hard requirement, unless used in this context
 try:
@@ -17,7 +15,6 @@ except ImportError:
     pass
 
 from .optimize import Optimize
-from .fba_results import FbaResults
 
 
 class FbaOptimization(Optimize):
@@ -79,99 +76,51 @@ class FbaOptimization(Optimize):
         """
         self.set_medium(ex_medium)
 
-    def single_gene_deletion(self, genes=None, method='fba', solution=None, **kwargs):
-        """Perform a single gene deletion analysis for FBA based models using gurobipy interface.
+    def gene_knock_outs(self, genes):
+        """Simulate gene deletion for FBA type models.
 
-        Interface aligned to COBRApy single_gene_deletion() method.
-        Perform single gene deletion simulations for provided list of gene in `genes`.
-        If `genes` is not provided, perform gene deletion for all genes that may be
-        active in the wild type solution. In case a gene is not required in the wild type solution, a knockout
-        simulation is not performed for this gene. Its growth rate value is set to the wild type value and
-        its optimization status is set to `wt_solution`.
-        With `method` set to `moma`, `linear moma`, `room` or `linear room`, respective method is used for
-        the optimization.
-        A wild type solution can be provided with parameter `solution`, alternatively a wild type solution
-        is determined automatically.
-
-        When `method` is set to `room` or `linear room`, following keyword arguments can be added:
-        `delta`: relative tolerance range (default: 0.03),
-        `epsilon`: absolute tolerance range (default: 1e-3),
-        `time_limit`: in seconds for single gene deletion simulation, used for 'room' (default: 30.0).
+        Block reactions that depend on the specified gene.
+        In case affected reactions have a non-zero flux constraint, all objective variables are constraint to zero.
 
         .. code-block:: python
 
-            fo = FbaOptimization('iML1515.xml')
-            fo.medium = lb_medium
-            df_sgko = fo.single_gene_deletion()
+            orig_bounds = fo.gene_knock_outs('b0025')
+            solution = fo.optimize()
+            fo.set_variable_bounds(orig_bounds)
+            print(f'mutant gr: {solution.objective_value:.3f} h-1')
 
-        Example for MOMA based SGKO analysis for selected genes with wild type solution provided:
-
-        .. code-block:: python
-
-            pfba_solution = fo.pfba()
-            fo.single_gene_deletion(genes=['b0002', 'b0003', 'b0007', 'b0025'], method='moma', solution=pfba_solution)
-
-        :param list or set genes: (optional) gene ids,
-        :param str method: (optional) alternative methods 'moma', 'linear moma', 'room' or 'linear room'
-        :param solution: (optional) wild type FBA solution
-        :type solution: :class:`Solution`
-        :param kwargs: keyword arguments passed on to 'room' and 'linear room' methods
-        :return: Table with SGKO results, containing growth rate in h-1, optimization status and fitness
-        :rtype: pandas.DataFrame
+        :param genes: gene identifiers
+        :type genes: str or list(str)
+        :return: original reaction bounds (lb, ub)
+        :rtype: dict(str, tuple)
         """
-        if self.is_gpm is None:
-            print('Method implemented for gurobipy interface only.')
-            return pd.DataFrame()
+        if type(genes) is str:
+            genes = [genes]
 
-        linear = True if 'linear' in method else False
-        biomass_rid = self._get_biomass_rid()
-
-        # determine wild type growth rate and fluxes, if solution not provided
-        # extract wt_gr from fluxes of biomass_rid (assume growth maximization of Biomass objective function)
-        if solution is None:
-            solution = self.optimize()
-        wt_gr = solution.fluxes[biomass_rid]
-        wt_fluxes = dict(FbaResults(self, {'wt': solution}).collect_fluxes()['wt'])
-
-        # determine gene list, if not provided
-        if genes is None:
-            genes = self.get_active_genes(wt_fluxes)
-            all_genes = self.m_dict['fbcGeneProducts'].label.values
+        orig_rid_bounds = {}
+        if self.is_gpm:
+            update_bounds = {}
+            # block related metabolic reactions if flux range allows zero flux
+            for var_id, (lb, ub) in self.get_variable_bounds(self.get_rids_blocked_by(genes)).items():
+                if lb <= 0.0 <= ub:
+                    update_bounds[var_id] = (0.0, 0.0)
+                else:
+                    # block objective variables, if metabolic reaction has a non-zero flux constraint
+                    update_bounds.update({rid: (0.0, 0.0) for rid in self.get_objective()[0].keys()})
+            orig_rid_bounds = self.set_variable_bounds(update_bounds)
         else:
-            all_genes = genes
+            # COBRApy gene deletion impact
+            for rid in self.get_rids_blocked_by(genes):
+                ridx = re.sub('^R_', '', rid)
 
-        # optimization loop for single gene deletions
-        cols = ['growth_rate', 'status', 'fitness']
-        sgko_results = {'wt': [wt_gr, 'wt_solution', 1.0]}
-        for gene in tqdm.tqdm(sorted(all_genes)):
-            if gene in genes:
-
-                # simulate a single gene deletion
-                orig_rid_bounds = self.gene_knock_outs(gene)
-                if 'moma' in method:
-                    solution = self.moma(wt_fluxes, linear=linear)
-                elif 'room' in method:
-                    solution = self.room(wt_fluxes, linear=linear, **kwargs)
+                lb, ub = self.model.reactions.get_by_id(ridx).bounds
+                if lb <= 0.0 <= ub:
+                    orig_rid_bounds[ridx] = (lb, ub)
+                    self.model.reactions.get_by_id(ridx).bounds = (0.0, 0.0)
                 else:
-                    solution = self.optimize()
-                self.set_variable_bounds(orig_rid_bounds)
+                    # block objective variables, if metabolic reaction has a non-zero flux constraint
+                    for ridx in self.get_objective()[0].keys():
+                        orig_rid_bounds[ridx] = (lb, ub)
+                        self.model.reactions.get_by_id(ridx).bounds = (0.0, 0.0)
+        return orig_rid_bounds
 
-                # process simulation result
-                if solution is None:
-                    sgko_results[gene] = [0.0, 'infeasible', 0.0]
-                elif solution.status in {'optimal', 'time_limit', 'suboptimal'}:
-                    if 'moma' in method or 'room' in method:
-                        mutant_gr = solution.fluxes[biomass_rid]
-                    else:
-                        mutant_gr = solution.objective_value
-                    sgko_results[gene] = [mutant_gr, solution.status, mutant_gr / wt_gr]
-                else:
-                    sgko_results[gene] = [0.0, solution.status, 0.0]
-            else:
-                # genes not in gene_list are assumed to not impact the wild type solution
-                sgko_results[gene] = [wt_gr, 'wt_solution', 1.0]
-
-        df_sgko = pd.DataFrame(sgko_results.values(), index=list(sgko_results), columns=cols)
-        df_sgko.index.name = 'gene'
-
-        return df_sgko
