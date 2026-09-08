@@ -462,9 +462,9 @@ class RbaOptimization(Optimize):
             if 'EX_o2_e' not in medium:
                 ro.set_init_assign_math(orig_ia_data)
 
-         :param list(dict) ia_data: reference to specific initial assignment
+         :param list ia_data: reference to specific initial assignment
          :return: the original math string, prior to modification
-         :rtype: list(dict), like input, but with original math string
+         :rtype: list
          """
         orig_ia_data = []
         for data in ia_data:
@@ -677,18 +677,20 @@ class RbaOptimization(Optimize):
         is determined automatically.
 
         Following keyword arguments can be added to the list of parameters:
-        `gr_min`: (default 0.0) minimum growth rate to test in h-1,
-        `gr_min_alt`: (optional) alternative minimum growth rate in h-1 (used, if infeasible solution with gr_min),
-        `gr_max`: (default 1.5) maximum growth rate to test in h-1,
-        `bisection_tol`: (default 1e-5) stop criteria based on growth rate tolerance,
-        `max_iter`: (default 40) stop criteria based on number of iterations.
+            - `gr_min`: (default 0.0) minimum growth rate to test in h-1,
+            - `gr_min_alt`: (optional) alternative minimum growth rate in h-1 (used, if infeasible solution with gr_min),
+            - `gr_max`: (default 1.5) maximum growth rate to test in h-1,
+            - `bisection_tol`: (default 1e-5) stop criteria based on growth rate tolerance,
+            - `max_iter`: (default 40) stop criteria based on number of iterations.
 
-        :param list or set genes: (optional) gene ids,
-        :param :class:`Solution` wt_solution: (optional) wild type RBA solution
-        :param kwargs: keyword arguments used for RBA bisectional optimization
+        :param list or set genes: (optional) gene ids
+        :param wt_solution: (optional) wild type RBA solution
+        :type wt_solution: :class:`Solution`
+        :param dict kwargs: keyword arguments used for RBA bisectional optimization
         :return: single gene deletion results per gene with growth rate in h-1, optimization status and fitness value
         :rtype: pandas.DataFrame
         """
+
         if not self.is_gpm:
             print('Method implemented for gurobipy interface only.')
             return pd.DataFrame()
@@ -702,7 +704,6 @@ class RbaOptimization(Optimize):
         if not wt_solution:
             wt_solution = self.solve(**kwargs)
         wt_gr = wt_solution.objective_value
-        #wt_fluxes = dict(RbaResults(self, {'wt': solution}).collect_fluxes()['wt'])
 
         all_genes = set(self.m_dict['fbcGeneProducts'].label.values)
         # tx_genes, metab_genes = self.get_tx_metab_genes()
@@ -720,7 +721,7 @@ class RbaOptimization(Optimize):
         for gene in tqdm.tqdm(sorted(all_genes)):
             if gene in genes:
                 # simulate a single gene deletion
-                self.gpm.reset()
+                # self.gpm.reset()
                 orig_rid_bounds = self.gene_knock_outs(gene)
                 mut_solution = self.solve(**kwargs)
                 # second attempt if initial attempt not optimal
@@ -766,9 +767,10 @@ class RbaOptimization(Optimize):
         Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
         metabolic networks.
 
-        :param :class:`Solution` wt_solution: wild type solution
+        :param wt_solution: wild type solution
+        :type wt_solution: :class:`Solution`
         :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
-        :param kwargs: keyword arguments as supplied during RbaOptimization.solve()
+        :param dict kwargs: keyword arguments as supplied during RbaOptimization.solve()
         :return: MOMA determined solution
         :rtype: :class:`Solution`
         """
@@ -796,9 +798,10 @@ class RbaOptimization(Optimize):
         A MOMA solution is determined at the optimall growth rate as determined by MOMA objective minimization.
         Finaly the original gurobipy model is restored.
 
-        :param :class:`Solution` wt_solution: wild type solution
+        :param wt_solution: wild type solution
+        :type wt_solution: :class:`Solution`
         :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
-        :param kwargs: keyword arguments as supplied during RbaOptimization.solve().
+        :param dict kwargs: keyword arguments as supplied during RbaOptimization.solve().
         :return: MOMA determined solution
         :rtype: :class:`Solution`
         """

@@ -7,9 +7,6 @@ genome-scale extended models. These models are used as a case study to illustrat
 the principles and applications of genome-scale modeling. The latest FBA model of *E. coli* 
 serves as a representative example throughout the tutorial.
 
-jupyter notebooks
------------------
-
 .. toctree::
    :maxdepth: 2
 

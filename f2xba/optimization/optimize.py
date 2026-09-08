@@ -1170,13 +1170,13 @@ class Optimize:
         self.set_variable_bounds(update_bounds)
         return drg0_relaxations
 
-    def modify_stoic(self, constr_id, var_id, new_val):
-        """Modify a stoichiometric coefficient using gurobipy interface.
+    def modify_stoic(self, var_id, srefs):
+        """Modify stoichiometric coefficients for gurobipy interface.
 
         Stoichiometric coefficients in a COBRApy model can be modified using the COBRApy method
         cobra.core.reaction.add_metabolites().
-        This method supports the modification of a stoichiometric coefficient
-        when using the gurobipy interface. As model contexts are not supported, the coefficient
+        This method supports the modification of stoichiometric coefficients
+        when using the gurobipy interface. As model contexts are not supported, the coefficients
         should be reset to the original value after optimization.
 
         Example: Remove the cofactor requirement of hemeA in anaerobic conditions.
@@ -1184,38 +1184,39 @@ class Optimize:
         .. code-block:: python
 
             if 'EX_o2_e' not in medium:
-                orig_stoic = eo.modify_stoic('M_hemeA_c', 'R_CofactorSynth', 0.0)
+                orig_stoic = eo.modify_stoic('R_CofactorSynth', {'M_hemeA_c': 0.0})
 
             eo.optimize()
 
             if 'EX_o2_e' not in medium:
-                eo.modify_stoic('M_hemeA_c', 'R_CofactorSynth', orig_stoic)
+                eo.modify_stoic('R_CofactorSynth', orig_stoic)
 
-        :param str constr_id: constraint identifier, e.g. species id
         :param str var_id: variable identifier, e.g. reaction id
-        :param float new_val: stoichiometric coefficient (negative for consumation)
-        :return: original stoichiometric coefficient
-        :rtype: float
+        :param dict srefs: constraint identifers with new coefficient
+        :return: original stoichiometric coefficients
+        :rtype: dict
         """
-        if self.is_gpm:
-            constr = self.gpm.getConstrByName(constr_id)
+        orig_srefs = {}
+        if not self.is_gpm:
+            print('Method only implemented for gurobipy interface, for COBRApy, use rxn.add_metabolites()')
+        else:
+            self.gpm.update()
             var = self.gpm.getVarByName(var_id)
-            if not constr:
-                print(f'Constraint with identifier "{constr_id}" not found!')
-                return None
             if not var:
                 print(f'Variable with identifier "{var_id}" not found!')
-                return None
-            old_val = self.gpm.getCoeff(constr, var)
-            self.gpm.chgCoeff(constr, var, new_val)
-            if var_id in self.gp_neg_var:
-                neg_var = self.gpm.getVarByName(self.gp_neg_var[var_id])
-                self.gpm.chgCoeff(constr, neg_var, -new_val)
-
-            return old_val
-        else:
-            print('Method only implemented for gurobipy interface, for COBRApy, use rxn.add_metabolites()')
-            return None
+            else:
+                for constr_id, new_coeff in srefs.items():
+                    constr = self.gpm.getConstrByName(constr_id)
+                    if not constr:
+                        print(f'Constraint with identifier "{constr_id}" not found!')
+                    else:
+                        orig_srefs[constr_id] = self.gpm.getCoeff(constr, var)
+                        self.gpm.chgCoeff(constr, var, new_coeff)
+                        if var_id in self.gp_neg_var:
+                            neg_var = self.gpm.getVarByName(self.gp_neg_var[var_id])
+                            self.gpm.chgCoeff(constr, neg_var, -new_coeff)
+            self.gpm.update()
+        return orig_srefs
 
     def set_medium(self, medium):
         """Configure medium in gurobipy model from dictionary with uptake fluxes.
@@ -1525,9 +1526,9 @@ class Optimize:
         is determined automatically.
 
         When `method` is set to `room` or `linear room`, following keyword arguments can be added:
-        `delta`: relative tolerance range (default: 0.03),
-        `epsilon`: absolute tolerance range (default: 1e-3),
-        `time_limit`: in seconds for single gene deletion simulation, used for 'room' (default: 30.0).
+            - `delta`: relative tolerance range (default: 0.03),
+            - `epsilon`: absolute tolerance range (default: 1e-3),
+            - `time_limit`: in seconds for single gene deletion simulation, used for 'room' (default: 30.0).
 
         .. code-block:: python
 
@@ -1542,10 +1543,12 @@ class Optimize:
             wt_solution = eo.optimize()
             eo.single_gene_deletion(genes = ['b0002', 'b0003', 'b0007', 'b0025'], method='moma', solution=wt_solution)
 
+
         :param list or set genes: (optional) gene ids
         :param str method: (optional) alternative methods 'moma', 'linear moma', 'room' or 'linear room'
-        :param :class:`Solution` wt_solution: (optional) wild type solution
-        :param kwargs: keyword arguments passed on to 'room' and 'linear room' methods
+        :param wt_solution: (optional) wild type solution
+        :type wt_solution: :class:`Solution`
+        :param dict kwargs: keyword arguments passed on to 'room' and 'linear room' methods
         :return: table with SGKO results, containing growth rate in h-1, optimization status and fitness
         :rtype: pandas.DataFrame
         """
@@ -1654,7 +1657,8 @@ class Optimize:
             fo.set_variable_bounds(orig_bounds)
             print(f'{moma_solution.fluxes['BIOMASS_Ec_iML1515_core_75p37M']:.3f} h-1')
 
-        :param :class:`Solution` wt_solution: wild type solution
+        :param wt_solution: wild type solution
+        :type wt_solution: :class:`Solution`
         :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
         :param kwargs: keyword arguments as supplied during RbaOptimization.solve()
         :return: MOMA determined solution
@@ -1677,8 +1681,10 @@ class Optimize:
         Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
         metabolic networks.
 
-        :param :class: `gurobipy.Model` moma_gpm: gurobipy model instance
-        :param :class:`Solution` wt_solution: wild type solution
+        :param moma_gpm: gurobipy model instance
+        :type moma_gpm: :class:`gurobipy.Model`
+        :param wt_solution: wild type solution
+        :type wt_solution: :class:`Solution`
         :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan)
         :param None or set exclude_var_idxs: variable ids for which MOMA constraints shall not be implemented
         """
@@ -1719,7 +1725,6 @@ class Optimize:
         else:
             moma_gpm.setObjective(gp.quicksum(tflux_vars), gp.GRB.MINIMIZE)
 
-
     def _gp_moma(self, wt_solution, linear=False):
         """Perform a MOMA based optimization using the gurobipy interface.
 
@@ -1728,7 +1733,8 @@ class Optimize:
         Ref: Segre et al. 2002, Analysis of optimality in natural and perturbed
         metabolic networks.
 
-        :param :class:`Solution` wt_solution: wild type solution
+        :param wt_solution: wild type solution
+        :type wt_solution: :class:`Solution`
         :param bool linear: using quadratic (Euclidean distance) or linear formulation (Manhattan) (default: False)
         :return: MOMA determined solution
         :rtype: :class:`Solution`
@@ -1786,7 +1792,8 @@ class Optimize:
             fo.set_variable_bounds(orig_bounds)
             print(f'{room_solution.fluxes['BIOMASS_Ec_iML1515_core_75p37M']:.3f} h-1')
 
-        :param :class:`Solution` wt_solution: wild type solution, e.g. pFBA solution for FBA models
+        :param wt_solution: wild type solution, e.g. pFBA solution for FBA models
+        :type wt_solution: :class:`Solution`
         :param bool linear: using MILP (False) or relaxed LP (True) formulation (default: False)
         :param float delta: relative tolerance range (default: 0.03)
         :param float epsilon: absolute tolerance range (default: 1e-3)
@@ -1809,7 +1816,8 @@ class Optimize:
         Ref: Shlomi et al., 2005, Regulatory on off minimization of metabolic flux
         changes after genetic perturbations
 
-        :param :class:`Solution` wt_solution: wild type solution, e.g. pFBA solution
+        :param wt_solution: wild type solution, e.g. pFBA solution
+        :type wt_solution: :class:`Solution`
         :param bool linear: using MILP (False) or relaxed LP (True) formulation (default: False)
         :param float delta: relative tolerance range (default: 0.03)
         :param float epsilon: absolute tolerance range (default: 1e-3)
